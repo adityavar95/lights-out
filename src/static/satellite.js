@@ -1,6 +1,6 @@
 // Satellite ground: the replay's outline (F1 timing coordinates, no geographic reference) is georeferenced by fitting it
 // to the circuit's real shape (GeoJSON, local metres), and Esri World Imagery tiles for the area round it are stitched on
-// a canvas. No three.js here: fitGeo is pure (tests/test_circuits.mjs), satellite() needs only the DOM.
+// a canvas. No three.js or DOM here, so groundwork.js's worker runs it: fitGeo is pure (tests/test_circuits.mjs).
 const TILES = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile';
 
 // closed polyline -> n points evenly spaced along it
@@ -71,7 +71,8 @@ export const mercator = ([lon, lat], z) => {
 };
 
 // Imagery covering [lon, lat] points at the sharpest zoom (up to 18, ~0.6 m per pixel) that fits in maxPx square.
-// Resolves {canvas, z, x0, y0} (x0, y0: the canvas's top-left Mercator pixel); tiles that fail to load stay black.
+// Resolves {canvas (an OffscreenCanvas), z, x0, y0} (x0, y0: the canvas's top-left Mercator pixel); tiles that fail to
+// load stay black. Called in groundwork.js's worker, which also fetches and decodes the tiles off the main thread.
 export async function satellite(corners, maxPx) {
   let z = 18, a, b;
   for (; z > 10; z--) {
@@ -80,17 +81,14 @@ export async function satellite(corners, maxPx) {
     b = [Math.max(...px.map(p => p[0])), Math.max(...px.map(p => p[1]))].map(v => Math.floor(v / 256));
     if ((b[0] - a[0] + 1) * 256 <= maxPx && (b[1] - a[1] + 1) * 256 <= maxPx) break;
   }
-  const canvas = document.createElement('canvas'), g = canvas.getContext('2d');
-  canvas.width = (b[0] - a[0] + 1) * 256;
-  canvas.height = (b[1] - a[1] + 1) * 256;
+  // willReadFrequently: a CPU canvas. A GPU one's ImageBitmap belongs to the worker's GPU context and went invalid when the
+  // worker ended (black ground, 'invalid mailbox name' GL errors)
+  const canvas = new OffscreenCanvas((b[0] - a[0] + 1) * 256, (b[1] - a[1] + 1) * 256), g = canvas.getContext('2d', {willReadFrequently: true});
   const jobs = [];
-  for (let x = a[0]; x <= b[0]; x++) for (let y = a[1]; y <= b[1]; y++) jobs.push(new Promise(done => {
-    const img = new Image();
-    img.crossOrigin = 'anonymous';  // the tile server allows it, so the canvas stays readable
-    img.onload = () => { g.drawImage(img, (x - a[0]) * 256, (y - a[1]) * 256); done(); };
-    img.onerror = done;
-    img.src = `${TILES}/${z}/${y}/${x}`;
-  }));
+  for (let x = a[0]; x <= b[0]; x++) for (let y = a[1]; y <= b[1]; y++) {
+    jobs.push(fetch(`${TILES}/${z}/${y}/${x}`).then(r => (r.ok ? r.blob() : null)).then(blob => blob && createImageBitmap(blob))
+      .then(img => img && g.drawImage(img, (x - a[0]) * 256, (y - a[1]) * 256), () => {}));
+  }
   await Promise.all(jobs);
   return {canvas, z, x0: a[0] * 256, y0: a[1] * 256};
 }

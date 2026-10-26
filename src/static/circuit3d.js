@@ -123,14 +123,16 @@ export function buildCircuit(world, {pts, map, tex, width, startKnown, ann, corn
   // phi|) and 0.4 m lower again, so grass never pokes through a cambered road. Away from the track (150-600 m) it
   // turns into rolling countryside, up to ~25 m of low-frequency hills. ---
   const reach = half + wall + m(3), floor = F.map(f => [f.P.x, f.P.z, f.P.y - reach * Math.abs(f.N.y) - m(0.4)]);
-  const ref = floor.filter((_, i) => i % (4 * every) === 0);
+  // x, z, h of every 4th point, flat: ~58,000 grid vertices x ~1,000 points, ~20x faster than destructuring [x, z, h]s
+  const ref = Float64Array.from(floor.filter((_, i) => i % (4 * every) === 0).flat());
   const hills = (x, z) => m(25) * (0.5 * Math.sin(x / m(310) + 1.3) * Math.cos(z / m(270)) + 0.3 * Math.sin((x + z) / m(170))
                                    + 0.2 * Math.cos((x - 2 * z) / m(120)));
   const terrainH = (x, z) => {
     let sw = 0, sh = 0, near = Infinity;
-    for (const [rx, rz, rh] of ref) {
-      const d2 = (rx - x) ** 2 + (rz - z) ** 2, q = 1 / (d2 + 1);
-      sw += q; sh += q * rh; near = Math.min(near, d2);
+    for (let k = 0; k < ref.length; k += 3) {
+      const dx = ref[k] - x, dz = ref[k + 1] - z, d2 = dx * dx + dz * dz, q = 1 / (d2 + 1);
+      sw += q; sh += q * ref[k + 2];
+      if (d2 < near) near = d2;
     }
     return sh / sw + THREE.MathUtils.smoothstep(Math.sqrt(near), m(150), m(600)) * hills(x, z);
   };
@@ -149,12 +151,14 @@ export function buildCircuit(world, {pts, map, tex, width, startKnown, ann, corn
   for (const r of floor) {
     const k = key(Math.floor(r[0] / D), Math.floor(r[1] / D));
     if (!buckets.has(k)) buckets.set(k, []);
-    buckets.get(k).push(r);
+    buckets.get(k).push(...r);  // flat x, z, h, as ref above
   }
   const clampH = (x, z, h) => {
     const bi = Math.floor(x / D), bj = Math.floor(z / D);
-    for (let i = bi - 1; i <= bi + 1; i++) for (let j = bj - 1; j <= bj + 1; j++)
-      for (const [rx, rz, rh] of buckets.get(key(i, j)) ?? []) if ((rx - x) ** 2 + (rz - z) ** 2 < D * D) h = Math.min(h, rh);
+    for (let i = bi - 1; i <= bi + 1; i++) for (let j = bj - 1; j <= bj + 1; j++) {
+      const b = buckets.get(key(i, j));
+      if (b) for (let k = 0; k < b.length; k += 3) if ((b[k] - x) ** 2 + (b[k + 1] - z) ** 2 < D * D && b[k + 2] < h) h = b[k + 2];
+    }
     return h;
   };
   const ground = new THREE.PlaneGeometry(2, 2, S, S).rotateX(-Math.PI / 2), gp = ground.attributes.position, guv = ground.attributes.uv;

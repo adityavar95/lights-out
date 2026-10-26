@@ -13,7 +13,7 @@ import {createVfx, haze} from './vfx.js';
 import {textures} from './textures3d.js';
 import {buildCircuit} from './circuit3d.js';
 import {createCrews} from './pit3d.js';
-import {fitGeo, mercator, satellite} from './satellite.js';
+import {covered} from './util.js';
 
 const SIZE = 1000;                  // the circuit is scaled to this many scene units across
 const UP = new THREE.Vector3(0, 1, 0);
@@ -23,6 +23,9 @@ const HDRI = 'https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/2k/kloofendal_48
 
 let container, renderer, labels, scene, camera, controls, world, csm, post, vfx, hemi, cars = {}, map = null, tex = null;
 let carsToken = 0, mode = 'overview', chased = null, glide = 1, trackMat = null, simRate = 0, lastUpdate = 0, wettable = [], circuit = null, fly = null;
+// the circuit before this one, disposed after the new one has drawn: its materials hold the compiled shaders the new
+// one reuses (disposing first deleted them, and every race switch recompiled them all: ~0.3 s)
+let stale = null;
 let drawnAt = 0, resized = true;
 const drawnView = new THREE.Matrix4(), drawnProj = new THREE.Matrix4();
 const sky0 = {env: 0.35, hemi: 0.5, fog: new THREE.Color(0xc4d3e2)};  // clear-sky lighting, for the weather to dim
@@ -108,7 +111,8 @@ export function init3d(el) {
   const clock = new THREE.Clock();
   renderer.setAnimationLoop(() => {
     const dt = Math.min(clock.getDelta(), 0.1);
-    if (!container.offsetParent || !container.clientWidth || !container.clientHeight) return;  // tab hidden or no size yet
+    // tab hidden, no size yet, or under the F1 TV viewer (it drew ~1,800 calls a frame there, beside 4K video decoding)
+    if (!container.offsetParent || !container.clientWidth || !container.clientHeight || covered()) return;
     if (fly) {  // after a circuit switch: ease from the old view to the new overview over 1.5 s
       fly.t = Math.min(1, fly.t + dt / 1.5);
       const e = THREE.MathUtils.smootherstep(fly.t, 0, 1);
@@ -139,6 +143,8 @@ export function init3d(el) {
     const moving = performance.now() - lastUpdate < 200;  // the replay is still moving the cars
     post.focus(chased === null ? 0 : camera.position.distanceTo(controls.target), APERTURE[mode]);
     post.render(dt, 1 / Math.max(1, moving ? simRate : 1));  // a 10x replay blurs like real time, not 10x as long
+    stale?.dispose();
+    stale = null;
     labels.render(scene, camera);
   });
 }
@@ -219,7 +225,8 @@ const m = metres => metres / map.mps;  // metres -> scene units
 // ann: circuits.js annotate() (heights, banking, kerbs, tunnel, barriers), flat without it. Frees the previous circuit
 // and cars, and flies the camera to the new overview instead of cutting.
 export function setTrack(pts, span, corners, startKnown, mpu, width = 13, ann = null) {
-  circuit?.dispose();
+  stale?.dispose();  // a second switch before a frame was drawn
+  stale = circuit;
   circuit = null;
   disposeCars();
   world.clear();
@@ -331,40 +338,31 @@ export function setWeather({cloud, rain, wetLine, wetOff}) {
 // (Mercator is conformal, so over a few km the map is affine to well under a metre). Trees stay only where the image
 // shows vegetation. Anything failing (no real outline, a poor fit, tiles unreachable) leaves the procedural grass.
 export async function setGround(year, round) {
-  const c = circuit, pts = c?.pts;
+  const c = circuit;
   if (!c) return;
-  try {
-    const r = await fetch(`/api/geo/${year}/${round}`);
-    if (!r.ok) return;
-    const geo = await r.json(), fit = fitGeo(pts, geo.x.map((x, i) => [x, geo.y[i]]));
-    if (fit.rms > 15) return console.warn(`satellite ground: outline fit off by ${fit.rms.toFixed(0)} m`);
-    const kx = 111320 * Math.cos(geo.lat * Math.PI / 180);  // local metres -> degrees, as the server's GeoJSON projection
-    const lonLat = (X, Z) => { const [e, n] = fit.map([X / map.k + map.cx, Z / map.k + map.cy]); return [geo.lng + e / kx, geo.lat + n / 110570]; };
-    const xs = pts.map(p => (p[0] - map.cx) * map.k), zs = pts.map(p => (p[1] - map.cy) * map.k), pad = m(500);
-    const [x0, x1, z0, z1] = [Math.min(...xs) - pad, Math.max(...xs) + pad, Math.min(...zs) - pad, Math.max(...zs) + pad];
-    const img = await satellite([[x0, z0], [x1, z0], [x0, z1], [x1, z1]].map(p => lonLat(...p)), Math.min(4096, renderer.capabilities.maxTextureSize));
-    if (circuit !== c) return;  // another circuit since
-    const uv = (X, Z) => { const [px, py] = mercator(lonLat(X, Z), img.z); return [(px - img.x0) / img.canvas.width, (py - img.y0) / img.canvas.height]; };
-    const L = SIZE / 2, o = uv(0, 0), ux = uv(L, 0), uz = uv(0, L);
-    const M = new THREE.Matrix3().set((ux[0] - o[0]) / L, (uz[0] - o[0]) / L, o[0], (ux[1] - o[1]) / L, (uz[1] - o[1]) / L, o[1], 0, 0, 1);
-    const texture = new THREE.CanvasTexture(img.canvas);
-    Object.assign(texture, {colorSpace: THREE.SRGBColorSpace, flipY: false, anisotropy: 8});
-    // vegetation: green beats red and blue, on a 512 px copy (reading the full image would be ~50 MB)
-    const small = document.createElement('canvas'), w = small.width = 512, h = small.height = Math.round(512 * img.canvas.height / img.canvas.width);
-    small.getContext('2d').drawImage(img.canvas, 0, 0, w, h);
-    const px = small.getContext('2d').getImageData(0, 0, w, h).data;
-    const green = (X, Z) => {
-      const [u, v] = uv(X, Z);
-      if (u < 0 || u >= 1 || v < 0 || v >= 1) return true;
-      const i = (Math.floor(v * h) * w + Math.floor(u * w)) * 4;
-      return px[i + 1] > px[i] * 1.05 && px[i + 1] > px[i + 2];
-    };
-    const mean = [0, 0, 0];
-    for (let i = 0; i < px.length; i += 4) for (let k = 0; k < 3; k++) mean[k] += px[i + k] / (px.length / 4) / 255;
-    c.satellite(texture, M, green, new THREE.Color().setRGB(...mean, THREE.SRGBColorSpace));
-  } catch (e) {
-    console.warn('satellite ground', e);
+  const xs = c.pts.map(p => (p[0] - map.cx) * map.k), zs = c.pts.map(p => (p[1] - map.cy) * map.k), pad = m(500);
+  const g = await new Promise(done => {  // the fit, the imagery and its vegetation: groundwork.js, on a worker thread
+    const w = new Worker(new URL('./groundwork.js', import.meta.url), {type: 'module'});
+    w.onmessage = e => { w.terminate(); done(e.data); };
+    w.onerror = e => { w.terminate(); done({error: e.message || 'worker failed'}); };
+    w.postMessage({url: `/api/geo/${year}/${round}`, pts: c.pts, map: {k: map.k, cx: map.cx, cy: map.cy}, L: SIZE / 2,
+      box: [Math.min(...xs) - pad, Math.max(...xs) + pad, Math.min(...zs) - pad, Math.max(...zs) + pad],
+      maxPx: Math.min(4096, renderer.capabilities.maxTextureSize)});
+  });
+  if (circuit !== c || !g?.image) {  // another circuit since, or no ground to show
+    g?.image?.close();
+    if (g?.error) console.warn('satellite ground', g.error);
+    else if (g?.rms > 15) console.warn(`satellite ground: outline fit off by ${g.rms.toFixed(0)} m`);
+    return;
   }
+  const texture = Object.assign(new THREE.Texture(g.image), {colorSpace: THREE.SRGBColorSpace, flipY: false, anisotropy: 8, needsUpdate: true});
+  texture.addEventListener('dispose', () => g.image.close());
+  const [a, b, u0, d, e, v0] = g.m, {w, h, data} = g.mask;
+  const green = (X, Z) => {  // vegetation under scene (x, z), through the affine map the shader drapes the image with
+    const u = a * X + b * Z + u0, v = d * X + e * Z + v0;
+    return u < 0 || u >= 1 || v < 0 || v >= 1 || data[Math.floor(v * h) * w + Math.floor(u * w)] === 1;
+  };
+  c.satellite(texture, new THREE.Matrix3().set(...g.m, 0, 0, 1), green, new THREE.Color().setRGB(...g.mean, THREE.SRGBColorSpace));
 }
 
 // Pit lane (map points of its centre line): the simulation's, entry road to exit road, or a replay's real one from GPS.

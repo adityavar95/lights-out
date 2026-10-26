@@ -1,5 +1,5 @@
 // Race replay: the 3D stage with the broadcast HUD round it (timing tower, telemetry, radar, control deck).
-import {get, el, teamColor, fmtClock, fmtLap, lastBefore, trackStatus, led} from './util.js';
+import {get, el, teamColor, fmtClock, fmtLap, lastBefore, trackStatus, led, covered} from './util.js';
 import {init3d, setTrack, setCars, updateCars, setView, setParts, setTyre, setGround, setPitLane} from './scene3d.js';
 import {setupOnboard, setCameraUi, setWheelAngle} from './onboard.js';
 import {fetchLive, liveInfo, liveDrivers, liveFeeds, liveStatus, liveClock, liveState, liveGps, hasGps, gpsAt, liveCar, resetGps} from './live.js';
@@ -148,7 +148,7 @@ export async function showLive() {
   S.playing = true;
   requestAnimationFrame(function frame() {
     if (token !== S.token) return;
-    render(false);
+    if (!covered()) render(false);
     requestAnimationFrame(frame);
   });
   (async function poll() {  // a couple of seconds behind the track at most: feed latency + this 1 s refresh
@@ -268,6 +268,7 @@ function togglePlay() {
 
 function tick(now) {
   if (!S.playing || !S.data) return;
+  if (covered()) return togglePlay();  // the F1 TV viewer opened over it: pause rather than race on unseen
   const dt = (now - S.last) / 1000 * S.speed;
   if (S.sim) S.sim.advance(Math.min(dt, 2));  // the physics runs in race time; a stalled tab doesn't jump minutes ahead
   S.t = S.sim ? S.sim.t : Math.min(S.data.duration, S.t + dt);

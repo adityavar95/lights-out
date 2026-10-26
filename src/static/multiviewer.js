@@ -120,7 +120,6 @@ function setup() {
   M.dlg.addEventListener('pointerdown', e => {  // an open ⚙ menu closes on a click anywhere else
     for (const d of M.dlg.querySelectorAll('.mvset[open]')) if (!d.contains(e.target)) d.open = false;
   });
-  requestAnimationFrame(drawTelemetry);
 }
 
 // the video's data offset, kept per video in this browser
@@ -162,6 +161,8 @@ export async function openViewer(video) {
   M.addBtn.disabled = true;
   setOffset((() => { try { return +localStorage.getItem(`f1tv-sync-${video.id}`) || 0; } catch (e) { return 0; } })());
   M.dlg.showModal();
+  dispatchEvent(new CustomEvent('f1:panel', {detail: M.dlg}));  // the circuits / cars / trace panels close (and stop drawing)
+  M.raf ||= requestAnimationFrame(drawTelemetry);
   M.grid.replaceChildren(el('div', {class: 'loading'}, el('div', {class: 'spinner'}), 'Loading channels…'));
   json('/api/f1tv/account').then(a => {
     M.account.className = `mvaccount${a.linked ? ' on' : ''}`;
@@ -279,7 +280,7 @@ const playUrl = ch => `/api/f1tv/play/${M.content?.id ?? M.video.id}?${new URLSe
 
 // at: where to start (s); by default where the selected tile is, so a new stream joins it
 async function load(t, at) {
-  const ch = t.pick.value, s = M.content.streams.find(x => String(x.channelId ?? '') === ch);
+  const ch = t.pick.value, s = M.content.streams.find(x => String(x.channelId ?? '') === ch), uhd = M.uhd && hasUhd(s);
   t.root.style.setProperty('--team', s?.hex || 'transparent');
   t.msg.textContent = 'Loading…';
   try {
@@ -303,12 +304,13 @@ async function load(t, at) {
       // renditions are only in the HEVC Main10 (HDR) set
       preferredVideoCodecs: M.uhd ? ['hvc1.2'] : [],
       // F1 TV's manifests say minBufferTime 30 s, so shaka waited for ~6 segments (5.8 s each) before the first frame
-      manifest: {dash: {ignoreMinBufferTime: true}}, streaming: {rebufferingGoal: 2},
+      // a 4K tile keeps 12 s behind the playhead (↺10 still lands in it), not 30 s: ~58 MB less memory per 4K stream
+      manifest: {dash: {ignoreMinBufferTime: true}}, streaming: {rebufferingGoal: 2, bufferBehind: uhd ? 12 : 30},
       // abr sized to the tile (a small tile streams a small rendition, so many streams stay smooth), starting from the
-      // connection's speed rather than shaka's 1 Mb/s guess, which fetched the first segment twice
-      abr: {enabled: true, restrictToElementSize: !M.uhd, defaultBandwidthEstimate: (navigator.connection?.downlink || 10) * 0.7e6,
-        // 4K: only 2160p from the first segment on (a stream without it, like an onboard, plays as it would anyway)
-        restrictions: {minHeight: M.uhd && hasUhd(s) ? 2160 : 0}}});
+      // connection's speed rather than shaka's 1 Mb/s guess, which fetched the first segment twice; in 4K mode too for the
+      // streams without 4K (onboards), leaving the decoder and the bandwidth to the 4K ones
+      abr: {enabled: true, restrictToElementSize: !uhd, defaultBandwidthEstimate: (navigator.connection?.downlink || 10) * 0.7e6,
+        restrictions: {minHeight: uhd ? 2160 : 0}}});  // 4K: only 2160p from the first segment on
     const l = lead();  // a new stream starts where the selected one is, playing or paused like it
     const join = l && l !== t && l.player && !l.player.isLive();
     // load straight at that time: loading from 0 and then seeking fetched the start of the session for nothing
@@ -382,24 +384,23 @@ async function telemetry(t) {
     t.parts = Object.fromEntries(['spd', 'gear', 'drs'].map(k => [k, t.hud.querySelector(`.${k}`)])
       .concat(['rpm', 'thr', 'brk'].map(k => [k, t.hud.querySelector(`.bar.${k} i`)])));
     t.tel = tel;
+    t.shown = undefined;
   } catch (e) {
     if (t.drv.value === num) t.hud.replaceChildren(name(), el('span', {class: 'lbl'}, e.message));
   }
 }
 
-// every frame: each overlay shows its car at the wall-clock time of its video's playhead (replays only: OpenF1 is
-// locked while a session is live)
+// every frame while the viewer is open: each overlay shows its car at the wall-clock time of its video's playhead
+// (replays only: OpenF1 is locked while a session is live). The page is only touched when the 0.5 s sample changes, and
+// the panel's place on the picture is CSS (.mvtel): reading tile sizes here forced a layout per tile per frame.
 function drawTelemetry() {
-  requestAnimationFrame(drawTelemetry);
-  if (!M.dlg.open || !M.video) return;
+  M.raf = M.dlg.open ? requestAnimationFrame(drawTelemetry) : 0;
   for (const t of M.tiles) {
     if (!t.tel || !t.parts) continue;
-    const r = t.player?.isLive() ? null : telAt(t.tel, videoT0() + t.video.currentTime);
+    const r = t.player?.isLive() ? null : telAt(t.tel, videoT0() + t.video.currentTime), key = r && Object.values(r).join();
+    if (key === t.shown) continue;
+    t.shown = key;
     t.hud.classList.toggle('stale', !r);  // before / after the session's data: the panel fades out
-    // on the picture, not the black bands round it, and above the player's control bar
-    const v = t.video, k = Math.min(v.clientWidth / (v.videoWidth || 16), v.clientHeight / (v.videoHeight || 9));
-    t.hud.style.left = `${(v.clientWidth - k * (v.videoWidth || 16)) / 2 + 10}px`;
-    t.hud.style.bottom = `${Math.max(64, (v.clientHeight - k * (v.videoHeight || 9)) / 2 + 10)}px`;
     if (!r) continue;
     t.parts.spd.textContent = r.speed;
     t.parts.gear.textContent = r.gear || 'N';

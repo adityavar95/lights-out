@@ -126,17 +126,19 @@ export function simulate(M, id, plan, {pass = PASS.normal} = {}) {
 }
 
 // The best plans with minStops..maxStops stops (stints of 3+ laps), best finish then time first. 3 stops go in 2-lap
-// steps to keep it under a second on a 70-lap race.
-export function optimise(M, id, {pass = PASS.normal, minStops = 0, maxStops = 3, top = 5} = {}) {
+// steps to keep it under a second on a 70-lap race. part [k, of]: only the plans whose first stop is on every of-th lap
+// from the k-th (strategylab.js runs the parts on parallel workers, optimiser.js, and merges them with `ranked`).
+export const ranked = (plans, top = 5) => plans.sort((x, y) => x.finish - y.finish || x.time - y.time).slice(0, top);
+export function optimise(M, id, {pass = PASS.normal, minStops = 0, maxStops = 3, top = 5, part: [k, of] = [0, 1]} = {}) {
   const n = M.times[id].length, out = [], MIN = 3;
   const tryPlan = plan => { const r = simulate(M, id, plan, {pass}); out.push({plan: r.plan, finish: r.finish, time: r.time}); };
-  if (minStops === 0) tryPlan([]);
-  for (let a = MIN; a <= n - MIN; a++) {
+  if (minStops === 0 && k === 0) tryPlan([]);
+  for (let a = MIN + k; a <= n - MIN; a += of) {
     if (minStops <= 1 && maxStops >= 1) tryPlan([a]);
     for (let b = a + MIN; maxStops >= 2 && b <= n - MIN; b++) {
       if (minStops <= 2) tryPlan([a, b]);
       if (maxStops >= 3 && a % 2 === 0 && b % 2 === 0) for (let c = b + MIN; c <= n - MIN; c += 2) tryPlan([a, b, c]);
     }
   }
-  return out.sort((x, y) => x.finish - y.finish || x.time - y.time).slice(0, top);
+  return ranked(out, top);
 }

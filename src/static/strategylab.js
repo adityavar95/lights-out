@@ -1,7 +1,7 @@
 // Strategy Lab tab: move one driver's pit stops in a real race and see where they'd have finished (whatif.js), or
 // search every 1-3 stop plan for the best one.
 import {el, svg, teamColor} from './util.js';
-import {raceModel, simulate, optimise, PASS, SC_LOSS} from './whatif.js';
+import {raceModel, simulate, optimise, ranked, PASS, SC_LOSS} from './whatif.js';
 
 const code = r => r['Driver.code'] || r['Driver.familyName'].slice(0, 3).toUpperCase();
 const chip = color => el('span', {class: 'chip', style: `background:${color}`});
@@ -36,17 +36,22 @@ export function renderStrategyLab(root, laps, results, pits, year) {
   pass.onchange = () => { S.pass = pass.value; best.replaceChildren(); draw(); };
   S.plan = [...M.stops[S.id]];
 
-  function findBest() {
+  async function findBest() {
     best.replaceChildren(el('div', {class: 'loading'}, el('div', {class: 'spinner'}), 'Trying every 1, 2 and 3-stop plan…'));
-    setTimeout(() => {  // ~0.3 s of search: let the spinner paint first
-      const id = S.id, plans = optimise(M, id, {pass: PASS[S.pass], minStops: year >= 2007 ? 1 : 0});
-      if (id !== S.id) return;
-      const real = simulate(M, id, M.stops[id], {pass: PASS[S.pass]});
-      best.replaceChildren(el('h4', {}, 'Best plans found'), ...plans.map(p => el('button', {
-        class: 'labplan', onclick: () => { S.plan = [...p.plan]; draw(); }},
-        el('b', {}, `P${p.finish}`), ` ${p.plan.length ? `stop${p.plan.length > 1 ? 's' : ''} on lap ${p.plan.join(', ')}` : 'no stop'}`,
-        el('span', {class: p.time < real.time ? 'up' : 'down'}, ` ${signed(p.time - real.time)}`))));
-    }, 30);
+    const id = S.id, opts = {pass: PASS[S.pass], minStops: year >= 2007 ? 1 : 0}, n = Math.min(8, navigator.hardwareConcurrency || 2);
+    // the plans split over the CPU's cores (optimiser.js workers): ~0.3 s on this thread froze the page
+    const parts = await Promise.all(Array.from({length: n}, (_, k) => new Promise((ok, fail) => {
+      const w = new Worker(new URL('./optimiser.js', import.meta.url), {type: 'module'});
+      w.onmessage = e => { w.terminate(); ok(e.data); };
+      w.onerror = e => { w.terminate(); fail(e); };
+      w.postMessage({M, id, opts: {...opts, part: [k, n]}});
+    }))).catch(() => [optimise(M, id, opts)]);  // no workers: here, as before
+    if (id !== S.id) return;
+    const plans = ranked(parts.flat()), real = simulate(M, id, M.stops[id], {pass: PASS[S.pass]});
+    best.replaceChildren(el('h4', {}, 'Best plans found'), ...plans.map(p => el('button', {
+      class: 'labplan', onclick: () => { S.plan = [...p.plan]; draw(); }},
+      el('b', {}, `P${p.finish}`), ` ${p.plan.length ? `stop${p.plan.length > 1 ? 's' : ''} on lap ${p.plan.join(', ')}` : 'no stop'}`,
+      el('span', {class: p.time < real.time ? 'up' : 'down'}, ` ${signed(p.time - real.time)}`))));
   }
 
   function draw() {

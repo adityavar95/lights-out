@@ -138,6 +138,9 @@ async function selectRace(round, sim = A.mode === 'sim') {
 }
 
 async function init() {
+  // the season list and this season's calendar are requested before the 3D stage is set up (~0.3 s of main thread)
+  const seasons = get('/api/seasons');
+  get(`/api/jolpica/${today.slice(0, 4)}/races`).catch(() => {});
   setupReplay($('tab-replay'));
   setupExplorer($('tab-explorer'), () => ({year: A.year, round: A.round}));
   setMode((() => { try { return localStorage.getItem('f1mode'); } catch (e) { return null; } })() === 'sim' ? 'sim' : 'watch', false);
@@ -187,7 +190,7 @@ async function init() {
       if (d) { const n = tabs[(i + d + tabs.length) % tabs.length]; n.focus(); activate(n.dataset.tab); }
     };
   });
-  const years = (await get('/api/seasons')).slice().reverse();
+  const years = (await seasons).slice().reverse();
   const sel = $('year');
   sel.replaceChildren(...years.map(y => new Option(y, y)));
   sel.value = years.includes(today.slice(0, 4)) ? today.slice(0, 4) : years[0];

@@ -220,10 +220,13 @@ body:not([data-mode=sim]) .hud-top:not(:has(.lapcount:not(:empty))) { display: n
 .mvsync .mvbtn { margin-left: 4px; }
 /* telemetry overlay: see-through glass at the bottom-left of the video, so the race shows through the data and the data
    stays readable on the race (text shadow, light blur); never takes clicks, so the video controls under it still work */
-.mvtel { position: absolute; left: 10px; bottom: 56px; width: 200px; display: grid; grid-template-columns: 30px 1fr auto auto; align-items: center;
+.mvtel { position: absolute; width: 200px; display: grid; grid-template-columns: 30px 1fr auto auto; align-items: center;
   gap: 4px 8px; padding: 8px 10px; border-radius: 10px; background: rgb(10 11 16 / .3); backdrop-filter: blur(3px) saturate(140%);
   -webkit-backdrop-filter: blur(3px) saturate(140%); border: 1px solid rgb(255 255 255 / .14); color: #fff; text-shadow: 0 1px 2px rgb(0 0 0 / .85);
-  font-variant-numeric: tabular-nums; pointer-events: none; transition: opacity .3s; }
+  font-variant-numeric: tabular-nums; pointer-events: none; transition: opacity .3s;
+  /* on the picture, not the black bands round it, and above the control bar; tile-sized units (.mvtile is a size
+     container), so nothing measures the tile per frame. shortcut: assumes 16:9, as every F1 TV feed is */
+  left: calc(max(0px, 50cqw - 50cqh * 16 / 9) + 10px); bottom: max(64px, 50cqh - 50cqw * 9 / 16 + 10px); }
 .mvtel[hidden] { display: none; }
 .mvtel.stale { opacity: .3; }
 /* small tiles: a smaller panel, so it doesn't cover the picture */

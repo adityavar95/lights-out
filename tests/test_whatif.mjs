@@ -1,6 +1,6 @@
 // Run: node tests/test_whatif.mjs  — checks the Strategy Lab's what-if race model (whatif.js) on synthetic races.
 import assert from 'node:assert/strict';
-import {raceModel, simulate, optimise, PASS, SC_LOSS} from '../src/static/whatif.js';
+import {raceModel, simulate, optimise, ranked, PASS, SC_LOSS} from '../src/static/whatif.js';
 
 const fmt = s => `${Math.floor(s / 60)}:${(s % 60).toFixed(3).padStart(6, '0')}`;
 const N = 40, LOSS = 20;
@@ -41,6 +41,12 @@ assert.ok(Math.abs(best.plan[0] - N / 2) <= 2, `one-stop optimum ${best.plan} ne
 assert.ok(best.time < M.cum.a.at(-1), 'optimum beats the real plan');
 const two = optimise(M, 'a', {pass: null, minStops: 2, maxStops: 2})[0];
 assert.equal(two.plan.length, 2);
+
+// split into parts (as strategylab.js runs it on parallel workers), the merged best plans are the whole search's
+for (const of of [2, 3, 8]) {
+  const whole = optimise(M, 'a', {pass: PASS.normal}), parts = Array.from({length: of}, (_, k) => optimise(M, 'a', {pass: PASS.normal, part: [k, of]}));
+  assert.deepEqual(ranked(parts.flat()).map(p => [p.finish, p.time]), whole.map(p => [p.finish, p.time]), `${of} parts`);
+}
 
 // moving a stop changes only the laps it touches: before the earlier of the two stops nothing moves
 const moved = simulate(M, 'a', [14], {pass: null});

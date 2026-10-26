@@ -30,6 +30,10 @@ export function el(tag, attrs = {}, ...children) {
   return e;
 }
 
+// a modal dialog (the F1 TV viewer) covers the whole page: the 3D stage behind it needn't draw (getElementsByTagName is
+// a cached live list, so this is cheap every frame)
+export const covered = () => [...document.getElementsByTagName('dialog')].some(d => d.matches(':modal'));
+
 // status light used by every deck's buttons (CSS colours it on/off)
 export const led = () => el('i', {class: 'led', 'aria-hidden': 'true'});
 

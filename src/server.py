@@ -1,6 +1,7 @@
 """F1 data browser backend: livef1/Jolpica tables, track maps and race replay data."""
 import json
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime
 from functools import lru_cache
 from pathlib import Path
@@ -317,19 +318,36 @@ async def revalidate_static(request, call_next):
 app.add_middleware(GZipMiddleware, minimum_size=1000, compresslevel=1)
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
 
-def warm_latest_replay():
-    """Builds the latest race's GPS replay in the background: the app opens on that race, and its first build is ~30
-    OpenF1 requests (~40 s on the free tier). A click meanwhile waits on REPLAY_LOCKS instead of building it twice."""
+def warm_up():
+    """The page's first load, done at start-up on parallel threads so the first visit finds warm caches: the season list,
+    this season's calendar and sessions, the latest race's track, ground, heights and results (each 0.5-2.5 s cold,
+    ~10 ms warm; the page asked for them one after another), and its GPS replay (~30 OpenF1 requests, ~40 s on the
+    free tier; a click meanwhile waits on REPLAY_LOCKS instead of building it twice). All network-bound, so threads
+    run them side by side despite the GIL."""
+    today = date.today().isoformat()
+    year = int(today[:4])
     try:
-        today = date.today().isoformat()
-        year = int(today[:4])
         last = [r for r in races(year) if r["date"] <= today]
-        if last and year >= 2023:
-            replay(year, last[-1], "Race")
     except Exception:
-        pass  # e.g. OpenF1 locked while a session is live: the replay builds on first ▶ as before
+        return
+    jobs = [seasons, lambda: jolpica(year, "races"), lambda: season_sessions(year)]
+    if last:
+        rnd = int(last[-1]["round"])
+        jobs += [lambda: race_track(year, rnd), lambda: race_geo(year, rnd), lambda: race_elevation(year, rnd),
+                 lambda: jolpica(year, "results", rnd)]
+        if year >= 2023:
+            jobs.append(lambda: replay(year, last[-1], "Race"))
+
+    def quietly(job):
+        try:
+            job()
+        except Exception:
+            pass  # e.g. OpenF1 locked while a session is live: that part loads on first use as before
+
+    with ThreadPoolExecutor(len(jobs)) as pool:
+        pool.map(quietly, jobs)
 
 
 if __name__ == "__main__":
-    threading.Thread(target=warm_latest_replay, daemon=True).start()
+    threading.Thread(target=warm_up, daemon=True).start()
     uvicorn.run(app, host="127.0.0.1", port=8086)

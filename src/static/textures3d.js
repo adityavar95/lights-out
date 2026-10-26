@@ -40,13 +40,16 @@ function photo(name, metres, tile, fallback, res = '1k') {
   const set = {map: fallback, normalMap: plain('#8080ff'), roughnessMap: plain('#ffffff')};
   for (const [k, file] of [['map', 'diff'], ['normalMap', 'nor_gl'], ['roughnessMap', 'rough']]) {
     set[k].anisotropy = 16;  // the road is mostly seen at grazing angles; three clamps this to what the GPU supports
-    new THREE.ImageLoader().setCrossOrigin('anonymous').load(`${PH}/${res}/${name}/${name}_${file}_${res}.jpg`, img => {
-      const t = set[k];
-      t.dispose();
-      t.image = img;
-      t.repeat.setScalar(tile / metres);
-      t.needsUpdate = true;
-    }, undefined, () => {});
+    // decoded off the main thread (an <img> decoded inside the texture upload: ~20 ms per 2k photo, at the first frame).
+    // An ImageBitmap ignores the texture's flipY, so it comes flipped as the upload would have flipped the <img>.
+    new THREE.ImageBitmapLoader().setCrossOrigin('anonymous').setOptions({imageOrientation: 'flipY', premultiplyAlpha: 'none', colorSpaceConversion: 'none'})
+      .load(`${PH}/${res}/${name}/${name}_${file}_${res}.jpg`, img => {
+        const t = set[k];
+        t.dispose();
+        t.image = img;
+        t.repeat.setScalar(tile / metres);
+        t.needsUpdate = true;
+      }, undefined, () => {});
   }
   return set;
 }
