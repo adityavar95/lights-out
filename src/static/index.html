@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>F1 Data Browser</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<!-- three.js, the video player and F1 TV's video CDN: connections open before the first request needs them -->
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+<link rel="preconnect" href="https://ott-video-fer-cf.formula1.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Titillium+Web:ital,wght@0,400;0,600;0,700;0,900;1,900&display=swap">
+<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/circuitdeck.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><span class="logo">F1</span><span class="title">Data Browser</span></div>
+  <div class="modeswitch" role="group" aria-label="Mode">
+    <button data-appmode="watch" aria-pressed="true" title="Real races: replays, results, standings and live timing">Watch</button>
+    <button data-appmode="sim" aria-pressed="false" title="A physics race on any circuit, with any era's cars">Simulate</button>
+  </div>
+  <label class="season">Season <select id="year" aria-label="Season"></select></label>
+  <div class="racepick">
+    <button id="racebtn" class="racebtn" popovertarget="calendar" aria-haspopup="true" aria-label="Choose a race">Races ▾</button>
+    <nav id="calendar" class="calendar" popover aria-label="Race calendar"></nav>
+  </div>
+  <button id="livebtn" class="livebtn" hidden>● LIVE</button>
+</header>
+<section id="hero" class="hero" aria-live="polite"></section>
+<nav id="tvlist" class="calendar tvlist" popover aria-label="F1 TV videos of this race"></nav>
+<div class="tabs" role="tablist" aria-label="Race views">
+  <button role="tab" data-tab="replay" aria-selected="true">Race replay</button>
+  <button role="tab" data-tab="results" tabindex="-1">Results</button>
+  <button role="tab" data-tab="qualifying" tabindex="-1">Qualifying</button>
+  <button role="tab" data-tab="lapchart" tabindex="-1">Lap chart</button>
+  <button role="tab" data-tab="strategy" tabindex="-1">Strategy lab</button>
+  <button role="tab" data-tab="standings" tabindex="-1">Standings</button>
+  <button role="tab" data-tab="explorer" tabindex="-1">Data explorer</button>
+</div>
+<main>
+  <section id="tab-replay" role="tabpanel" aria-label="Race replay"></section>
+  <section id="tab-results" role="tabpanel" aria-label="Results" hidden></section>
+  <section id="tab-qualifying" role="tabpanel" aria-label="Qualifying" hidden></section>
+  <section id="tab-lapchart" role="tabpanel" aria-label="Lap chart" hidden></section>
+  <section id="tab-strategy" role="tabpanel" aria-label="Strategy lab" hidden></section>
+  <section id="tab-standings" role="tabpanel" aria-label="Standings" hidden></section>
+  <section id="tab-explorer" role="tabpanel" aria-label="Data explorer" hidden></section>
+</main>
+<footer class="foot">Data: livef1 · Jolpica · OpenF1 · MultiViewer track maps · imagery Esri, Maxar, Earthstar Geographics. Unofficial, not associated with Formula 1.</footer>
+<script type="importmap">
+{"imports": {"three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+             "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"}}
+</script>
+<script type="module" src="/static/app.js"></script>
+</body>
+</html>

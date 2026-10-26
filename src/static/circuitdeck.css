@@ -1,0 +1,97 @@
+/* circuit selector (circuitdeck.js): a glass deck over the 3D stage, a grid of circuit cards */
+.circuitdeck { position: absolute; z-index: 4; inset: 64px 24px calc(var(--deck-h, 64px) + 18px); display: flex; flex-direction: column;
+  gap: 8px; padding: 10px 12px; color: var(--hud-ink); animation: cdin .45s var(--spring); }
+.circuitdeck[hidden] { display: none; }
+@keyframes cdin { from { transform: translateY(-14px) scale(.98); opacity: 0; } }
+.circuitdeck .pwhead .phead { margin: 0; }
+.cdsub { flex: 1; color: var(--hud-muted); font-size: 12px; }
+.cdclose { padding: 4px 9px; }
+.cdgrid { flex: 1; min-height: 0; overflow-y: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px;
+  padding: 2px 4px 6px 2px; }
+.cdcard { appearance: none; border: 0; text-align: left; display: flex; flex-direction: column; gap: 6px; padding: 10px; border-radius: 12px;
+  color: inherit; background: rgb(255 255 255 / .04); box-shadow: var(--neu-raise); cursor: pointer; transition: transform .2s var(--spring), box-shadow .15s; }
+.cdcard:hover:not(:disabled) { transform: translateY(-2px); }
+.cdcard:active:not(:disabled) { box-shadow: var(--neu-press); transform: none; }
+.cdcard:disabled { cursor: progress; }
+.cdcard.preset { background: linear-gradient(160deg, rgb(225 6 0 / .16), rgb(255 255 255 / .03) 60%); }
+.cdcard[aria-current=true] { outline: 2px solid var(--f1-green); outline-offset: -2px; }
+.cdtitle { display: flex; align-items: center; justify-content: space-between; gap: 6px; font-size: 15px; }
+.cdtag { font-size: 9px; font-weight: 900; letter-spacing: .12em; padding: 2px 6px; border-radius: 5px; background: var(--accent); color: #fff; }
+.cdname { font-size: 11px; color: var(--hud-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cdmap { height: 120px; display: grid; place-items: center; }
+.cdmap svg { width: 100%; height: 100%; }
+.cdmap .sector { fill: none; stroke-width: 3; vector-effect: non-scaling-stroke; stroke-linejoin: round; }
+.cdmap .drszone { fill: none; stroke: var(--f1-green); stroke-width: 8; stroke-opacity: .45; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+.cdmap .cdstart { fill: #fff; }
+.cdelev { height: 28px; display: grid; align-items: center; }
+.cdelev svg { width: 100%; height: 100%; }
+.cdelev .cdfill { fill: rgb(56 182 255 / .18); }
+.cdelev .cdline { fill: none; stroke: #38b6ff; stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.cdbadges { display: flex; flex-wrap: wrap; gap: 4px; }
+.cdbadge { display: flex; flex-direction: column; padding: 3px 6px; border-radius: 7px; box-shadow: var(--neu-press); line-height: 1.2; }
+.cdbadge small { font-size: 8px; letter-spacing: .1em; color: var(--hud-muted); }
+.cdbadge b { font-size: 11px; }
+@media (max-width: 900px) { .circuitdeck { position: fixed; inset: 12px; } }
+@media (prefers-reduced-motion: reduce) { .circuitdeck { animation: none; } .cdcard { transition: none; } }
+
+/* car showroom (carsdeck.js): the same deck, era chips, season cards on the left, preview and spec card on the right */
+.csera { display: flex; flex-wrap: wrap; gap: 6px; }
+.csera button { padding: 4px 10px; font-size: 11px; }
+.csera button[aria-pressed=true] { box-shadow: var(--neu-press); color: var(--f1-green); }
+.csbody { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 420px); gap: 12px; }
+.csgrid { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); align-content: start; }
+.cscard { border-left: 4px solid var(--team); }
+.csdetail { min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding: 2px 4px 6px; }
+.cstitle { font-size: 18px; }
+.cstitle small { color: var(--hud-muted); font-size: 12px; }
+.csview { height: 220px; flex-shrink: 0; border-radius: 12px; box-shadow: var(--neu-press); overflow: hidden; cursor: grab; }
+.csview canvas { display: block; width: 100%; height: 100%; }
+.csteam { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.csteam small { font-size: 8px; letter-spacing: .1em; color: var(--hud-muted); }
+.csteam select { flex: 1; }
+.csstats { display: flex; flex-wrap: wrap; gap: 4px; }
+.csdrivers { width: 100%; font-size: 11px; color: var(--hud-muted); }
+@media (max-width: 900px) { .csbody { grid-template-columns: 1fr; overflow-y: auto; } .csgrid { overflow: visible; } }
+
+/* telemetry trace (tracemodal.js): the same deck on carbon-slate glass, leaving the HUD's right column (circuit radar) visible */
+.tracedeck { position: absolute; z-index: 4; inset: 64px 296px calc(var(--deck-h, 64px) + 18px) 24px; display: flex; flex-direction: column;
+  gap: 8px; padding: 10px 12px; color: var(--hud-ink); animation: cdin .45s var(--spring);
+  background: linear-gradient(150deg, rgb(30 33 41 / .78), rgb(9 10 14 / .72)); backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%); }
+.tracedeck[hidden] { display: none; }
+.tracedeck .pwhead .phead { margin: 0; }
+.trctl { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; }
+.trpick { display: flex; align-items: center; gap: 6px; padding: 4px 6px; border-radius: 12px; box-shadow: var(--neu-press); }
+.trpick small { font-size: 8px; font-weight: 900; letter-spacing: .1em; color: var(--hud-muted); max-width: 64px; line-height: 1.1; }
+.trpick.a { border-left: 3px solid #fff; }
+.trpick.b { border-left: 3px dashed #38f0ff; }
+.trpick select { max-width: 190px; }
+.trzoom { align-self: start; }
+.trbody { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 250px; gap: 12px; }
+.trmain { min-height: 0; display: flex; flex-direction: column; }
+.trplot { position: relative; flex: 1; min-height: 320px; border-radius: 12px; box-shadow: var(--neu-press); overflow: hidden; }
+.trplot canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+.trover { cursor: crosshair; touch-action: none; }
+.trread { position: absolute; top: 30px; display: grid; grid-template-columns: auto repeat(3, minmax(52px, auto)); gap: 1px 10px; padding: 6px 9px;
+  border-radius: 9px; background: rgb(8 9 13 / .88); box-shadow: 0 6px 18px rgb(0 0 0 / .5); font-size: 11px; pointer-events: none;
+  font-variant-numeric: tabular-nums; }
+.trread[hidden] { display: none; }
+.trread span { color: var(--hud-muted); }
+.trread b { text-align: right; }
+.trmsg { margin: 6px 2px 0; font-size: 12px; }
+.trmsg[hidden] { display: none; }
+.trside { min-height: 0; display: flex; flex-direction: column; gap: 8px; overflow-y: auto; }
+.trmap { width: 100%; height: 170px; flex: none; border-radius: 12px; box-shadow: var(--neu-press); }
+.trmap .trline { fill: none; stroke: rgb(255 255 255 / .55); stroke-width: 2.5; vector-effect: non-scaling-stroke; stroke-linejoin: round; }
+.trdot.a { fill: #fff; filter: drop-shadow(0 0 4px #fff); }
+.trdot.b { fill: #38f0ff; filter: drop-shadow(0 0 4px #38f0ff); }
+.trnotes { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.trnotes li { padding: 7px 9px; border-radius: 10px; font-size: 12px; line-height: 1.35; box-shadow: var(--neu-raise); cursor: zoom-in;
+  background: rgb(255 255 255 / .03); font-variant-numeric: tabular-nums; }
+.trnotes small { display: block; font-size: 8px; font-weight: 900; letter-spacing: .12em; color: var(--f1-green); }
+.trow .trcmp { appearance: none; border: 0; background: none; padding: 0; color: var(--hud-muted); cursor: pointer; font-size: 13px; line-height: 1; }
+.trow .trcmp:hover, .trow .trcmp:focus-visible { color: #38f0ff; }
+.radar .trcursor { fill: #ff3c50; stroke: #fff; stroke-width: 1.5; vector-effect: non-scaling-stroke; filter: drop-shadow(0 0 3px #ff3c50); }
+@media (max-width: 1100px) { .trbody { grid-template-columns: 1fr; overflow-y: auto; } .trside { overflow: visible; } }
+@media (max-width: 900px) { .tracedeck { position: fixed; inset: 12px; } }
+@media (prefers-reduced-motion: reduce) { .tracedeck { animation: none; } }
