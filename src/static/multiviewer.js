@@ -280,7 +280,7 @@ const playUrl = ch => `/api/f1tv/play/${M.content?.id ?? M.video.id}?${new URLSe
 
 // at: where to start (s); by default where the selected tile is, so a new stream joins it
 async function load(t, at) {
-  const ch = t.pick.value, s = M.content.streams.find(x => String(x.channelId ?? '') === ch), uhd = M.uhd && hasUhd(s);
+  const ch = t.pick.value, s = M.content.streams.find(x => String(x.channelId ?? '') === ch);
   t.root.style.setProperty('--team', s?.hex || 'transparent');
   t.msg.textContent = 'Loading…';
   try {
@@ -299,6 +299,8 @@ async function load(t, at) {
       t.player.addEventListener('adaptation', () => showNow(t));
     }
     t.ent = p.entitlementToken;
+    t.hls = p.streamType === 'HLS';  // archive videos (seen on 1995, 2010, 2019): HLS H.264, 1080p at most, never 4K
+    const uhd = M.uhd && hasUhd(s) && !t.hls;
     t.player.configure({drm: {servers: p.laURL ? {'com.widevine.alpha': p.laURL} : {}}, preferredAudioLanguage: t.aq.value || 'en',
       // 4K: shaka keeps one video set per stream and picks the cheaper one (HEVC Main, up to 1620p); the 2160p
       // renditions are only in the HEVC Main10 (HDR) set
@@ -341,7 +343,7 @@ const hasUhd = s => ['INTERNATIONAL', 'F1 LIVE', 'MAIN'].includes(s?.title);
 // 4K mode: a stream with a 2160p rendition is locked to it (Auto would size it to the tile and rarely pick it)
 function lock4k(t) {
   const top = renditions(t.player.getVariantTracks()).video[0];
-  if (top?.height >= 2160) {
+  if (top?.height >= 2160 || (t.hls && top)) {  // an archive video has no 4K: 4K mode locks it to its best instead
     t.vq.value = top.id;
     applyQuality(t);
   } else if (hasUhd(M.content.streams.find(x => String(x.channelId ?? '') === t.pick.value))) {
