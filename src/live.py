@@ -27,7 +27,9 @@ BUFFER = 6  # seconds of GPS / car data samples kept for the browser
 RS = "\x1e"  # SignalR message separator
 
 _state: dict = {}
-_status = {"connected": False, "error": None, "last_request": 0.0, "auth": False}
+# token: the last poller's F1 TV token, in memory only; rejected: one F1 refused, so pollers can't resend it every 5 s
+_status = {"connected": False, "error": None, "last_request": 0.0, "auth": False, "token": None, "rejected": None,
+           "auth_error": None}
 _lock = threading.Lock()
 _start_lock = threading.Lock()
 _thread: threading.Thread | None = None
@@ -97,13 +99,12 @@ def _idle() -> bool:
 def _run():
     while not _idle():
         try:
-            tok = f1auth.token()
+            tok = _status["token"] = f1auth.valid(_status["token"])  # an expired one is dropped
             auth = {"Authorization": f"Bearer {tok}"} if tok else {}
             _status["auth"] = bool(tok)
             neg = requests.post(f"https://{HOST}/negotiate?negotiateVersion=1", headers=auth, timeout=15)
             if neg.status_code == 401 and tok:  # rejected token: drop it, and use the free feed for a while
-                f1auth.clear()
-                f1auth.status.update(error="F1 rejected the F1 TV token", failed_at=time.time())
+                _status.update(token=None, rejected=tok, auth_error="F1 rejected the F1 TV token: connect again")
             neg.raise_for_status()
             cookie = "; ".join(f"{k}={v}" for k, v in neg.cookies.items())  # load balancer stickiness
             with connect(f"wss://{HOST}?id={neg.json()['connectionToken']}",
@@ -112,7 +113,7 @@ def _run():
                 ws.send(json.dumps({"type": 1, "invocationId": "0", "target": "Subscribe", "arguments": [TOPICS]}) + RS)
                 _status.update(connected=True, error=None)
                 pinged = time.time()
-                while not _idle():
+                while not _idle() and not (_status["token"] and not tok):  # reconnect signed in once a token arrives
                     if time.time() - pinged > 10:  # the server drops clients that stay silent for 30 s
                         ws.send(json.dumps({"type": 6}) + RS)
                         pinged = time.time()
@@ -128,10 +129,13 @@ def _run():
     _status["connected"] = False
 
 
-def snapshot() -> dict:
-    """Current live state; starts the connection if needed and waits up to 5 s for the first data."""
+def snapshot(token: str | None = None) -> dict:
+    """Current live state; starts the connection if needed and waits up to 5 s for the first data. A caller's F1 TV
+    token (f1auth) unlocks car GPS and telemetry on the shared connection."""
     global _thread
     _status["last_request"] = time.time()
+    if token and token != _status["rejected"]:
+        _status.update(token=token, auth_error=None)
     with _start_lock:  # requests run in a thread pool: two first polls must not open two feed connections
         if _thread is None or not _thread.is_alive():
             _thread = threading.Thread(target=_run, daemon=True)
@@ -142,7 +146,7 @@ def snapshot() -> dict:
         time.sleep(0.1)
     with _lock:
         return {"connected": _status["connected"], "error": _status["error"], "auth": _status["auth"],
-                "auth_error": f1auth.status["error"],
+                "auth_error": _status["auth_error"],
                 "topics": copy.deepcopy(_state)}
 
 

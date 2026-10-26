@@ -9,7 +9,7 @@ from pathlib import Path
 import livef1
 import pandas as pd
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -200,11 +200,12 @@ def race_replay(year: int, round: int, session: str = "Race"):
 
 
 @app.get("/api/f1tv/account")
-def f1tv_account():
-    """Whether an F1 TV subscription is linked (f1auth), never the token itself."""
-    t = f1auth.token()
+def f1tv_account(x_f1_token: str | None = Header(None)):
+    """Whether the caller's F1 TV token (f1auth) is a live subscription, never the token itself."""
+    t = f1auth.valid(x_f1_token)
     c = f1auth.claims(t) if t else {}
-    return {"linked": bool(t), "product": c.get("SubscribedProduct"), "status": c.get("SubscriptionStatus"), "error": f1auth.status["error"]}
+    return {"linked": bool(t), "product": c.get("SubscribedProduct"), "status": c.get("SubscriptionStatus"),
+            "error": None if t or not x_f1_token else "F1 TV sign-in expired: connect again"}
 
 
 @app.get("/api/f1tv/channels/{content_id}")
@@ -216,10 +217,10 @@ def f1tv_channels(content_id: int):
 
 
 @app.get("/api/f1tv/play/{content_id}")
-def f1tv_play(content_id: int, channel: int | None = None, uhd: bool = False):
-    t = f1auth.token()
+def f1tv_play(content_id: int, channel: int | None = None, uhd: bool = False, x_f1_token: str | None = Header(None)):
+    t = f1auth.valid(x_f1_token)
     if not t:
-        raise HTTPException(401, f1auth.status["error"] or "No F1 TV subscription linked: add your account to .cache/f1_account.json")
+        raise HTTPException(401, "Connect your F1 TV account to play videos")
     try:
         return f1tv.play(content_id, channel, t, uhd)
     except f1tv.F1TVError as e:
@@ -257,9 +258,9 @@ def f1tv_videos(year: int, round: int):
 
 
 @app.get("/api/live")
-def live_state():
+def live_state(x_f1_token: str | None = Header(None)):
     """Current state of the live (or most recent) session from F1's free live timing feed."""
-    return raw_json(live.snapshot())  # polled every second
+    return raw_json(live.snapshot(f1auth.valid(x_f1_token)))  # polled every second
 
 
 @app.get("/api/live/track")

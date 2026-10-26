@@ -107,25 +107,20 @@ assert tracks.track("spa", 2026, 50.44, 5.97, lambda: lap)["source"] == "multivi
 tracks.mv_track = saved_mv
 print("ok")
 
-# F1 TV sign-in: after a failure, no new sign-in for RETRY s (a wrong password must not lock the account)
-import os, tempfile
+# F1 TV token from the browser (Connect bookmarklet): only an unexpired JWT counts; nothing is stored server-side
+import base64 as _b64, time as _time
 import f1auth
 
-calls = []
-def _failing_login(user, password):
-    calls.append(user)
-    raise f1auth.F1AuthError("wrong password")
+def _jwt(**claims):
+    enc = lambda d: _b64.urlsafe_b64encode(_json.dumps(d).encode()).rstrip(b"=").decode()
+    return f"{enc({'alg': 'none'})}.{enc(claims)}.sig"
 
-saved = (f1auth.CACHE, f1auth.login, f1auth.USERNAME, f1auth.PASSWORD, os.environ.pop("F1_TOKEN", None))
-f1auth.CACHE = Path(tempfile.mkdtemp()) / "f1_token.json"
-f1auth.login, f1auth.USERNAME, f1auth.PASSWORD = _failing_login, "me@example.com", "x"
-assert f1auth.token() is None and f1auth.token() is None
-assert calls == ["me@example.com"], calls  # signed in once, then backed off
-assert "wrong password" in f1auth.status["error"]
-f1auth.status.update(error=None, failed_at=0.0)
-f1auth.CACHE, f1auth.login, f1auth.USERNAME, f1auth.PASSWORD = saved[:4]
-if saved[4] is not None:
-    os.environ["F1_TOKEN"] = saved[4]
+good = _jwt(exp=_time.time() + 3600, SubscribedProduct="F1 TV Pro")
+assert f1auth.valid(good) == good
+assert f1auth.valid(_jwt(exp=_time.time() + 60)) is None  # about to expire
+assert f1auth.valid("not a jwt") is None and f1auth.valid(None) is None
+assert f1auth.claims(good)["SubscribedProduct"] == "F1 TV Pro"
+print("ok")
 
 # find_session matches the meeting by the race date, then the session by name, from the cached season list
 import replay

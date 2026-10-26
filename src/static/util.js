@@ -16,6 +16,11 @@ export async function get(url) {
   return cache.get(url);
 }
 
+// the F1 TV token the Connect bookmarklet brought back (f1auth.py): kept for this tab only, sent with each request
+export function tvHeaders() {
+  try { const t = sessionStorage.getItem('f1tv'); return t ? {'X-F1-Token': t} : {}; } catch (e) { return {}; }
+}
+
 // {columns, data} table -> array of row objects
 export const rows = t => t.data.map(r => Object.fromEntries(t.columns.map((c, i) => [c, r[i]])));
 

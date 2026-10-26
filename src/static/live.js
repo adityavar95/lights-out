@@ -2,6 +2,8 @@
 // Signed in to F1 TV (f1auth.py), the feed carries car GPS and telemetry; without it, each car's place on track
 // comes from its completed mini-sectors.
 
+import {tvHeaders} from './util.js';
+
 const TRACK = {'1': 'GREEN', '2': 'YELLOW', '4': 'SC', '5': 'RED', '6': 'VSC', '7': 'VSC ENDING'};
 const progress = {};  // driver -> {d: laps done (fractional) as drawn, at: ms}
 
@@ -12,7 +14,7 @@ const lapSeconds = s => {
 };
 
 export async function fetchLive() {
-  const res = await fetch('/api/live');
+  const res = await fetch('/api/live', {headers: tvHeaders()});  // a connected F1 TV account unlocks car GPS
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(body.detail || `${res.status} ${res.statusText}`);
   return body;

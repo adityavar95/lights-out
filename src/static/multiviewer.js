@@ -1,10 +1,10 @@
 // F1 TV multiviewer, the way MultiViewer does it: a video's channels (international feed, F1 LIVE, tracker, data, every
 // driver onboard) side by side, played in the browser by shaka-player (with its open-source UI) from the signed DASH
-// manifests /api/f1tv/play returns (the subscription token stays on the server). It opens on one stream; ＋ adds any
+// manifests /api/f1tv/play returns (with your own F1 TV token: Connect, below). It opens on one stream; ＋ adds any
 // feed or driver, as many as you like. The selected tile has the sound and is what Sync lines the others up with.
 // Each tile picks its video quality and audio track from every rendition in the stream, and can carry a see-through
 // telemetry overlay (speed, gear, RPM, throttle, brake, DRS) from OpenF1 car data (2023+ sessions).
-import {get, el} from './util.js';
+import {get, el, tvHeaders} from './util.js';
 import {controls} from './tvcontrols.js';
 
 const SHAKA = 'https://cdn.jsdelivr.net/npm/shaka-player@4.12.6/dist/';
@@ -70,8 +70,15 @@ export function loadShaka() {
   });
 }
 
+function showAccount() {
+  json('/api/f1tv/account').then(a => {
+    M.account.className = `mvaccount${a.linked ? ' on' : ''}`;
+    M.account.textContent = a.linked ? `● ${a.product || 'F1 TV'} connected` : `${a.error || 'Not connected'} · Connect F1 TV`;
+  }).catch(() => {});
+}
+
 async function json(url) {  // not util.get: play urls are signed per play and expire, so never cached
-  const res = await fetch(url), body = await res.json().catch(() => ({}));
+  const res = await fetch(url, {headers: tvHeaders()}), body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(typeof body.detail === 'string' ? body.detail : `${res.status} ${res.statusText}`);
   return body;
 }
@@ -87,7 +94,20 @@ function setup() {
     el('span', {}, 'Data'), [-10, -1, 1, 10].map(d => el('button', {title: `Data ${Math.abs(d)} s ${d < 0 ? 'earlier' : 'later'}`,
       onclick: () => setOffset(M.offset + d)}, `${d > 0 ? '+' : '−'}${Math.abs(d)}s`)), M.syncOut, M.lights);
   M.grid = el('div', {class: 'mvgrid'});
-  M.account = el('span', {class: 'mvaccount'});
+  M.account = el('button', {class: 'mvaccount', popovertarget: 'mvconnect'});
+  // MultiViewer's sign-in for a web page: F1's site keeps the subscription token in its login-session cookie
+  // (.formula1.com, readable by scripts there), so a bookmarklet clicked on formula1.com brings it back in our URL fragment
+  const back = JSON.stringify(`${location.origin}${location.pathname}#f1tv=`);
+  const mark = `javascript:(()=>{const m=document.cookie.match(/login-session=([^;]+)/),t=m&&JSON.parse(decodeURIComponent(m[1])).data?.subscriptionToken;if(t)location.href=${back}+t;else alert('Sign in on formula1.com with an F1 TV subscription first, then click this bookmark again.')})()`;
+  const stash = () => { try { sessionStorage.setItem('f1tv-back', location.hash); } catch (e) {} };
+  M.connect = el('div', {class: 'mvconnect', popover: '', id: 'mvconnect', 'aria-label': 'Connect F1 TV'},
+    el('h3', {}, 'Connect F1 TV'),
+    el('p', {}, "Sign in on F1's own site, like MultiViewer: your password never reaches this app, nothing is saved on the server, and the connection lasts until you close this tab."),
+    el('ol', {},
+      el('li', {}, 'Drag this to your bookmarks bar: ', el('a', {class: 'mvmark', href: mark, onclick: e => e.preventDefault()}, 'F1 TV → this app')),
+      el('li', {}, el('a', {href: 'https://account.formula1.com/#/en/login', onclick: stash}, 'Sign in at formula1.com'), " (skip if you're signed in there)."),
+      el('li', {}, 'On formula1.com, click the bookmark: it brings you back here, connected.')),
+    el('button', {class: 'mvbtn', onclick: () => { try { sessionStorage.removeItem('f1tv'); } catch (e) {} showAccount(); }}, 'Disconnect'));
   M.title = el('h2', {});
   M.picker = el('div', {class: 'mvpicker', popover: '', id: 'mvpicker', 'aria-label': 'Add a stream'});
   M.addBtn = el('button', {class: 'mvbtn mvadd', popovertarget: 'mvpicker', title: 'Add a stream: any feed or driver onboard'}, '＋ Add stream');
@@ -115,7 +135,7 @@ function setup() {
   }},
     el('header', {class: 'mvhead'}, M.title, M.account, M.addBtn, M.playBtn, M.syncBtn, M.uhdBtn, M.datasync,
       el('button', {class: 'mvbtn', 'aria-label': 'Close', onclick: () => M.dlg.close()}, '✕')),
-    M.grid, M.picker);
+    M.grid, M.picker, M.connect);
   document.body.append(M.dlg);
   M.dlg.addEventListener('pointerdown', e => {  // an open ⚙ menu closes on a click anywhere else
     for (const d of M.dlg.querySelectorAll('.mvset[open]')) if (!d.contains(e.target)) d.open = false;
@@ -164,10 +184,7 @@ export async function openViewer(video) {
   dispatchEvent(new CustomEvent('f1:panel', {detail: M.dlg}));  // the circuits / cars / trace panels close (and stop drawing)
   M.raf ||= requestAnimationFrame(drawTelemetry);
   M.grid.replaceChildren(el('div', {class: 'loading'}, el('div', {class: 'spinner'}), 'Loading channels…'));
-  json('/api/f1tv/account').then(a => {
-    M.account.className = `mvaccount${a.linked ? ' on' : ''}`;
-    M.account.textContent = a.linked ? `● ${a.product || 'F1 TV'} linked` : `Not linked: ${a.error || 'add your F1 account to .cache/f1_account.json'}`;
-  }).catch(() => {});
+  showAccount();
   const first = json(playUrl(''));  // the main feed's play request goes out with the channel list, not after it
   first.catch(() => {});
   try {

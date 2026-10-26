@@ -22,7 +22,7 @@ A Formula 1 web app built on [livef1](https://pypi.org/project/livef1/) 1.2.11. 
 **Live sessions (free)**
 - **● LIVE** in the header (or **Latest session** between sessions) opens the current session in the same 3D view
 - Live timing tower (positions, gaps / best laps, tyres, pit), track status, race control, weather and session clock, refreshed every second
-- With an F1 TV subscription (`USERNAME` / `PASSWORD` in `src/f1auth.py`, or `F1_USERNAME` / `F1_PASSWORD`), cars move on real live GPS and the focused car shows its real speed, rpm, gear, throttle and brake ("· car GPS" in the status line). Without it, cars are placed from the mini-sectors they have completed and glide between them at their lap pace
+- With an F1 TV subscription connected (F1 TV viewer → Connect F1 TV: sign in on formula1.com, then click the bookmarklet there), cars move on real live GPS and the focused car shows its real speed, rpm, gear, throttle and brake ("· car GPS" in the status line). Without it, cars are placed from the mini-sectors they have completed and glide between them at their lap pace
 - Picking a session that is running right now opens it live (OpenF1 locks free access to all sessions while one is live)
 
 **Track maps**

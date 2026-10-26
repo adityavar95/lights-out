@@ -11,6 +11,7 @@ import {drsZones} from './telemetry.js';
 import {fetchCircuit, annotate, f1Coords} from './circuits.js';
 import {focusFrame} from './focus.js';
 import {pitTrace} from './strategy.js';
+import {lanes, GRID} from './lanes.js';
 
 const SPEEDS = [0.5, 1, 2, 5, 10, 20, 50, 100];
 
@@ -308,7 +309,7 @@ function drawTrack(xs, ys, rotation, corners, startKnown, mpu) {
 }
 
 function pointAt(frac) {
-  const {pts, cum} = S.proj, target = (frac % 1) * cum.at(-1);
+  const {pts, cum} = S.proj, target = (((frac % 1) + 1) % 1) * cum.at(-1);  // before the line (grid slots) wraps to the lap's end
   let lo = 0, hi = cum.length - 1;
   while (lo < hi - 1) { const m = (lo + hi) >> 1; if (cum[m] <= target) lo = m; else hi = m; }
   const p = pts[lo], q = pts[(lo + 1) % pts.length], f = (target - cum[lo]) / ((cum[lo + 1] - cum[lo]) || 1);
@@ -327,6 +328,13 @@ function prepare(data) {
   S.data = data;
   S.drivers = data.drivers.map(d => ({...d, color: d.color || teamColor(d.teamId, d.team)}));
   S.byId = Object.fromEntries(S.drivers.map(d => [d.id, d]));
+  [...S.drivers].sort((a, b) => (a.grid || 99) - (b.grid || 99)).forEach((d, i) => d.rank = i);  // grid slot; 0 = pit-lane start
+  if (data.mode === 'laps') {  // a steady pace per driver (median lap time) says who passes whom, whatever this lap's time was
+    for (const d of S.drivers) {
+      const c = data.cum[d.id], laps = c.map((x, i) => x - (c[i - 1] ?? 0)).sort((a, b) => a - b);
+      d.pace = laps[laps.length >> 1];
+    }
+  }
   if (data.mode === 'gps') {
     const group = (feed, f) => {
       const m = {};
@@ -418,9 +426,31 @@ function lapPos(id, t) {
   return pointAt((t - start) / (c[k] - start));
 }
 
+// Laps mode: every running car's map position at t, in its lane. Lap 1 starts from the car's grid slot behind the line;
+// lanes() fans the grid out into two columns and moves the faster car of a close pair aside to pass.
+function lapCars(t) {
+  const {cum, mpu} = S.proj, len = cum.at(-1) * mpu, runs = [];
+  for (const d of S.drivers) {
+    const c = S.data.cum[d.id];
+    let k = 0;
+    while (k < c.length && c[k] <= t) k++;
+    if (k >= c.length) continue;
+    const start = k ? c[k - 1] : 0, frac = (t - start) / (c[k] - start), back = k ? 0 : GRID.front + GRID.row * d.rank;
+    const run = frac * (len + back);
+    runs.push({id: d.id, s: run - back, v: len / d.pace, rank: k ? undefined : d.rank, run: k ? undefined : run});
+  }
+  const lat = lanes(runs, len, (S.track?.width ?? 13) / 2), cars = {};
+  for (const r of runs) {
+    const p = pointAt(r.s / len), q = pointAt((r.s + 2) / len), n = Math.hypot(q[0] - p[0], q[1] - p[1]) || 1, m = lat[r.id] / mpu / n;
+    cars[r.id] = [p[0] + (q[1] - p[1]) * m, p[1] - (q[0] - p[0]) * m];  // the left normal of the direction of travel
+  }
+  return cars;
+}
+
 // car positions only (no timing board), for the heading half a second ahead
 function carsAt(t) {
-  const cars = {}, pos = S.data.mode === 'gps' ? gpsPos : lapPos;
+  if (S.data.mode === 'laps') return lapCars(t);
+  const cars = {}, pos = gpsPos;
   for (const d of S.drivers) { const p = pos(d.id, t); if (p) cars[d.id] = p; }
   return cars;
 }
@@ -449,14 +479,14 @@ function gpsState(t) {
 }
 
 function lapsState(t) {
-  const cars = {}, board = [];
+  const cars = lapCars(t), board = [];
   for (const d of S.drivers) {
     const c = S.data.cum[d.id];
     let k = 0;
     while (k < c.length && c[k] <= t) k++;
     const done = k >= c.length, finished = done && (d.status === 'Finished' || /^\+\d+ Laps?$/.test(d.status) || d.status === 'Lapped');
     const lapStart = k ? c[k - 1] : 0, frac = done ? 0 : (t - lapStart) / (c[k] - lapStart);
-    if (!done || finished) cars[d.id] = pointAt(frac);
+    if (finished) cars[d.id] = pointAt(0);
     const pits = S.data.pits[d.id] || [], lastPit = Math.max(0, ...pits.filter(p => p <= k));
     board.push({d, k, p: k + frac, last: k ? c[k - 1] : 0, out: done && !finished, finished, age: k + 1 - lastPit,
                 pit: !done && pits.includes(k + 1) && frac > 0.9});

@@ -185,6 +185,12 @@ async function init() {
   setTheme(stored('f1theme') ?? 'auto');
   $('themebtn').onclick = () => setTheme(THEMES[(THEMES.findIndex(x => x[0] === document.documentElement.dataset.theme) + 1) % THEMES.length][0]);
   document.addEventListener('click', e => { const th = e.target.closest('table.data th'); if (th) sortTable(th); });
+  if (location.hash.startsWith('#f1tv=')) {  // back from formula1.com through the F1 TV Connect bookmarklet (multiviewer.js)
+    try {
+      sessionStorage.setItem('f1tv', location.hash.slice(6));
+      history.replaceState(null, '', sessionStorage.getItem('f1tv-back') || location.pathname);
+    } catch (e) {}
+  }
   const [hashYear, hashRound, hashTab] = location.hash.slice(1).split('/');
   if (TABS[hashTab] || hashTab === 'replay') active = hashTab;
   $('calendar').addEventListener('toggle', e => {  // the race list opens under its button, at the race shown
