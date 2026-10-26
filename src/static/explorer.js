@@ -38,7 +38,14 @@ async function show(url, btn) {
       const q = filter.value.toLowerCase();
       for (const tr of table.tBodies[0]?.rows || []) tr.hidden = q && !tr.textContent.toLowerCase().includes(q);
     }});
-    status.replaceChildren(el('span', {}, `${t.total} rows${t.total > t.data.length ? `, showing first ${t.data.length}` : ''}`), filter);
+    const csv = el('button', {class: 'pill', title: 'Download these rows as CSV', onclick: () => {
+      const q = v => `"${cell(v).replaceAll('"', '""')}"`;
+      const a = el('a', {href: URL.createObjectURL(new Blob([[t.columns, ...t.data].map(r => r.map(q).join(',')).join('\n')], {type: 'text/csv'})),
+        download: `${url.split('?')[0].slice(5).replaceAll('/', '_')}.csv`});
+      a.click();
+      URL.revokeObjectURL(a.href);
+    }}, '⤓ CSV');
+    status.replaceChildren(el('span', {}, `${t.total} rows${t.total > t.data.length ? `, showing first ${t.data.length}` : ''}`), filter, csv);
   } catch (e) {
     status.className = 'xstatus err';
     status.textContent = e.message;

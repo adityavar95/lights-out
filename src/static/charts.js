@@ -137,14 +137,15 @@ export function renderStandings(root, drivers, constructors) {
   if (!drivers.length) return root.replaceChildren(empty('No standings yet.'));
   const bars = (title, rows, label, teamOf) => {
     const max = Math.max(...rows.map(r => +r.points), 1);
-    return el('div', {class: 'card'}, el('h3', {}, title), el('ol', {class: 'bars'}, rows.map(r => {
+    return el('div', {class: 'card'}, el('h3', {}, title), el('ol', {class: 'bars'}, rows.map((r, i) => {
       const [tid, tname] = teamOf(r);
       return el('li', {onmousemove: e => tip(e, el('b', {}, label(r)), el('br'), `${r.points} pts · ${r.wins} win${r.wins === '1' ? '' : 's'}`),
                        onmouseleave: () => tip(null)},
         el('span', {class: 'num pos'}, r.position),
         el('span', {class: 'who'}, chip(teamColor(tid, tname)), label(r)),
         el('span', {class: 'track'}, el('span', {class: 'fill', style: `width:${+r.points / max * 100}%`})),
-        el('span', {class: 'num pts'}, r.points));
+        el('span', {class: 'num pts'}, r.points),
+        el('span', {class: 'num gap', title: 'Points behind the leader'}, i ? `−${+(max - +r.points).toFixed(1)}` : ''));
     })));
   };
   root.replaceChildren(el('div', {class: 'twocol'},

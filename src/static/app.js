@@ -35,6 +35,8 @@ const TABS = {
   },
 };
 let active = 'replay', drawn = {};
+// the address keeps the race and tab (#2026/18/results), so a reload or a shared link lands on the same view
+const syncHash = () => A.round && history.replaceState(null, '', `#${A.year}/${A.round}/${active}`);
 
 function activate(name) {
   const swap = () => {
@@ -51,7 +53,41 @@ function activate(name) {
     document.startViewTransition(swap).ready.catch(() => {});
   else swap();
   active = name;
+  syncHash();
   drawTab(name);
+}
+
+const THEMES = [['auto', '◐', 'Theme: follows the system'], ['light', '☀', 'Theme: light'], ['dark', '☾', 'Theme: dark']];
+function setTheme(t) {
+  document.documentElement.dataset.theme = t;  // 'auto' matches neither CSS scheme selector, so the system decides
+  const [, icon, title] = THEMES.find(x => x[0] === t) ?? THEMES[0];
+  Object.assign($('themebtn'), {textContent: icon, title});
+  $('themebtn').setAttribute('aria-label', title);
+  try { localStorage.setItem('f1theme', t); } catch (e) { /* storage blocked: not remembered */ }
+}
+
+// an upcoming race: time to lights out in the hero's podium slot, refreshed every half minute until the race starts
+function countdown(r) {
+  const at = new Date(`${r.date}T${r.time || '00:00:00Z'}`), box = el('div', {class: 'countdown'});
+  const tick = () => {
+    const s = (at - Date.now()) / 1000;
+    if (s <= 0 || String(A.round) !== r.round) { clearInterval(timer); return box.replaceChildren(el('span', {class: 'muted'}, s <= 0 ? 'Race under way' : '')); }
+    const d = Math.floor(s / 86400), h = Math.floor(s / 3600) % 24, m = Math.floor(s / 60) % 60;
+    box.replaceChildren(el('small', {class: 'muted'}, 'LIGHTS OUT IN'), el('b', {}, `${d ? `${d}d ` : ''}${h}h ${String(m).padStart(2, '0')}m`));
+  };
+  const timer = setInterval(tick, 30000);
+  tick();
+  return box;
+}
+
+// any data table sorts by a clicked header: numbers and lap times compare numerically, text alphabetically
+function sortTable(th) {
+  const table = th.closest('table'), body = table.tBodies[0], i = th.cellIndex;
+  const dir = th.getAttribute('aria-sort') === 'ascending' ? -1 : 1;
+  for (const h of table.tHead.rows[0].cells) h.removeAttribute('aria-sort');
+  th.setAttribute('aria-sort', dir > 0 ? 'ascending' : 'descending');
+  const key = tr => tr.cells[i]?.textContent.trim() ?? '';
+  body.append(...[...body.rows].sort((a, b) => dir * key(a).localeCompare(key(b), undefined, {numeric: true})));
 }
 
 async function drawTab(name) {
@@ -97,6 +133,7 @@ async function loadSeason(year, round = null, sim = A.mode === 'sim') {
     el('span', {class: 'rc-name'}, el('b', {}, r['Circuit.Location.country']), el('small', {}, `${r.raceName} · ${fmtDate(r.date)}`)),
     r === next ? el('span', {class: 'next'}, 'NEXT') : null)));
   const last = A.races.filter(r => r.date <= today).at(-1) ?? A.races[0];
+  if (!A.races.some(r => r.round === String(round))) round = null;  // e.g. a stale link
   if (round ?? last) selectRace(round ?? last.round, sim);
 }
 
@@ -119,7 +156,7 @@ async function selectRace(round, sim = A.mode === 'sim') {
     podium.replaceChildren(...(res.length ? res.slice(0, 3).map(x =>
       el('div', {class: `pp p${x.position}`}, el('span', {class: 'pnum'}, `P${x.position}`),
         el('span', {class: 'chip', style: `background:${teamColor(x['Constructor.constructorId'], x['Constructor.name'])}`}),
-        el('b', {}, x['Driver.code'] || x['Driver.familyName']))) : [el('span', {class: 'muted'}, r.date > today ? 'Upcoming race' : 'No results yet')]));
+        el('b', {}, x['Driver.code'] || x['Driver.familyName']))) : [r.date >= today ? countdown(r) : el('span', {class: 'muted'}, 'No results yet')]));
   }).catch(() => {});
 
   $('racebtn').replaceChildren(el('span', {class: 'rnd'}, ordinal(+r.round)), flag(r['Circuit.Location.country'], 40),
@@ -143,7 +180,13 @@ async function init() {
   get(`/api/jolpica/${today.slice(0, 4)}/races`).catch(() => {});
   setupReplay($('tab-replay'));
   setupExplorer($('tab-explorer'), () => ({year: A.year, round: A.round}));
-  setMode((() => { try { return localStorage.getItem('f1mode'); } catch (e) { return null; } })() === 'sim' ? 'sim' : 'watch', false);
+  const stored = k => { try { return localStorage.getItem(k); } catch (e) { return null; } };
+  setMode(stored('f1mode') === 'sim' ? 'sim' : 'watch', false);
+  setTheme(stored('f1theme') ?? 'auto');
+  $('themebtn').onclick = () => setTheme(THEMES[(THEMES.findIndex(x => x[0] === document.documentElement.dataset.theme) + 1) % THEMES.length][0]);
+  document.addEventListener('click', e => { const th = e.target.closest('table.data th'); if (th) sortTable(th); });
+  const [hashYear, hashRound, hashTab] = location.hash.slice(1).split('/');
+  if (TABS[hashTab] || hashTab === 'replay') active = hashTab;
   $('calendar').addEventListener('toggle', e => {  // the race list opens under its button, at the race shown
     if (e.newState !== 'open') return;
     const r = $('racebtn').getBoundingClientRect();
@@ -193,9 +236,9 @@ async function init() {
   const years = (await seasons).slice().reverse();
   const sel = $('year');
   sel.replaceChildren(...years.map(y => new Option(y, y)));
-  sel.value = years.includes(today.slice(0, 4)) ? today.slice(0, 4) : years[0];
+  sel.value = years.includes(hashYear) ? hashYear : years.includes(today.slice(0, 4)) ? today.slice(0, 4) : years[0];
   sel.onchange = () => loadSeason(+sel.value);
-  loadSeason(+sel.value);
+  loadSeason(+sel.value, sel.value === hashYear ? hashRound || null : null);
 }
 
 // header button: red while a session is running, otherwise it opens the most recent session's final state
