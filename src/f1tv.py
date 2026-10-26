@@ -65,7 +65,8 @@ def channels(content_id: int) -> dict:
     r = requests.get(f"{API}/CONTENT/VIDEO/{content_id}/F1_TV_Pro_Annual/2", headers={"User-Agent": UA}, timeout=(5, 20))
     r.raise_for_status()
     m = r.json()["resultObj"]["containers"][0]["metadata"]
-    streams = [{"channelId": s.get("channelId"), "title": s.get("title"), "type": s.get("type"), "number": s.get("racingNumber") or None,
+    # INTERNATIONAL is the content's own feed: by its channelId, 2024 and older races answer "No Data Found in DB"
+    streams = [{"channelId": None if s.get("title") == "INTERNATIONAL" else s.get("channelId"), "title": s.get("title"), "type": s.get("type"), "number": s.get("racingNumber") or None,
                 "driver": " ".join(filter(None, (s.get("driverFirstName"), s.get("driverLastName")))) or None,
                 "team": s.get("teamName") or None, "hex": s.get("hex")} for s in m.get("additionalStreams") or []]
     out = {"id": content_id, "title": m.get("title"), "streams": streams or [{"channelId": None, "title": "MAIN", "type": "main"}]}
@@ -82,6 +83,8 @@ def play(content_id: int, channel_id: int | None, subscription_token: str, uhd: 
     r = requests.get(f"{API}/CONTENT/PLAY", params=params, headers=headers, timeout=(5, 20))
     body = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
     o = body.get("resultObj") or {}
+    if uhd and not r.ok:  # no 4K rights (every video before 2025): the same video in HD
+        return play(content_id, channel_id, subscription_token)
     if not r.ok or not o.get("url"):
         raise F1TVError(body.get("message") or f"F1 TV play request failed ({r.status_code})")
     return {k: o.get(k) for k in ("url", "streamType", "laURL", "entitlementToken")}

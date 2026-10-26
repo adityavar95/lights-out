@@ -171,4 +171,23 @@ v = f1tv.videos(2012, "Malaysian Grand Prix")
 assert [x["id"] for x in v] == [1, 2] and v[0]["url"] == "https://f1tv.formula1.com/detail/1", v
 assert calls[-1] == {"filter_season": 2012, "filter_Meeting_Name": "Malaysia Grand Prix"}, calls
 f1tv._search = _search
+
+# a 2024 race: INTERNATIONAL by channelId has no stream, 4K has no rights; both play as the content's own feed in HD
+class Res:
+    def __init__(self, ok, body): self.ok, self.status_code, self.headers, self.body = ok, 200 if ok else 403, {"content-type": "application/json"}, body
+    def json(self): return self.body
+    def raise_for_status(self): pass
+def fake_get(url, params=None, headers=None, timeout=None):
+    if "CONTENT/VIDEO" in url:
+        return Res(True, {"resultObj": {"containers": [{"metadata": {"title": "2024 Bahrain Grand Prix", "additionalStreams": [
+            {"channelId": 11, "title": "F1 LIVE"}, {"channelId": 12, "title": "INTERNATIONAL"}, {"channelId": 13, "title": "VER", "type": "obc"}]}}]}})
+    if "x-f1-override-video-stream" in headers or params.get("channelId") == 12:
+        return Res(False, {"message": "No Data Found"})
+    return Res(True, {"resultObj": {"url": f"https://cdn/{params.get('channelId', 'main')}.m3u8", "streamType": "HLS"}})
+_get, f1tv.requests.get = f1tv.requests.get, fake_get
+s = f1tv.channels(7781)["streams"]
+assert [x["channelId"] for x in s] == [11, None, 13], s
+assert f1tv.play(7781, None, "tok", uhd=True)["url"] == "https://cdn/main.m3u8"
+assert f1tv.play(7781, 13, "tok", uhd=True)["url"] == "https://cdn/13.m3u8"
+f1tv.requests.get = _get
 print("f1tv ok")
