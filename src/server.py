@@ -1,5 +1,6 @@
 """F1 data browser backend: livef1/Jolpica tables, track maps and race replay data."""
 import json
+import re
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime
@@ -16,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 
 import f1auth
 import f1tv
-from jolpica import JOLPICA, jolpica_fetch, races
+from jolpica import JOLPICA, driver_career, jolpica_fetch, races
 from replay import OpenF1Locked, ReplayUnavailable, elevation, find_session, pitlane, replay, season_session_rows, session_telemetry, telemetry
 import live
 from tracks import _geo_track, mv_track, track
@@ -84,6 +85,17 @@ def jolpica(year: int, kind: str, round: int | None = None):
     except Exception as e:
         raise HTTPException(502, f"Jolpica request failed: {e}")
     return table(pd.json_normalize(rows))
+
+
+@app.get("/api/driver/{driver_id}")
+def driver(driver_id: str):
+    """A driver's career: every race result and their final standing in each season (the Drivers tab)."""
+    if not re.fullmatch(r"[a-z0-9_]+", driver_id):
+        raise HTTPException(404, "Unknown driver")
+    try:
+        return raw_json(driver_career(driver_id))
+    except Exception as e:
+        raise HTTPException(502, f"Jolpica request failed: {e}")
 
 
 def race_info(year: int, round: int) -> dict:

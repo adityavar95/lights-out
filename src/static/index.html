@@ -18,6 +18,10 @@
 <body>
 <header class="topbar">
   <div class="brand"><span class="logo">F1</span><span class="title">Data Browser</span></div>
+  <div class="modeswitch sectionswitch" role="group" aria-label="Section">
+    <button data-section="analytics" aria-pressed="true" title="Replays, 3D simulation, results, strategy and data">Analytics</button>
+    <button data-section="stream" aria-pressed="false" title="F1 TV: browse and watch every session, live or replayed">Stream</button>
+  </div>
   <div class="modeswitch" role="group" aria-label="Mode">
     <button data-appmode="watch" aria-pressed="true" title="Real races: replays, results, standings and live timing">Watch</button>
     <button data-appmode="sim" aria-pressed="false" title="A physics race on any circuit, with any era's cars">Simulate</button>
@@ -31,7 +35,7 @@
   <button id="themebtn" class="themebtn" aria-label="Theme">◐</button>
 </header>
 <section id="hero" class="hero" aria-live="polite"></section>
-<nav id="tvlist" class="calendar tvlist" popover aria-label="F1 TV videos of this race"></nav>
+<section id="stream" class="stream" aria-label="F1 TV"><div id="sbill" class="sbill"></div><div id="srows"></div></section>
 <div class="tabs" role="tablist" aria-label="Race views">
   <button role="tab" data-tab="replay" aria-selected="true">Race replay</button>
   <button role="tab" data-tab="results" tabindex="-1">Results</button>
@@ -39,6 +43,7 @@
   <button role="tab" data-tab="lapchart" tabindex="-1">Lap chart</button>
   <button role="tab" data-tab="strategy" tabindex="-1">Strategy lab</button>
   <button role="tab" data-tab="standings" tabindex="-1">Standings</button>
+  <button role="tab" data-tab="drivers" tabindex="-1">Drivers</button>
   <button role="tab" data-tab="explorer" tabindex="-1">Data explorer</button>
 </div>
 <main>
@@ -48,6 +53,7 @@
   <section id="tab-lapchart" role="tabpanel" aria-label="Lap chart" hidden></section>
   <section id="tab-strategy" role="tabpanel" aria-label="Strategy lab" hidden></section>
   <section id="tab-standings" role="tabpanel" aria-label="Standings" hidden></section>
+  <section id="tab-drivers" role="tabpanel" aria-label="Drivers" hidden></section>
   <section id="tab-explorer" role="tabpanel" aria-label="Data explorer" hidden></section>
 </main>
 <footer class="foot">Data: livef1 · Jolpica · OpenF1 · MultiViewer track maps · imagery Esri, Maxar, Earthstar Geographics. Unofficial, not associated with Formula 1.</footer>

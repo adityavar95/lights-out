@@ -5,6 +5,7 @@ Playback stays on f1tv.formula1.com: its streams are DRM-protected and the site 
 A session's live stream and its replay are the same content id.
 """
 import time
+from datetime import date
 import unicodedata
 
 import requests
@@ -30,9 +31,10 @@ def _stem(name: str) -> str:
 
 
 def videos(year: int, race_name: str) -> list:
-    """The race weekend's F1 TV videos: {id, title, kind, tier, start, end (ms, 0 for archive content), url}."""
+    """The race weekend's F1 TV videos: {id, title, kind, tier, start, end (ms, 0 for archive content), url,
+    img (F1 TV's image resizer: add ?w=&h=), duration (s)}."""
     hit = _cache.get((year, race_name))
-    if hit and time.time() - hit[0] < TTL:
+    if hit and time.time() - hit[0] < (TTL if year >= date.today().year else 86400):  # a past season's catalogue is settled
         return hit[1]
     items = _search(filter_season=year, filter_Meeting_Name=race_name)
     if not items:  # F1 TV names the meeting differently: find its name in the season's catalogue
@@ -46,7 +48,8 @@ def videos(year: int, race_name: str) -> list:
             continue
         e = m.get("emfAttributes") or {}
         out.append({"id": m["contentId"], "title": m.get("title"), "kind": m.get("contentSubtype"), "tier": m.get("entitlement"),
-                    "start": e.get("sessionStartDate") or 0, "end": e.get("sessionEndDate") or 0, "url": SITE + href})
+                    "start": e.get("sessionStartDate") or 0, "end": e.get("sessionEndDate") or 0, "url": SITE + href,
+                    "img": m.get("pictureUrl") and f"{SITE}/image-resizer/image/{m['pictureUrl']}", "duration": m.get("duration") or 0})
     out.sort(key=lambda v: (v["kind"] != "REPLAY", v["start"] or float("inf"), v["title"] or ""))
     _cache[(year, race_name)] = (time.time(), out)
     return out

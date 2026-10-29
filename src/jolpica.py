@@ -1,5 +1,6 @@
 """Jolpica (Ergast successor) access through livef1's bundled client, flattened to one dict per row."""
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
 from functools import lru_cache
 from pathlib import Path
@@ -60,13 +61,31 @@ def jolpica_fetch(year: int, kind: str, round: int | None = None) -> list:
     q = (SETTLED if _settled(year, round) else jolpica_client).query().season(year)
     if round is not None:
         q = q.round(round)
+    return _pages(q, method, lambda d: jolpica_rows(d, path))
+
+
+def _pages(q, method: str, rows_of) -> list:
     rows, offset = [], 0
     while True:  # Jolpica caps pages at 100 rows (a race has ~1000 lap timings)
         res = getattr(q, method)(limit=100, offset=offset)
-        rows += jolpica_rows(res.data.to_dict(), path)
+        rows += rows_of(res.data.to_dict())
         offset += 100
         if offset >= int(res.pagination.total):
             return rows
+
+
+def driver_career(driver_id: str) -> dict:
+    """Every race result of one driver (each with its race's season, round, name and date) and their final standing in
+    each of those seasons. Jolpica only answers standings per season, so those are the seasons' own standings tables
+    (disk-cached once a season is over, and shared with the Drivers tab's season view)."""
+    active = any(d["driverId"] == driver_id for d in jolpica_fetch(date.today().year, "drivers"))
+    results = _pages((jolpica_client if active else SETTLED).query().driver(driver_id), "get_results",  # retired: it won't change
+                     lambda d: walk(d.get("Races", []), ["Results"]))
+    seasons = sorted({int(r["season"]) for r in results})
+    with ThreadPoolExecutor(4) as pool:  # Jolpica allows ~4 requests a second
+        tables = list(pool.map(lambda y: jolpica_fetch(y, "driverstandings"), seasons))
+    standings = [{**row, "season": str(y)} for y, rows in zip(seasons, tables) for row in rows if row["Driver"]["driverId"] == driver_id]
+    return {"results": results, "standings": standings}
 
 
 @lru_cache(maxsize=None)
