@@ -2,6 +2,7 @@
 // driver assists, AI pace and aggression, and the input status. Each frame it feeds the player's input into the
 // simulation and draws the racing-line ribbon.
 import {el, led} from './util.js';
+import {nextCamera} from './onboard.js';
 import {setRibbon} from './scene3d.js';
 import {enableInput, pollInput, input} from './input.js';
 import {trackWetness} from './weather.js';
@@ -84,10 +85,7 @@ export function updateDriverDeck(S) {
   if (inp.actions.has('drs')) R.input.drs = true;
   if (inp.actions.has('ers')) R.setErsMode(car.id, car.ers.user === 'PUSH' ? null : 'PUSH');
   if (inp.actions.has('pit')) R.box(car.id, car.pit.box ? null : pitCompound(R, car));
-  if (inp.actions.has('camera')) {  // next camera on the deck
-    const cams = [...document.querySelectorAll('.hud-deck [data-mode]')], i = cams.findIndex(b => b.getAttribute('aria-pressed') === 'true');
-    cams[(i + 1) % cams.length]?.click();
-  }
+  if (inp.actions.has('camera')) nextCamera();
   D.status.replaceChildren(
     el('span', {class: car.tcCut ? 'on' : ''}, 'TC'), el('span', {class: car.absOn ? 'on' : ''}, 'ABS'),
     el('span', {class: car.overRev > 0 ? 'warn' : ''}, car.overRev > 0 ? 'OVER-REV' : `G${car.gear}`),

@@ -1,7 +1,7 @@
 // Pit-wall telemetry trace: a glass modal over the stage comparing two laps (any two cars, or a car's live lap with
 // its previous / fastest lap or a saved reference lap, which survives switching to another era's simulation on the
 // same circuit) on five distance-aligned channels, with a scrubbing crosshair synced to a mini-map and the HUD radar,
-// sector zoom, race-engineer callouts and CSV / JSON export. Opens from the deck's TELEMETRY TRACE button, the key T,
+// sector zoom, race-engineer callouts and CSV / JSON export. Opens from TELEMETRY TRACE in the deck's ⋯ menu, the key T,
 // or a timing-tower row's compare icon (`f1:trace` event). Records from the physics simulation: every car, every
 // substep, through the race's onStep hook (trace.js does the resampling).
 import {el, svg, led} from './util.js';

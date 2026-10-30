@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="theme-color" content="#08080c" media="(prefers-color-scheme: dark)">
 <meta name="theme-color" content="#eef0f5" media="(prefers-color-scheme: light)">
-<title>F1 Data Browser</title>
+<title>Lights Out</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <!-- three.js, the video player and F1 TV's video CDN: connections open before the first request needs them -->
@@ -17,44 +17,41 @@
 </head>
 <body>
 <header class="topbar">
-  <div class="brand"><span class="logo">F1</span><span class="title">Data Browser</span></div>
-  <div class="modeswitch sectionswitch" role="group" aria-label="Section">
-    <button data-section="analytics" aria-pressed="true" title="Replays, 3D simulation, results, strategy and data">Analytics</button>
-    <button data-section="stream" aria-pressed="false" title="F1 TV: browse and watch every session, live or replayed">Stream</button>
+  <div class="brand"><span class="logo" title="Lights Out">LO</span><span class="title">Lights Out</span></div>
+  <div class="modeswitch viewswitch" role="group" aria-label="View">
+    <button data-view="analytics" aria-pressed="true" title="Real races: 3D replays, results, strategy, drivers and data">Analytics</button>
+    <button data-view="sim" aria-pressed="false" title="A physics race on any circuit, with any era's cars">Simulate</button>
+    <button data-view="stream" aria-pressed="false" title="F1 TV: browse and watch every session, live or replayed">Stream</button>
   </div>
-  <div class="modeswitch" role="group" aria-label="Mode">
-    <button data-appmode="watch" aria-pressed="true" title="Real races: replays, results, standings and live timing">Watch</button>
-    <button data-appmode="sim" aria-pressed="false" title="A physics race on any circuit, with any era's cars">Simulate</button>
-  </div>
-  <label class="season">Season <select id="year" aria-label="Season"></select></label>
+  <label class="season"><select id="year" aria-label="Season"></select></label>
   <div class="racepick">
     <button id="racebtn" class="racebtn" popovertarget="calendar" aria-haspopup="true" aria-label="Choose a race">Races ▾</button>
     <nav id="calendar" class="calendar" popover aria-label="Race calendar"></nav>
   </div>
+  <button id="nextbtn" class="nextbtn" hidden></button>
   <button id="livebtn" class="livebtn" hidden>● LIVE</button>
   <button id="themebtn" class="themebtn" aria-label="Theme">◐</button>
 </header>
 <section id="hero" class="hero" aria-live="polite"></section>
+<section id="intro" class="introcard" aria-label="Welcome"></section>
 <section id="stream" class="stream" aria-label="F1 TV"><div id="sbill" class="sbill"></div><div id="srows"></div></section>
 <div class="tabs" role="tablist" aria-label="Race views">
   <button role="tab" data-tab="replay" aria-selected="true">Race replay</button>
-  <button role="tab" data-tab="results" tabindex="-1">Results</button>
-  <button role="tab" data-tab="qualifying" tabindex="-1">Qualifying</button>
-  <button role="tab" data-tab="lapchart" tabindex="-1">Lap chart</button>
   <button role="tab" data-tab="strategy" tabindex="-1">Strategy lab</button>
-  <button role="tab" data-tab="standings" tabindex="-1">Standings</button>
   <button role="tab" data-tab="drivers" tabindex="-1">Drivers</button>
-  <button role="tab" data-tab="explorer" tabindex="-1">Data explorer</button>
+  <button role="tab" data-tab="results" tabindex="-1">Results</button>
+  <button role="tab" data-tab="lapchart" tabindex="-1">Lap chart</button>
+  <button role="tab" data-tab="standings" tabindex="-1">Standings</button>
+  <button role="tab" data-tab="explorer" tabindex="-1" class="rawtab" title="Every Jolpica, OpenF1 and live timing table, raw">Raw data</button>
 </div>
 <main>
   <section id="tab-replay" role="tabpanel" aria-label="Race replay"></section>
   <section id="tab-results" role="tabpanel" aria-label="Results" hidden></section>
-  <section id="tab-qualifying" role="tabpanel" aria-label="Qualifying" hidden></section>
   <section id="tab-lapchart" role="tabpanel" aria-label="Lap chart" hidden></section>
   <section id="tab-strategy" role="tabpanel" aria-label="Strategy lab" hidden></section>
   <section id="tab-standings" role="tabpanel" aria-label="Standings" hidden></section>
   <section id="tab-drivers" role="tabpanel" aria-label="Drivers" hidden></section>
-  <section id="tab-explorer" role="tabpanel" aria-label="Data explorer" hidden></section>
+  <section id="tab-explorer" role="tabpanel" aria-label="Raw data" hidden></section>
 </main>
 <footer class="foot">Data: livef1 · Jolpica · OpenF1 · MultiViewer track maps · imagery Esri, Maxar, Earthstar Geographics. Unofficial, not associated with Formula 1.</footer>
 <script type="importmap">

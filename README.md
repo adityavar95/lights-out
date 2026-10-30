@@ -1,4 +1,4 @@
-# 🏎️ F1 Data Browser
+# 🏎️ Lights Out
 
 ![Python](https://img.shields.io/badge/python-3.14+-blue)
 ![livef1](https://img.shields.io/badge/livef1-1.2.11-e10600)

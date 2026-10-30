@@ -1,7 +1,7 @@
 // Race replay: the 3D stage with the broadcast HUD round it (timing tower, telemetry, radar, control deck).
-import {get, el, teamColor, fmtClock, fmtLap, lastBefore, trackStatus, led, covered} from './util.js';
+import {get, el, teamColor, fmtClock, fmtLap, lastBefore, trackStatus, led, covered, dropUp, count} from './util.js';
 import {init3d, setTrack, setCars, updateCars, setView, setParts, setTyre, setGround, setPitLane} from './scene3d.js';
-import {setupOnboard, setCameraUi, setWheelAngle} from './onboard.js';
+import {setupOnboard, setCameraUi, setWheelAngle, nextCamera} from './onboard.js';
 import {fetchLive, liveInfo, liveDrivers, liveFeeds, liveStatus, liveClock, liveState, liveGps, hasGps, gpsAt, liveCar, resetGps} from './live.js';
 import {setupHud, setRadar, renderRadar, renderFocus, renderFeed, STATUS} from './hud.js';
 import {SIM, simSession, simState, realPitLane} from './simmode.js';
@@ -51,6 +51,7 @@ export function setupReplay(root) {
     if (!S || !S.data || ['INPUT', 'SELECT', 'BUTTON'].includes(e.target.tagName) || !root.offsetParent) return;
     if (e.code === 'Space') { e.preventDefault(); togglePlay(); }
     const step = {Minus: -1, NumpadSubtract: -1, Equal: 1, NumpadAdd: 1}[e.code];  // - / + : slower / faster
+    if (e.code === 'KeyC' && ui.has3d && S.data) nextCamera();  // while driving, input.js takes C first (driverdeck.js)
     if (step && !S.sim?.player) setSpeed(SPEEDS[Math.min(SPEEDS.length - 1, Math.max(0, SPEEDS.indexOf(ui.speed) + step))]);
     if ((e.code === 'ArrowRight' || e.code === 'ArrowLeft') && !S.sim) {  // a simulation can't be rewound
       S.t = Math.min(S.data.duration, Math.max(0, S.t + (e.code === 'ArrowRight' ? 10 : -10) * Math.max(1, S.speed / 5)));
@@ -77,11 +78,30 @@ export function setupReplay(root) {
     onErsMode: m => S?.sim?.setErsMode(S.selected, m), onDrsTest: () => S?.sim?.toggleDrsTest(S.selected)});
   hud.top.append(ui.flag, ui.lap, ui.mode, ui.weather);
   hud.left.append(el('div', {class: 'towerhead'}, el('span', {}, 'TIMING'), ui.colBtn), el('div', {class: 'towerscroll'}, ui.tower));
+  // the deck itself: session, play, speed, position, camera. Cinematic, sound and the telemetry trace sit in the ⋯ menu
+  const moreBtn = el('button', {class: 'neu', popovertarget: 'moremenu', 'aria-haspopup': 'true', 'aria-expanded': false,
+    title: 'More: cinematic view, sound, telemetry trace', 'aria-label': 'More controls'}, '⋯');
+  hud.more = el('div', {class: 'deckmenu', id: 'moremenu', popover: 'auto', 'aria-label': 'More controls'}, el('div', {class: 'deckgroup'}, ui.view));
+  hud.more.addEventListener('click', e => e.target.closest('[aria-controls=tracedeck]') && hud.more.hidePopover());  // the trace panel takes over
+  dropUp(moreBtn, hud.more);
   hud.deck.append(
     el('div', {class: 'deckgroup'}, ui.session, ui.play, ui.speeds),
     el('div', {class: 'deckgroup grow'}, ui.scrub, ui.clock),
-    el('div', {class: 'deckgroup'}, cams?.modes, cams?.parts, ui.view));
+    cams ?? '', el('div', {class: 'deckgroup'}, moreBtn, hud.more));  // no WebGL: no cameras
   setupDecks(ui.stage, hud, () => S, {togglePlay});  // pit wall, driver deck (under the tower), audio mixer, telemetry trace
+}
+
+// the first visit's opening shot: lights out at real speed, the camera chasing the leader, side panels out of the way
+export async function intro() {
+  const token = S.token;
+  setSpeed(1);
+  ui.stage.classList.add('cinematic');
+  ui.view.setAttribute('aria-pressed', true);
+  await loadData(false);
+  if (token !== S.token || !S.data) return;
+  S.t = Math.max(0, lightsOut(S.data) - 6);  // a few seconds on the grid, then lights out
+  setMode('chase');
+  if (!S.playing) togglePlay();
 }
 
 // the speed-trap column only exists in live timing (F1's TimingStats); replays skip it
@@ -102,6 +122,12 @@ function setSpeed(s) {
   ui.speeds.value = s;
 }
 
+// What a run race can replay, as replay.py decides: every car's GPS position (OpenF1, 2023 on), positions from lap
+// times (Jolpica's laps, races from 1996), or nothing but results before that. null: not run yet.
+export const REPLAY_KINDS = {gps: ['3D GPS', "Every car's real position on track"], laps: ['Lap replay', 'Positions worked out from lap times'],
+  results: ['Results only', 'No lap timing before 1996: results, standings and drivers']};
+export const replayKind = (year, date) => date > new Date().toISOString().slice(0, 10) ? null : year >= 2023 ? 'gps' : year >= 1996 ? 'laps' : 'results';
+
 // sim: Simulate mode, a physics race on this circuit (the session list is then just that, and hidden)
 export async function showRace(year, round, sessions, sim = false) {
   reset({year, round});
@@ -118,7 +144,11 @@ export async function showRace(year, round, sessions, sim = false) {
   const f1 = f1Coords(S.track);
   drawTrack(S.track?.x, S.track?.y, S.track?.rotation ?? 0, S.track?.corners ?? [], f1, f1 ? 0.1 : 1);
   if (ui.has3d && S.track) setGround(year, round);  // satellite imagery, when it loads
-  setOverlay(S.track ? 'Press ▶ to watch the session' : 'No track map for this circuit. Press ▶ to load the session');
+  const none = !sim && year < 1996;  // replayKind 'results': ▶ would only fetch an error
+  ui.play.disabled = none;
+  setOverlay(none ? `No replay for races before 1996: lap timing starts then. Results, Standings and Drivers cover ${year}`
+      + (S.track ? `, and Simulate races this circuit with ${year}'s cars.` : '.')  // no outline (e.g. Ain-Diab): nothing to simulate on
+    : S.track ? 'Press ▶ to watch the session' : 'No track map for this circuit. Press ▶ to load the session');
   if (sim) { ui.session.value = SIM; loadData(true); }  // the circuit selector: straight into a Simulation
 }
 
@@ -233,10 +263,16 @@ async function loadData(autoplay) {
   ui.play.textContent = '▶';
   S.data = null;
   const token = S.token, session = ui.session.value;
-  setOverlay(`Loading ${session} replay… the first load of a session fetches every car's GPS trace and can take up to a minute.`, true);
+  const standIn = session === 'Race' && S.year >= 2023;  // see below
+  setOverlay(`Loading ${session} replay…${standIn || session === SIM ? '' : " The first load of a session fetches every car's GPS trace and can take up to a minute."}`, true);
   try {
     const sim = session === SIM && await simSession(S.year, S.round, S.proj, S.track);
-    const data = sim ? sim.data : await get(`/api/replay/${S.year}/${S.round}?session=${encodeURIComponent(session)}`);
+    const url = `/api/replay/${S.year}/${S.round}?session=${encodeURIComponent(session)}`, gps = !sim && get(url);
+    // A GPS replay the server hasn't built yet takes ~40 s. A race's lap-timing replay (Jolpica: ~10 s uncached, then on disk) plays
+    // meanwhile and the GPS one takes over when it lands (swapToGps); without Jolpica laps yet, it just waits for GPS.
+    let data = sim ? sim.data : await Promise.race([gps, new Promise(r => setTimeout(r, 1500))]), early = null;
+    if (!data && standIn) early = data = await get(`${url}&laps=1`).catch(() => null);
+    data ??= await gps;
     if (token !== S.token || session !== ui.session.value) return;
     S.sim = sim?.race ?? null;
     S.t = 0;
@@ -245,6 +281,11 @@ async function loadData(autoplay) {
     setOverlay('');
     if (autoplay) togglePlay();
     else render(true);
+    if (early) {
+      const note = ' · GPS replay loading…';
+      ui.mode.textContent += note;
+      gps.then(g => swapToGps(g, token, early), () => { if (S.data === early) ui.mode.textContent = ui.mode.textContent.replace(note, ''); });
+    }
   } catch (e) {
     // replay.py's 401 message: the session is running now, so show it from F1's free live feed instead
     if (token === S.token && /is live now/.test(e.message)) return showLive();  // server.py LIVE_NOW
@@ -252,8 +293,26 @@ async function loadData(autoplay) {
   }
 }
 
+// lap timing counts from lights out; a GPS replay starts a minute or two before it, lights out being lap 1's start
+// (laps feed: [start, driver, lap, ...]). 0 when there's no such feed (lap-timing replays)
+const lightsOut = d => { const go = (d.laps ?? []).filter(e => e[2] === 1).map(e => e[0]); return go.length ? Math.min(...go) : 0; };
+
+// the GPS replay has landed while its lap-timing stand-in plays: same moment of the race, same camera, same playing state
+function swapToGps(g, token, standIn) {
+  if (token !== S.token || S.data !== standIn) return;  // another race, session or a fresh load since
+  const t = S.t + lightsOut(g);
+  prepare(g);
+  S.t = Math.min(t, g.duration);
+  if (S.selected && !S.byId[S.selected]) S.selected = null;  // Jolpica driver ids there, car numbers here
+  render(true);
+  if (S.cam !== 'overview') setMode(S.cam);  // follows the leader again if the followed car was dropped
+}
+
+// start the loaded race (app.js: the notice for a race new since the last visit)
+export const play = () => S && !S.playing && togglePlay();
+
 function togglePlay() {
-  if (!S || S.live) return;
+  if (!S || S.live || ui.play.disabled) return;
   if (!S.data) return loadData(true);
   if (S.t >= S.data.duration) S.t = 0;
   S.playing = !S.playing;
@@ -271,6 +330,8 @@ function tick(now) {
   if (!S.playing || !S.data) return;
   if (covered()) return togglePlay();  // the F1 TV viewer opened over it: pause rather than race on unseen
   const dt = (now - S.last) / 1000 * S.speed;
+  S.watched = (S.watched ?? 0) + (now - S.last) / 1000;  // real seconds played, once per race or session loaded
+  if (S.watched >= 60 && !S.counted) { S.counted = true; count('watched_60s'); }
   if (S.sim) S.sim.advance(Math.min(dt, 2));  // the physics runs in race time; a stalled tab doesn't jump minutes ahead
   S.t = S.sim ? S.sim.t : Math.min(S.data.duration, S.t + dt);
   S.last = now;

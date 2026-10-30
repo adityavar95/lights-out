@@ -1,4 +1,4 @@
-"""F1 data browser backend: livef1/Jolpica tables, track maps and race replay data."""
+"""Lights Out backend: livef1/Jolpica tables, track maps and race replay data."""
 import json
 import re
 import threading
@@ -18,12 +18,12 @@ from fastapi.staticfiles import StaticFiles
 import f1auth
 import f1tv
 from jolpica import JOLPICA, driver_career, jolpica_fetch, races
-from replay import OpenF1Locked, ReplayUnavailable, elevation, find_session, pitlane, replay, season_session_rows, session_telemetry, telemetry
+from replay import CACHE, OpenF1Locked, ReplayUnavailable, elevation, find_session, laps_replay, pitlane, replay, save, season_session_rows, session_telemetry, telemetry
 import live
 from tracks import _geo_track, mv_track, track
 
 livef1.set_log_level("ERROR")
-app = FastAPI(title="F1 data browser")
+app = FastAPI(title="Lights Out")
 MAX_ROWS = 5000  # shortcut: bigger tables are truncated in the data explorer
 
 
@@ -201,10 +201,11 @@ def _is_live(race: dict, session: str) -> bool:
 
 
 @app.get("/api/replay/{year}/{round}")
-def race_replay(year: int, round: int, session: str = "Race"):
+def race_replay(year: int, round: int, session: str = "Race", laps: bool = False):
+    """laps: the lap-timing replay even for a 2023+ race, which the page plays while the GPS one builds."""
     race = race_info(year, round)
     try:
-        return raw_json(replay(year, race, session))
+        return raw_json(laps_replay(year, round) if laps and session == "Race" else replay(year, race, session))
     except ReplayUnavailable as e:
         raise HTTPException(409, LIVE_NOW) if _is_live(race, session) else HTTPException(404, str(e))
     except Exception as e:
@@ -331,12 +332,43 @@ async def revalidate_static(request, call_next):
 app.add_middleware(GZipMiddleware, minimum_size=1000, compresslevel=1)
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
 
+# Anonymous usage counts (docs/ux-audit.md item 11): per day, how often each of these happened. The page sends only the
+# event's name (util.js count): no id, cookie, IP or page address is kept, and nothing goes to a third party.
+EVENTS = {"visit", "return_7d", "intro_shown", "intro_explore", "intro_simulate", "intro_stream", "watched_60s",
+          "new_race_watch", "stream_open", "video_here", "video_f1tv"}
+COUNTS = CACHE.parent / "counts.json"  # shortcut: lives in .cache, so deleting the cache resets it; move it if it matters
+_counts_lock = threading.Lock()  # one read-add-write at a time (save's temp file is per process, not per thread)
+
+
+def count_event(event: str, day: str, path: Path = COUNTS) -> dict:
+    with _counts_lock:
+        data = json.loads(path.read_text()) if path.exists() else {}
+        per_day = data.setdefault(day, {})
+        per_day[event] = per_day.get(event, 0) + 1
+        save(path, data)
+        return data
+
+
+@app.post("/api/count/{event}", status_code=204)
+def count(event: str):
+    if event not in EVENTS:  # a fixed list, so the file can't be filled with whatever a caller sends
+        raise HTTPException(404, "Unknown event")
+    count_event(event, date.today().isoformat())
+    return Response(status_code=204)
+
+
+@app.get("/api/counts")
+def counts():
+    """The usage counts so far: {day: {event: n}}."""
+    return json.loads(COUNTS.read_text()) if COUNTS.exists() else {}
+
+
 def warm_up():
     """The page's first load, done at start-up on parallel threads so the first visit finds warm caches: the season list,
     this season's calendar and sessions, the latest race's track, ground, heights and results (each 0.5-2.5 s cold,
-    ~10 ms warm; the page asked for them one after another), and its GPS replay (~30 OpenF1 requests, ~40 s on the
-    free tier; a click meanwhile waits on REPLAY_LOCKS instead of building it twice). All network-bound, so threads
-    run them side by side despite the GIL."""
+    ~10 ms warm; the page asked for them one after another), and the GPS replays of the season's last 3 races (~30
+    OpenF1 requests, ~40 s each on the free tier; a click meanwhile waits on REPLAY_LOCKS instead of building it twice).
+    All network-bound, so threads run them side by side despite the GIL."""
     today = date.today().isoformat()
     year = int(today[:4])
     try:
@@ -348,8 +380,8 @@ def warm_up():
         rnd = int(last[-1]["round"])
         jobs += [lambda: race_track(year, rnd), lambda: race_geo(year, rnd), lambda: race_elevation(year, rnd),
                  lambda: jolpica(year, "results", rnd)]
-        if year >= 2023:
-            jobs.append(lambda: replay(year, last[-1], "Race"))
+        if year >= 2023:  # newest first and one at a time: OpenF1 allows ~30 requests a minute, and each is ~30
+            jobs.append(lambda: [quietly(lambda: replay(year, r, "Race")) for r in reversed(last[-3:])])
 
     def quietly(job):
         try:

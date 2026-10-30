@@ -29,7 +29,7 @@ body::before { content: ''; position: fixed; inset: 0; z-index: -1; pointer-even
 button, select, input { font: inherit; color: var(--ink); }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
 /* the one glass recipe for every floating surface on the page: frosted tint, specular edge, soft drop shadow */
-.card, .topbar, .hero, .calendar, .tooltip, .pp, .step .block, .racebtn, .livebtn, .season select, .modeswitch, .themebtn, .tvbtn,
+.card, .topbar, .hero, .calendar, .tooltip, .pp, .step .block, .racebtn, .livebtn, .nextbtn, .season select, .modeswitch, .themebtn, .tvbtn,
 .labbtn, .labplan, .labx, .pill, .legenditem, .xstatus input, .controls select, .tablewrap.tall, .overlay.hint p, .carlabel3d {
   background: var(--glass); backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur);
   border: 1px solid var(--hairline); box-shadow: inset 0 1px 0 var(--edge-fade), var(--shadow); }
@@ -66,6 +66,17 @@ button, select, input { font: inherit; color: var(--ink); }
   box-shadow: 0 4px 12px rgb(225 6 0 / .35), inset 0 1px 0 rgb(255 255 255 / .35); }
 .livebtn { border-radius: 999px; padding: 3px 12px; font-weight: 700; font-size: 13px; cursor: pointer; transition: transform .1s, border-color .15s; }
 .livebtn:hover, .racebtn:hover, .themebtn:hover { border-color: var(--muted); }
+/* the next session, counting down (app.js nextSession); a click opens Stream's Coming up row */
+.nextbtn { margin-left: auto; border-radius: 999px; padding: 4px 12px; font-size: 13px; cursor: pointer; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.nextbtn b { color: var(--accent); }
+.nextbtn[hidden] { display: none; }
+@media (max-width: 640px) { .nextbtn:not([hidden]) { display: none; } }  /* no room in the phone header's two rows; Stream's Coming up row has it */
+/* a race run since the last visit (app.js newRace) */
+.notice { position: fixed; z-index: 7; left: 50%; bottom: 20px; translate: -50% 0; display: flex; align-items: center; gap: 10px; padding: 8px 8px 8px 16px;
+  max-width: calc(100vw - 24px); border-radius: 999px; background: var(--glass-strong); backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--hairline); box-shadow: var(--shadow); animation: introin .6s var(--spring) both; }
+.noticex { border: 0; background: none; color: var(--muted); cursor: pointer; padding: 4px 8px; }
+body.intro .notice { display: none; }
 .livebtn.on { background: var(--accent); border-color: var(--accent); color: #fff; animation: pulse 1.6s ease-in-out infinite; }
 @keyframes pulse { 50% { box-shadow: 0 0 0 4px rgb(225 6 0 / .25); } }
 @media (prefers-reduced-motion: reduce) { .livebtn.on { animation: none; } }
@@ -85,7 +96,9 @@ button, select, input { font: inherit; color: var(--ink); }
 .modeswitch::before { content: ''; position: absolute; z-index: -1; top: 3px; bottom: 3px; left: 3px; width: calc(50% - 3px); border-radius: 999px;
   background: linear-gradient(160deg, #ff3b30, var(--accent)); box-shadow: 0 2px 8px rgb(225 6 0 / .4), inset 0 1px 0 rgb(255 255 255 / .3);
   transition: translate .35s var(--spring); }
-.modeswitch:has([data-appmode=sim][aria-pressed=true])::before { translate: 100% 0; }
+.viewswitch::before { width: calc(33.333% - 2px); }
+.viewswitch:has([data-view=sim][aria-pressed=true])::before { translate: 100% 0; }
+.viewswitch:has([data-view=stream][aria-pressed=true])::before { translate: 200% 0; }
 .modeswitch button { border: 0; background: none; border-radius: 999px; padding: 3px 16px; font-weight: 700; color: var(--muted); cursor: pointer;
   letter-spacing: .02em; transition: color .25s, transform .1s; }
 .modeswitch button:hover { color: var(--ink); }
@@ -118,6 +131,13 @@ body:not([data-mode=sim]) .hud-top:not(:has(.lapcount:not(:empty))) { display: n
 .racecard.upcoming { opacity: .6; }
 .racecard .flag, .racebtn .flag { width: 24px; height: 16px; object-fit: cover; }  /* flags differ in shape: names line up */
 .rnd { font-weight: 900; font-style: italic; color: var(--muted); }
+.rc-tags { display: flex; gap: 4px; align-items: center; }
+/* what ▶ gives for a race (replay.js replayKind); Simulate races any of them, so there they'd only be noise */
+.rkind { font-size: 10px; font-weight: 700; letter-spacing: .03em; text-transform: uppercase; white-space: nowrap; border-radius: 4px; padding: 1px 5px;
+  border: 1px solid var(--hairline); color: var(--muted); }
+.rkind.k-gps { background: rgb(225 6 0 / .14); border-color: transparent; color: var(--accent); }
+.rkind.k-laps { background: var(--panel-2); border-color: transparent; }
+body[data-mode=sim] .rkind { display: none; }
 .next { font-size: 11px; font-weight: 700; color: #fff; background: var(--accent); border-radius: 4px; padding: 0 5px; }
 .rc-name { display: grid; min-width: 0; line-height: 1.2; }
 .rc-name b, .rc-name small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -125,21 +145,23 @@ body:not([data-mode=sim]) .hud-top:not(:has(.lapcount:not(:empty))) { display: n
 .flag { height: 16px; width: auto; border-radius: 2px; display: block; }
 
 /* hero */
-.hero { display: grid; grid-template-columns: auto 1fr auto; gap: 16px; align-items: center; padding: 12px 18px; margin: 12px 16px 0;
+/* one line: race, round / date / circuit, then podium (or countdown) and the F1 TV button; wraps on narrow screens */
+.hero { display: grid; grid-template-columns: 1fr auto; gap: 8px 16px; align-items: center; padding: 8px 18px; margin: 12px 16px 0;
   border-radius: var(--radius); overflow: hidden;
   background: radial-gradient(90% 160% at 0% 50%, rgb(225 6 0 / .22), transparent 60%), radial-gradient(60% 120% at 100% 0%, rgb(195 92 255 / .14), transparent 70%),
     linear-gradient(110deg, transparent 55%, var(--edge-fade) 55.2%, var(--edge-fade) 57%, transparent 57.2%, transparent 59%, var(--edge-fade) 59.2%, var(--edge-fade) 61%, transparent 61.2%),
     var(--glass); }
-.heroflag .flag { height: 40px; border-radius: 6px; box-shadow: 0 6px 18px rgb(0 0 0 / .35), inset 0 0 0 1px rgb(255 255 255 / .2); }
 .eyebrow { color: var(--accent); font-weight: 700; letter-spacing: .08em; font-size: 12px; }
-.hero h1 { margin: 0; font-size: clamp(22px, 3.4vw, 40px); font-weight: 900; font-style: italic; text-transform: uppercase; line-height: 1; letter-spacing: -.01em; }
+.herotext { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 14px; min-width: 0; }
+.herotext .muted { font-size: 14px; }
+.hero h1 { margin: 0; font-size: clamp(18px, 2vw, 24px); font-weight: 900; font-style: italic; text-transform: uppercase; line-height: 1; letter-spacing: -.01em; }
 .heropodium { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-.pp { border-radius: 12px; padding: 6px 10px; display: flex; align-items: center; gap: 4px; box-shadow: none; }
+.pp { border-radius: 12px; padding: 4px 10px; display: flex; align-items: center; gap: 4px; box-shadow: none; }
 .pp.p1 { border-color: #d4af37; box-shadow: 0 0 14px rgb(212 175 55 / .25); }
 .pnum { font-weight: 900; font-style: italic; color: var(--muted); margin-right: 4px; }
 /* an upcoming race: time to lights out, ticking every minute (app.js) */
 .countdown { display: grid; line-height: 1.15; font-variant-numeric: tabular-nums; text-align: right; }
-.countdown b { font-size: 20px; font-weight: 900; font-style: italic; }
+.countdown b { font-size: 17px; font-weight: 900; font-style: italic; }
 .heroside { display: flex; align-items: center; justify-content: flex-end; gap: 10px; flex-wrap: wrap; }
 .tvbtn { background: linear-gradient(160deg, #ff3b30, var(--accent)); color: #fff; border-color: rgb(255 255 255 / .2); border-radius: 999px; padding: 6px 14px; font-weight: 700;
   letter-spacing: .02em; cursor: pointer; white-space: nowrap; transition: box-shadow .15s, transform .1s;
@@ -147,9 +169,8 @@ body:not([data-mode=sim]) .hud-top:not(:has(.lapcount:not(:empty))) { display: n
 .tvbtn:hover { box-shadow: 0 0 0 4px rgb(225 6 0 / .25), 0 4px 14px rgb(225 6 0 / .35); }
 /* Stream: the F1 TV browse page (stream.js). Analytics and Stream each show only their own chrome; Simulate rules still
    apply inside Analytics */
-.sectionswitch:has([data-section=stream][aria-pressed=true])::before { translate: 100% 0; }
 body:not([data-section=stream]) .stream,
-body[data-section=stream] :is(.hero, .tabs, main, .modeswitch:not(.sectionswitch), .racepick, .livebtn) { display: none; }
+body[data-section=stream] :is(.hero, .tabs, main, .racepick, .livebtn) { display: none; }
 .sbill { position: relative; min-height: clamp(260px, 46vh, 520px); display: flex; align-items: flex-end; padding: 32px clamp(16px, 4vw, 56px);
   background: radial-gradient(90% 160% at 0% 50%, rgb(225 6 0 / .22), transparent 60%) center / cover no-repeat; }
 .sbill::before { content: ''; position: absolute; inset: 0; pointer-events: none;  /* the picture fades into the page, whatever the theme */
@@ -188,6 +209,14 @@ body[data-section=stream] :is(.hero, .tabs, main, .modeswitch:not(.sectionswitch
 .slive { position: absolute; left: 8px; bottom: 8px; padding: 1px 7px; border-radius: 4px; background: var(--accent); color: #fff; font-size: 12px; font-weight: 900; }
 .scard b { font-weight: 600; line-height: 1.25; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .scard:hover b { color: var(--accent); }
+/* not connected to F1 TV (stream.js connection): a bar says videos open on F1 TV, and each card says so too */
+.sconnect { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; margin: 12px clamp(16px, 4vw, 56px) 0; padding: 10px 16px;
+  border-radius: var(--radius-sm); background: var(--glass); border: 1px solid var(--hairline); }
+.sconnect[hidden] { display: none; }
+.sconnect p { margin: 0; flex: 1 1 320px; color: var(--muted); }
+.sconnect p b { color: var(--ink); }
+.sext { position: absolute; right: 8px; top: 8px; padding: 1px 6px; border-radius: 4px; background: rgb(0 0 0 / .62); color: #fff; font-size: 11px; font-weight: 700; }
+#stream.linked .sext { display: none; }
 .scard small { color: var(--muted); font-size: 12px; }
 
 /* F1 TV multiviewer: a full-window grid of streams; the tile with the sound has a red frame, each tile a team-colour edge */
@@ -340,6 +369,17 @@ body[data-section=stream] :is(.hero, .tabs, main, .modeswitch:not(.sectionswitch
 
 /* tabs: a row of glass pills, the chosen one raised with a specular edge and a red underline that grows from its middle */
 .tabs { display: flex; gap: 4px; padding: 12px 16px 4px; overflow-x: auto; scrollbar-width: none; }
+/* more tabs past an edge (phones): that edge fades out, following the scroll; a bar that fits has no scroll timeline,
+   so no fade. Unsupported (Firefox): no hint, as before */
+@property --tabs-l { syntax: '<length>'; inherits: false; initial-value: 0px; }
+@property --tabs-r { syntax: '<length>'; inherits: false; initial-value: 0px; }
+@supports (animation-timeline: scroll()) {
+  .tabs { animation: tabsfade linear both; animation-timeline: scroll(self inline);
+    mask-image: linear-gradient(90deg, transparent, #000 var(--tabs-l), #000 calc(100% - var(--tabs-r)), transparent); }
+  @keyframes tabsfade {
+    0% { --tabs-l: 0px; --tabs-r: 40px; } 8%, 92% { --tabs-l: 40px; --tabs-r: 40px; } 100% { --tabs-l: 40px; --tabs-r: 0px; }
+  }
+}
 [role=tab] { position: relative; background: none; border: 1px solid transparent; border-radius: 999px; padding: 6px 14px; cursor: pointer; font-weight: 600;
   color: var(--muted); white-space: nowrap; transition: color .2s, background .2s, border-color .2s, transform .1s; }
 [role=tab]::after { content: ''; position: absolute; left: 14px; right: 14px; bottom: 2px; height: 2px; border-radius: 2px; background: var(--accent);
@@ -347,6 +387,10 @@ body[data-section=stream] :is(.hero, .tabs, main, .modeswitch:not(.sectionswitch
 [role=tab]:hover { color: var(--ink); background: var(--hairline); }
 [role=tab][aria-selected=true] { color: var(--ink); background: var(--glass); border-color: var(--hairline); box-shadow: inset 0 1px 0 var(--edge-fade), var(--shadow); }
 [role=tab][aria-selected=true]::after { scale: 1 1; }
+/* the data explorer: for the few who want the tables, so a quiet tab at the far end */
+[role=tab].rawtab { margin-left: auto; font-size: 13px; font-weight: 400; color: var(--muted); }
+/* Results: Race / Sprint / Qualifying, one classification at a time (charts.js renderResults) */
+.resviews { display: flex; gap: 6px; margin: 0 0 12px; }
 main { padding: 12px 16px; }
 .card { border-radius: var(--radius); padding: 16px 18px; margin-bottom: 16px; }
 .card h3 { margin: 0 0 10px; font-weight: 900; text-transform: uppercase; font-size: 16px; letter-spacing: .03em; }
@@ -425,6 +469,15 @@ option { background-color: var(--panel); color: var(--ink); }
 .hud-deck { left: 12px; right: 12px; bottom: 12px; display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; padding: 8px 10px; }
 .deckgroup { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; max-width: 100%; }
 .deckgroup.grow { flex: 1 1 220px; }
+/* the deck's Camera and ⋯ menus (util.js dropUp places them above their button). Only :popover-open may set display,
+   or the menu would never hide */
+.deckmenu { inset: auto; margin: 0; padding: 8px; border-radius: 12px; border: 1px solid rgb(255 255 255 / .12); color: var(--hud-ink);
+  background: linear-gradient(150deg, rgb(32 35 44 / .94), rgb(12 13 18 / .94)); backdrop-filter: blur(16px); box-shadow: 0 16px 40px rgb(0 0 0 / .55); }
+.deckmenu:popover-open { display: grid; gap: 8px; }
+.deckmenu .neugroup { flex-direction: column; align-items: stretch; }
+.deckmenu .neu { justify-content: flex-start; }
+.deckmenu .deckgroup { flex-direction: column; align-items: stretch; }
+.neuicon { color: var(--led-on); margin-right: 2px; }
 .deckgroup [hidden] { display: none; }
 /* cinematic mode: the side panels spring out of frame, only the status strip and the deck stay */
 .cinematic .hud-left { transform: translateX(calc(-100% - 24px)); opacity: 0; pointer-events: none; }
@@ -832,8 +885,8 @@ table.data tbody tr:last-child td { border-bottom: 0; }
 .foot { padding: 16px; color: var(--muted); font-size: 12px; text-align: center; }
 
 @media (max-width: 900px) {
-  .hero { grid-template-columns: auto 1fr; }
-  .heroside { grid-column: 1 / -1; justify-content: flex-start; }
+  .hero { grid-template-columns: 1fr; }
+  .heroside { justify-content: flex-start; }
 }
 @media (prefers-reduced-motion: reduce) {
   .trow, .car circle, .racecard, [role=tab]::after, table.data tbody tr { transition: none; }
@@ -885,3 +938,28 @@ table.data tbody tr:last-child td { border-bottom: 0; }
 .cteam { white-space: nowrap; }
 table.data tr.champ td { color: #d4af37; font-weight: 700; }
 @media (max-width: 640px) { .chead { grid-template-columns: 1fr; } .dphoto.big { max-width: 220px; } }
+
+/* First visit (app.js startIntro): the replay fills the window under the header, from the grid at real speed, and one
+   card says what this is. The card sits on the 3D stage, so it keeps the stage's dark look whatever the page theme. */
+.introcard { display: none; }
+body.intro .introcard { display: grid; gap: 12px; position: fixed; z-index: 6; left: clamp(12px, 4vw, 48px); bottom: clamp(12px, 7vh, 72px);
+  max-width: 540px; padding: 24px 26px; border-radius: var(--radius); color: #fff; background: rgb(10 11 16 / .64);
+  backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur); border: 1px solid rgb(255 255 255 / .14);
+  box-shadow: 0 24px 64px rgb(0 0 0 / .5); animation: introin .9s var(--spring) .5s both; }
+.introcard h1 { margin: 0; font-size: clamp(30px, 4.6vw, 56px); font-weight: 900; font-style: italic; text-transform: uppercase; line-height: .95; }
+.introcard p { margin: 0; color: rgb(255 255 255 / .8); font-size: 16px; }
+.introbtns { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 4px; }
+.introbtns .tvbtn { padding: 10px 26px; font-size: 16px; }
+.ighost { padding: 9px 16px; border-radius: 999px; border: 1px solid rgb(255 255 255 / .22); background: rgb(255 255 255 / .08); color: #fff;
+  font-weight: 700; cursor: pointer; }
+.ighost:hover { background: rgb(255 255 255 / .16); }
+@keyframes introin { from { opacity: 0; transform: translateY(24px); } }
+body.intro :is(.hero, .tabs, .foot, .hud-deck, .rcfeed) { display: none; }
+body.intro main { padding: 0; }
+body.intro .mapwrap { border-radius: 0; border: 0; }
+body.intro .trackmap { height: calc(100dvh - 58px); }
+@media (max-width: 640px) {  /* the header wraps to two rows there */
+  body.intro .introcard { right: 12px; padding: 18px; }
+  body.intro .trackmap { height: calc(100dvh - 96px); max-height: none; aspect-ratio: auto; }
+}
+@media (prefers-reduced-motion: reduce) { body.intro .introcard { animation: none; } }

@@ -85,6 +85,24 @@ async function json(url) {  // not util.get: play urls are signed per play and e
 
 const streamName = s => s.type === 'obc' ? `${s.number ?? ''} ${s.title} · ${s.driver ?? s.team ?? ''}`.trim() : FEEDS[s.title] ?? s.title;
 
+// The Connect F1 TV popover (the viewer's and the Stream page's own: a popover inside a closed dialog can't show).
+// MultiViewer's sign-in for a web page: F1's site keeps the subscription token in its login-session cookie
+// (.formula1.com, readable by scripts there), so a bookmarklet clicked on formula1.com brings it back in our URL fragment.
+// onChange: after Disconnect
+export function connectPanel(id, onChange) {
+  const back = JSON.stringify(`${location.origin}${location.pathname}#f1tv=`);
+  const mark = `javascript:(()=>{const m=document.cookie.match(/login-session=([^;]+)/),t=m&&JSON.parse(decodeURIComponent(m[1])).data?.subscriptionToken;if(t)location.href=${back}+t;else alert('Sign in on formula1.com with an F1 TV subscription first, then click this bookmark again.')})()`;
+  const stash = () => { try { sessionStorage.setItem('f1tv-back', location.hash); } catch (e) {} };
+  return el('div', {class: 'mvconnect', popover: '', id, 'aria-label': 'Connect F1 TV'},
+    el('h3', {}, 'Connect F1 TV'),
+    el('p', {}, "Sign in on F1's own site, like MultiViewer: your password never reaches this app, nothing is saved on the server, and the connection lasts until you close this tab."),
+    el('ol', {},
+      el('li', {}, 'Drag this to your bookmarks bar: ', el('a', {class: 'mvmark', href: mark, onclick: e => e.preventDefault()}, 'F1 TV → this app')),
+      el('li', {}, el('a', {href: 'https://account.formula1.com/#/en/login', onclick: stash}, 'Sign in at formula1.com'), " (skip if you're signed in there)."),
+      el('li', {}, 'On formula1.com, click the bookmark: it brings you back here, connected.')),
+    el('button', {class: 'mvbtn', onclick: () => { try { sessionStorage.removeItem('f1tv'); } catch (e) {} onChange(); }}, 'Disconnect'));
+}
+
 function setup() {
   M = {tiles: [], content: null, video: null, offset: 0};
   M.syncOut = el('output', {class: 'mvoffset'});
@@ -95,19 +113,7 @@ function setup() {
       onclick: () => setOffset(M.offset + d)}, `${d > 0 ? '+' : '−'}${Math.abs(d)}s`)), M.syncOut, M.lights);
   M.grid = el('div', {class: 'mvgrid'});
   M.account = el('button', {class: 'mvaccount', popovertarget: 'mvconnect'});
-  // MultiViewer's sign-in for a web page: F1's site keeps the subscription token in its login-session cookie
-  // (.formula1.com, readable by scripts there), so a bookmarklet clicked on formula1.com brings it back in our URL fragment
-  const back = JSON.stringify(`${location.origin}${location.pathname}#f1tv=`);
-  const mark = `javascript:(()=>{const m=document.cookie.match(/login-session=([^;]+)/),t=m&&JSON.parse(decodeURIComponent(m[1])).data?.subscriptionToken;if(t)location.href=${back}+t;else alert('Sign in on formula1.com with an F1 TV subscription first, then click this bookmark again.')})()`;
-  const stash = () => { try { sessionStorage.setItem('f1tv-back', location.hash); } catch (e) {} };
-  M.connect = el('div', {class: 'mvconnect', popover: '', id: 'mvconnect', 'aria-label': 'Connect F1 TV'},
-    el('h3', {}, 'Connect F1 TV'),
-    el('p', {}, "Sign in on F1's own site, like MultiViewer: your password never reaches this app, nothing is saved on the server, and the connection lasts until you close this tab."),
-    el('ol', {},
-      el('li', {}, 'Drag this to your bookmarks bar: ', el('a', {class: 'mvmark', href: mark, onclick: e => e.preventDefault()}, 'F1 TV → this app')),
-      el('li', {}, el('a', {href: 'https://account.formula1.com/#/en/login', onclick: stash}, 'Sign in at formula1.com'), " (skip if you're signed in there)."),
-      el('li', {}, 'On formula1.com, click the bookmark: it brings you back here, connected.')),
-    el('button', {class: 'mvbtn', onclick: () => { try { sessionStorage.removeItem('f1tv'); } catch (e) {} showAccount(); }}, 'Disconnect'));
+  M.connect = connectPanel('mvconnect', showAccount);
   M.title = el('h2', {});
   M.picker = el('div', {class: 'mvpicker', popover: '', id: 'mvpicker', 'aria-label': 'Add a stream'});
   M.addBtn = el('button', {class: 'mvbtn mvadd', popovertarget: 'mvpicker', title: 'Add a stream: any feed or driver onboard'}, '＋ Add stream');

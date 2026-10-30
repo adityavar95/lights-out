@@ -1,5 +1,5 @@
 // Camera deck (neumorphic switches with status LEDs) and the cockpit steering wheel overlay.
-import {el, led} from './util.js';
+import {el, led, dropUp} from './util.js';
 
 const LEDS = 15, RPM_LOW = 9500, RPM_HIGH = 12300;  // shift lights start at RPM_LOW and are all lit at RPM_HIGH
 const TYRE = {SOFT: ['S', '#ff2d2d'], MEDIUM: ['M', '#ffd400'], HARD: ['H', '#f2f2f2'], INTERMEDIATE: ['I', '#3ec455'], WET: ['W', '#2b8cff']};
@@ -10,9 +10,14 @@ let w;  // DOM handles
 // camera modes, as scene3d.js names them, with their deck labels
 const CAMERAS = [['tcam', 'T-Cam'], ['onboard', 'Cockpit'], ['chase', 'TV Chase'], ['heli', 'Helicopter'], ['overview', 'Free Orbit']];
 
-// handlers: {mode(m), parts({halo, body, wheel})}. Returns the camera and part toggles for the control deck.
+// handlers: {mode(m), parts({halo, body, wheel})}. Returns the deck's camera control: one button naming the camera,
+// opening a menu of the cameras and, in the cockpit, the halo / car / wheel toggles. (C, or the pad's camera button
+// while driving, steps through them: nextCamera.)
 export function setupOnboard(wrap, handlers) {
-  const modeBtn = ([m, text]) => el('button', {class: 'neu', 'data-mode': m, 'aria-pressed': m === 'overview', onclick: () => handlers.mode(m)}, led(), text);
+  const modeBtn = ([m, text]) => el('button', {class: 'neu', 'data-mode': m, 'aria-pressed': m === 'overview', onclick: () => {
+    handlers.mode(m);
+    if (w.menu.matches(':popover-open')) w.menu.hidePopover();
+  }}, led(), text);
   const toggle = (key, text) => el('button', {class: 'neu', 'aria-pressed': true, onclick: e => {
     const on = e.currentTarget.getAttribute('aria-pressed') !== 'true';
     e.currentTarget.setAttribute('aria-pressed', on);
@@ -26,7 +31,12 @@ export function setupOnboard(wrap, handlers) {
     tyre: el('b', {class: 'wtyre'}), drs: el('b', {class: 'drs'}, 'DRS'), src: el('span', {class: 'wsrc'}),
     thr: el('i'), brk: el('i'), leds: Array.from({length: LEDS}, (_, i) => el('i', {class: i < 5 ? 'g' : i < 10 ? 'r' : 'b'})),
     flags: [el('i', {class: 'wflag'}), el('i', {class: 'wflag'})],
+    name: el('span', {}, CAMERAS.at(-1)[1]),
   };
+  w.button = el('button', {class: 'neu', popovertarget: 'cammenu', 'aria-haspopup': 'true', 'aria-expanded': false, title: 'Camera (C)',
+    'aria-keyshortcuts': 'C'}, el('span', {class: 'neuicon', 'aria-hidden': 'true'}, '◉'), w.name, ' ▾');
+  w.menu = el('div', {class: 'deckmenu', id: 'cammenu', popover: 'auto', 'aria-label': 'Camera'}, w.modes, w.parts);
+  dropUp(w.button, w.menu);
   w.wheel = el('div', {class: 'wheel', hidden: true, 'aria-label': 'Steering wheel display'},
     wheelSvg(),
     el('div', {class: 'leds'}, w.leds),
@@ -41,7 +51,13 @@ export function setupOnboard(wrap, handlers) {
       el('div', {class: 'bar thr'}, w.thr)),
     w.flags[0], w.flags[1]);
   wrap.append(w.wheel);
-  return {modes: w.modes, parts: w.parts};
+  return el('div', {class: 'deckgroup'}, w.button, w.menu);
+}
+
+// the next camera in the menu's order, as if clicked
+export function nextCamera() {
+  const cams = [...w.modes.children], i = cams.findIndex(b => b.getAttribute('aria-pressed') === 'true');
+  cams[(i + 1) % cams.length].click();
 }
 
 function wheelSvg() {
@@ -63,6 +79,7 @@ function wheelSvg() {
 
 export function setCameraUi(mode, showWheel) {
   for (const b of w.modes.children) b.setAttribute('aria-pressed', b.dataset.mode === mode);
+  w.name.textContent = CAMERAS.find(c => c[0] === mode)?.[1] ?? '';
   w.parts.hidden = mode !== 'onboard';
   w.wheel.hidden = mode !== 'onboard' || !showWheel;
 }

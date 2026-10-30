@@ -35,6 +35,25 @@ export function el(tag, attrs = {}, ...children) {
   return e;
 }
 
+// One anonymous usage count on our own server (/api/count, server.py EVENTS): the event's name and nothing else. None
+// when the browser asks not to be tracked (Do Not Track, Global Privacy Control).
+export function count(event) {
+  if (navigator.doNotTrack === '1' || navigator.globalPrivacyControl) return;
+  try { navigator.sendBeacon(`/api/count/${event}`); } catch (e) { /* counts are best effort */ }
+}
+
+// a popover menu opening above its invoker (popovertarget): the 3D stage's control deck sits at the bottom of the stage.
+// A menu invoked from the right half lines up with its invoker's right edge, so it doesn't run off screen.
+export function dropUp(button, menu) {
+  menu.addEventListener('toggle', e => {
+    button.setAttribute('aria-expanded', e.newState === 'open');
+    if (e.newState !== 'open') return;
+    const r = button.getBoundingClientRect(), right = r.left > innerWidth / 2;
+    Object.assign(menu.style, {left: right ? 'auto' : `${r.left}px`, right: right ? `${innerWidth - r.right}px` : 'auto',
+      bottom: `${innerHeight - r.top + 8}px`});
+  });
+}
+
 // a modal dialog (the F1 TV viewer) covers the whole page: the 3D stage behind it needn't draw (getElementsByTagName is
 // a cached live list, so this is cheap every frame)
 export const covered = () => document.body.dataset.section === 'stream'  // the Stream page hides the stage too

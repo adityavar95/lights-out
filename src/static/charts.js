@@ -23,16 +23,27 @@ function driverCell(r) {
     el('b', {}, code(r)), ' ', el('span', {class: 'muted'}, name(r)));
 }
 
-export function renderResults(root, results, sprint) {
-  if (!results.length) return root.replaceChildren(empty('No results yet for this race.'));
+// The Results tab, Qualifying folded in: the podium, then one classification at a time (Race / Sprint / Qualifying).
+// view: the one to show first (falls back to the first that has rows); onView(view): the reader switched
+export function renderResults(root, results, sprint, quali, view, onView) {
+  const views = [['race', 'Race', results, () => classification(results, 'Race classification')],
+    ['sprint', 'Sprint', sprint, () => classification(sprint, 'Sprint classification')],
+    ['qualifying', 'Qualifying', quali, () => qualifying(quali)]].filter(v => v[2].length);
+  if (!views.length) return root.replaceChildren(empty('No results yet for this race.'));
+  const body = el('div'), pick = el('div', {class: 'resviews', role: 'group', 'aria-label': 'Classification'});
+  const show = v => {
+    body.replaceChildren(v[3]());
+    for (const b of pick.children) { b.classList.toggle('on', b.dataset.view === v[0]); b.setAttribute('aria-pressed', b.dataset.view === v[0]); }
+  };
+  pick.append(...views.map(v => el('button', {class: 'pill', 'data-view': v[0], onclick: () => { show(v); onView?.(v[0]); }}, v[1])));
+  show(views.find(v => v[0] === view) ?? views[0]);
   const podium = [results[1], results[0], results[2]].filter(Boolean).map(r =>
     el('div', {class: `step p${r.position}`},
       el('div', {class: 'stepname'}, chip(teamColor(r['Constructor.constructorId'])), el('b', {}, code(r))),
       el('div', {class: 'muted small'}, name(r)),
       el('div', {class: 'muted small'}, r['Constructor.name']),
       el('div', {class: 'block'}, el('span', {}, r.position))));
-  root.replaceChildren(el('div', {class: 'podium'}, podium), classification(results, 'Race classification'),
-    sprint.length ? classification(sprint, 'Sprint classification') : null);
+  root.replaceChildren(podium.length ? el('div', {class: 'podium'}, podium) : null, views.length > 1 ? pick : null, body);
 }
 
 function classification(rows, title) {
@@ -55,16 +66,15 @@ function classification(rows, title) {
       })))));
 }
 
-export function renderQualifying(root, rows) {
-  if (!rows.length) return root.replaceChildren(empty('No qualifying results for this race.'));
+function qualifying(rows) {
   const best = q => rows.map(r => r[q]).filter(Boolean).sort()[0];  // same-format m:ss.sss strings sort correctly
   const fastest = {Q1: best('Q1'), Q2: best('Q2'), Q3: best('Q3')};
-  root.replaceChildren(el('div', {class: 'card'}, el('h3', {}, 'Qualifying'),
+  return el('div', {class: 'card'}, el('h3', {}, 'Qualifying'),
     el('div', {class: 'tablewrap'}, el('table', {class: 'data'},
       el('thead', {}, el('tr', {}, ['Pos', 'Driver', 'Team', 'Q1', 'Q2', 'Q3'].map(h => el('th', {}, h)))),
       el('tbody', {}, rows.map(r => el('tr', {},
         el('td', {class: 'num'}, r.position), driverCell(r), el('td', {class: 'muted'}, r['Constructor.name']),
-        ...['Q1', 'Q2', 'Q3'].map(q => el('td', {class: `num ${r[q] && r[q] === fastest[q] ? 'purple' : ''}`}, r[q] || '')))))))));
+        ...['Q1', 'Q2', 'Q3'].map(q => el('td', {class: `num ${r[q] && r[q] === fastest[q] ? 'purple' : ''}`}, r[q] || ''))))))));
 }
 
 export function renderLapChart(root, laps, results, pitstops) {

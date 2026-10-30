@@ -7,14 +7,14 @@ import {setupCircuitDeck} from './circuitdeck.js';
 import {setupCarsDeck} from './carsdeck.js';
 import {setupTrace, updateTrace} from './tracemodal.js';
 
-// stage: the 3D stage; hud: setupHud's containers; getS: () => the replay state; controls: {togglePlay}
+// stage: the 3D stage; hud: setupHud's containers plus the deck's ⋯ menu (hud.more); getS: () => the replay state; controls: {togglePlay}
 export function setupDecks(stage, hud, getS, controls) {
   setupPitwall(stage, getS);
   setupDriverDeck(hud.left, getS);
-  setupAudioDeck(hud.deck, stage, getS);
+  setupAudioDeck(hud.more, stage, getS);
   setupCircuitDeck(stage, hud.top, getS);
   setupCarsDeck(stage, hud.top);
-  setupTrace(stage, hud.deck, getS, controls);
+  setupTrace(stage, hud.more, getS, controls);
 }
 
 // every frame; focus: the focused car's HUD readings

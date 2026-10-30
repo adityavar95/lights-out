@@ -1,14 +1,14 @@
 // App shell: the Analytics / Stream switch (Stream is the F1 TV browse page, stream.js), the Watch / Simulate switch, race dropdown, race header and tabs. Watch is the race browser (replays of
 // real sessions, results, standings, live timing); Simulate drops the browser chrome for a full-window physics race
 // on the chosen circuit (circuit and car pickers on the stage, season = the cars' era).
-import {get, rows, el, flag, fmtDate, teamColor} from './util.js';
-import {setupReplay, showRace, showLive, setSessions} from './replay.js';
+import {get, rows, el, flag, fmtDate, teamColor, count} from './util.js';
+import {setupReplay, showRace, showLive, setSessions, intro, play, replayKind, REPLAY_KINDS} from './replay.js';
 import {fetchLive, liveInfo} from './live.js';
-import {renderResults, renderQualifying, renderLapChart, renderStandings} from './charts.js';
+import {renderResults, renderLapChart, renderStandings} from './charts.js';
 import {setupExplorer} from './explorer.js';
 import {renderStrategyLab} from './strategylab.js';
 import {renderDrivers} from './drivers.js';
-import {showStream} from './stream.js';
+import {showStream, upcoming, until} from './stream.js';
 
 const $ = id => document.getElementById(id);
 const A = {year: null, round: null, races: [], mode: 'watch', section: 'analytics'};
@@ -19,8 +19,10 @@ const ordinal = n => { const s = ['th', 'st', 'nd', 'rd'], v = n % 100; return n
 
 // Each tab fetches its data, then returns a function that draws it (skipped if the user moved on meanwhile).
 const TABS = {
-  results: async r => { const [res, spr] = await Promise.all([jol('results', r), jol('sprint', r)]); return () => renderResults($('tab-results'), res, spr); },
-  qualifying: async r => { const q = await jol('qualifying', r); return () => renderQualifying($('tab-qualifying'), q); },
+  results: async r => {  // Race / Sprint / Qualifying; the one picked last stays picked from race to race
+    const [res, spr, q] = await Promise.all([jol('results', r), jol('sprint', r), jol('qualifying', r)]);
+    return () => renderResults($('tab-results'), res, spr, q, A.resView, v => { A.resView = v; });
+  },
   lapchart: async r => {
     const [laps, res, pits] = await Promise.all([jol('laps', r), jol('results', r), jol('pitstops', r)]);
     return () => renderLapChart($('tab-lapchart'), laps, res, pits);
@@ -115,7 +117,7 @@ async function drawTab(name) {
 function setMode(mode, reload = true) {
   A.mode = mode;
   document.body.dataset.mode = mode;
-  for (const b of document.querySelectorAll('[data-appmode]')) b.setAttribute('aria-pressed', b.dataset.appmode === mode);
+  syncSwitch();
   try { localStorage.setItem('f1mode', mode); } catch (e) { /* storage blocked: the mode just isn't remembered */ }
   if (reload && A.round) selectRace(A.round);
 }
@@ -124,10 +126,82 @@ function setMode(mode, reload = true) {
 function setSection(section, round = null) {
   A.section = section;
   document.body.dataset.section = section;
-  for (const b of document.querySelectorAll('.sectionswitch button')) b.setAttribute('aria-pressed', b.dataset.section === section);
+  syncSwitch();
   if (section === 'analytics') return syncHash();
+  count('stream_open');
   history.replaceState(null, '', '#stream');
   if (A.races.length) showStream(A.year, A.races, round);
+}
+
+// the header's one switch: Analytics (Watch mode + Analytics section), Simulate (Simulate mode), Stream (Stream section)
+function setView(view) {
+  if (view === 'stream') return setSection('stream');
+  if (A.section !== 'analytics') setSection('analytics');
+  const mode = view === 'sim' ? 'sim' : 'watch';
+  if (A.mode !== mode) setMode(mode);
+}
+function syncSwitch() {
+  const view = A.section === 'stream' ? 'stream' : A.mode === 'sim' ? 'sim' : 'analytics';
+  for (const b of document.querySelectorAll('.viewswitch button')) b.setAttribute('aria-pressed', b.dataset.view === view);
+}
+
+// First visit (or #intro): the latest race from the grid, filling the window, with one card that says what this is.
+// Reduced motion: the card without the autoplay.
+function startIntro(r, shown) {
+  document.body.classList.add('intro');
+  try { localStorage.setItem('f1seen', '1'); } catch (e) { /* storage blocked: it shows again next visit */ }
+  const go = (event, then) => () => { count(event); endIntro(); then?.(); };
+  count('intro_shown');
+  $('intro').replaceChildren(
+    el('div', {class: 'eyebrow'}, `ROUND ${r.round} · ${r.raceName.toUpperCase()}`),
+    el('h1', {}, 'Relive every race in 3D.'),
+    el('p', {}, `This is lights out at the ${r.raceName}: every car where it really was, on the real circuit. `
+      + 'Follow any driver, ride onboard, rewind any lap.'),
+    el('div', {class: 'introbtns'},
+      el('button', {class: 'tvbtn', onclick: go('intro_explore')}, 'Explore this race →'),
+      el('button', {class: 'ighost', onclick: go('intro_simulate', () => setView('sim'))}, 'Simulate a race'),
+      el('button', {class: 'ighost', onclick: go('intro_stream', () => setView('stream'))}, 'Watch on F1 TV')));
+  document.querySelector('.topbar').addEventListener('click', endIntro, {once: true});
+  addEventListener('keydown', e => e.key === 'Escape' && endIntro());
+  if (!matchMedia('(prefers-reduced-motion: reduce)').matches) shown.then(() => A.round === r.round && intro());
+}
+const endIntro = () => document.body.classList.remove('intro');
+
+// A return visit after a race that wasn't run at the last visit: a notice with a button that plays it. The first visit
+// only remembers the latest race (the intro covers that visit).
+function newRace() {
+  const r = A.races.filter(x => x.date < today).at(-1);  // run by now, not just today
+  if (!r) return;
+  let seen;
+  try { seen = localStorage.getItem('f1latest'); localStorage.setItem('f1latest', `${A.year}/${r.round}`); } catch (e) { return; }
+  if (!seen || seen === `${A.year}/${r.round}`) return;
+  const box = el('div', {class: 'notice', role: 'status'},
+    el('span', {class: 'eyebrow'}, 'NEW'), el('span', {}, `${r.raceName} replay`),
+    el('button', {class: 'tvbtn', onclick: () => {
+      count('new_race_watch');
+      box.remove();
+      setView('analytics');
+      if (A.round !== r.round) selectRace(r.round);
+      activate('replay');
+      A.shown.then(play);
+    }}, '▶ Watch'),
+    el('button', {class: 'noticex', 'aria-label': 'Dismiss', onclick: () => box.remove()}, '✕'));
+  document.body.append(box);
+}
+
+// Header: the current season's next session, ticking; a click opens Stream on the Coming up row
+async function nextSession() {
+  const races = await get(`/api/jolpica/${today.slice(0, 4)}/races`).then(rows).catch(() => []), btn = $('nextbtn');
+  const tick = () => {
+    const s = upcoming(races)[0];
+    btn.hidden = !s;  // shortcut: after the season's last race, nothing until next year's calendar is in this year's list
+    if (!s) return;
+    btn.replaceChildren(el('span', {class: 'muted'}, 'NEXT'), ` ${s.name} · ${s.r['Circuit.Location.country']} `, el('b', {}, until(s.d)));
+    btn.title = `${s.r.raceName}, ${s.name}: ${s.d.toLocaleString(undefined, {weekday: 'long', hour: '2-digit', minute: '2-digit'})}`;
+    btn.onclick = () => setSection('stream', s.r.round);
+  };
+  tick();
+  setInterval(tick, 30000);
 }
 
 // round: the race to open (default: the latest one run), sim: open it as a Simulation
@@ -147,11 +221,20 @@ async function loadSeason(year, round = null, sim = A.mode === 'sim') {
     onclick: () => { cal.hidePopover(); selectRace(r.round); }},
     el('span', {class: 'rnd'}, ordinal(+r.round)), flag(r['Circuit.Location.country'], 40),
     el('span', {class: 'rc-name'}, el('b', {}, r['Circuit.Location.country']), el('small', {}, `${r.raceName} · ${fmtDate(r.date)}`)),
-    r === next ? el('span', {class: 'next'}, 'NEXT') : null)));
+    el('span', {class: 'rc-tags'}, r === next && el('span', {class: 'next'}, 'NEXT'), kindTag(year, r)))));
   const last = A.races.filter(r => r.date <= today).at(-1) ?? A.races[0];
   if (!A.races.some(r => r.round === String(round))) round = null;  // e.g. a stale link
   if (round ?? last) selectRace(round ?? last.round, sim);
+  if (A.intro && A.round && !sim) startIntro(A.races.find(x => x.round === String(A.round)), A.shown);
+  if (A.firstSeason && year === +today.slice(0, 4)) newRace();
+  A.intro = A.firstSeason = false;
   if (A.section === 'stream') showStream(year, A.races);
+}
+
+// the race picker's tag: what ▶ will give for this race
+function kindTag(year, r) {
+  const kind = replayKind(year, r.date);
+  return kind && el('span', {class: `rkind k-${kind}`, title: REPLAY_KINDS[kind][1]}, REPLAY_KINDS[kind][0]);
 }
 
 async function selectRace(round, sim = A.mode === 'sim') {
@@ -160,12 +243,12 @@ async function selectRace(round, sim = A.mode === 'sim') {
   for (const b of document.querySelectorAll('.racecard')) b.setAttribute('aria-pressed', b.dataset.round === String(round));
   const r = A.races.find(x => x.round === String(round));
   const podium = el('div', {class: 'heropodium'});
+  // one line: the race picker above already shows the flag and country
   $('hero').replaceChildren(
-    el('div', {class: 'heroflag'}, flag(r['Circuit.Location.country'], 160)),
     el('div', {class: 'herotext'},
-      el('div', {class: 'eyebrow'}, `ROUND ${r.round} · ${new Date(r.date + 'T00:00:00').toLocaleDateString(undefined, {day: 'numeric', month: 'long', year: 'numeric'})}`),
       el('h1', {}, r.raceName),
-      el('div', {class: 'muted'}, `${r['Circuit.circuitName']} · ${r['Circuit.Location.locality']}, ${r['Circuit.Location.country']}`)),
+      el('span', {class: 'muted'}, `Round ${r.round} · ${new Date(r.date + 'T00:00:00').toLocaleDateString(undefined, {day: 'numeric', month: 'short', year: 'numeric'})}`
+        + ` · ${r['Circuit.circuitName']}, ${r['Circuit.Location.locality']}`)),
     el('div', {class: 'heroside'}, podium, el('button', {class: 'tvbtn', onclick: () => setSection('stream', round),
       title: 'Watch this race weekend live or replayed on F1 TV'}, '▶ F1 TV')));
   jol('results', round).then(res => {
@@ -178,8 +261,13 @@ async function selectRace(round, sim = A.mode === 'sim') {
 
   $('racebtn').replaceChildren(el('span', {class: 'rnd'}, ordinal(+r.round)), flag(r['Circuit.Location.country'], 40),
     el('b', {}, r['Circuit.Location.country']), el('span', {class: 'caret', 'aria-hidden': 'true'}, '▾'));
-  showRace(A.year, round, ['Race'], sim);
-  activate(sim ? 'replay' : active);
+  A.shown = showRace(A.year, round, ['Race'], sim);
+  // a results-only race opens on Results, not on a stage with nothing to play; the next replayable race goes back
+  const kind = replayKind(A.year, r.date);
+  if (!sim && kind === 'results' && active === 'replay') { A.bounced = true; activate('results'); }
+  else if (A.bounced && active === 'results' && (sim || kind !== 'results')) { A.bounced = false; activate('replay'); }
+  else activate(sim ? 'replay' : active);
+  if (active !== 'results') A.bounced = false;
   // Load session choices after showing the race; only 2023+ (OpenF1) sessions can be replayed, and older seasons'
   // lists come from livef1, which takes ~40 s per season.
   const year = A.year;
@@ -198,6 +286,10 @@ async function init() {
   setupReplay($('tab-replay'));
   setupExplorer($('tab-explorer'), () => ({year: A.year, round: A.round}));
   const stored = k => { try { return localStorage.getItem(k); } catch (e) { return null; } };
+  const last = +stored('f1visit') || 0, now = Date.now();  // a return: another day than the last visit, within a week
+  count('visit');
+  if (last && new Date(last).toDateString() !== new Date(now).toDateString() && now - last < 7 * 864e5) count('return_7d');
+  try { localStorage.setItem('f1visit', now); } catch (e) { /* storage blocked: no returns counted */ }
   setMode(stored('f1mode') === 'sim' ? 'sim' : 'watch', false);
   setTheme(stored('f1theme') ?? 'auto');
   $('themebtn').onclick = () => setTheme(THEMES[(THEMES.findIndex(x => x[0] === document.documentElement.dataset.theme) + 1) % THEMES.length][0]);
@@ -209,16 +301,18 @@ async function init() {
     } catch (e) {}
   }
   if (location.hash === '#stream') setSection('stream');
+  A.intro = location.hash === '#intro' || (!location.hash && !stored('f1seen'));
+  A.firstSeason = true;  // the first season loaded checks for a race new since the last visit
   const [hashYear, hashRound, hashTab] = location.hash.slice(1).split('/');
   if (TABS[hashTab] || hashTab === 'replay') active = hashTab;
+  if (hashTab === 'qualifying') [active, A.resView] = ['results', 'qualifying'];  // links from before Qualifying joined Results
   $('calendar').addEventListener('toggle', e => {  // the race list opens under its button, at the race shown
     if (e.newState !== 'open') return;
     const r = $('racebtn').getBoundingClientRect();
     Object.assign(e.target.style, {left: `${r.left}px`, top: `${r.bottom + 6}px`});
     e.target.querySelector('[aria-pressed=true]')?.scrollIntoView({block: 'center'});
   });
-  for (const b of document.querySelectorAll('.sectionswitch button')) b.onclick = () => A.section !== b.dataset.section && setSection(b.dataset.section);
-  for (const b of document.querySelectorAll('[data-appmode]')) b.onclick = () => A.mode !== b.dataset.appmode && setMode(b.dataset.appmode);
+  for (const b of document.querySelectorAll('.viewswitch button')) b.onclick = () => setView(b.dataset.view);
   $('livebtn').onclick = () => {
     setMode('watch', false);
     for (const b of document.querySelectorAll('.racecard')) b.setAttribute('aria-pressed', false);
@@ -229,6 +323,7 @@ async function init() {
   };
   checkLive();
   setInterval(checkLive, 60000);
+  nextSession();
   // the circuit selector (circuitdeck.js): a simulation at that circuit's latest race, switching season if needed
   addEventListener('f1:circuit', ({detail: {year, round}}) => {
     setMode('sim', false);
@@ -239,10 +334,10 @@ async function init() {
   });
   const tabs = [...document.querySelectorAll('[role=tab]')];
   tabs.forEach((b, i) => {
-    b.onclick = () => activate(b.dataset.tab);
+    b.onclick = () => { A.bounced = false; activate(b.dataset.tab); };  // a tab picked by hand stays picked
     b.onkeydown = e => {
       const d = {ArrowRight: 1, ArrowLeft: -1}[e.key];
-      if (d) { const n = tabs[(i + d + tabs.length) % tabs.length]; n.focus(); activate(n.dataset.tab); }
+      if (d) { const n = tabs[(i + d + tabs.length) % tabs.length]; n.focus(); A.bounced = false; activate(n.dataset.tab); }
     };
   });
   const years = (await seasons).slice().reverse();
@@ -253,14 +348,15 @@ async function init() {
   loadSeason(+sel.value, sel.value === hashYear ? hashRound || null : null);
 }
 
-// header button: red while a session is running, otherwise it opens the most recent session's final state
+// header button, only while a session is running: it opens F1's live timing. (Between sessions it used to offer the last
+// session's final state, which is the race the page already shows.)
 async function checkLive() {
   try {
     const info = liveInfo((await fetchLive()).topics);
     const btn = $('livebtn');
-    btn.hidden = false;
+    btn.hidden = !info.live;
     btn.classList.toggle('on', info.live);
-    btn.textContent = info.live ? '● LIVE' : 'Latest session';
+    btn.textContent = '● LIVE';
     btn.title = info.title;
   } catch (e) { /* live timing unreachable: keep the button hidden */ }
 }

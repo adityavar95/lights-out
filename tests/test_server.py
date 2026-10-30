@@ -186,3 +186,14 @@ assert f1tv.play(7781, None, "tok", uhd=True)["url"] == "https://cdn/main.m3u8"
 assert f1tv.play(7781, 13, "tok", uhd=True)["url"] == "https://cdn/13.m3u8"
 f1tv.requests.get = _get
 print("f1tv ok")
+
+import tempfile
+from server import EVENTS, count_event
+
+with tempfile.TemporaryDirectory() as tmp:
+    path = Path(tmp) / "counts.json"
+    count_event("visit", "2026-10-30", path)
+    count_event("visit", "2026-10-30", path)
+    assert count_event("watched_60s", "2026-10-31", path) == {"2026-10-30": {"visit": 2}, "2026-10-31": {"watched_60s": 1}}
+assert "visit" in EVENTS and "../etc" not in EVENTS
+print("usage counts ok")
