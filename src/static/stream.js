@@ -37,10 +37,14 @@ const retry = ({target: i}) => {
   const n = +(i.dataset.tries ?? 0);
   if (n < 3) setTimeout(() => { i.dataset.tries = n + 1; i.src = `${i.src.replace(/&try=\d+$/, '')}&try=${n + 1}`; }, 2000 * (n + 1));
 };
-const kind = label => el('span', {class: `tvkind k-${label.split(' ')[0].toLowerCase()}`}, label);
 // a caption line's parts with quiet dots between them
 const dots = parts => parts.filter(Boolean).flatMap((x, i) => i ? [el('i', {class: 'sdot', 'aria-hidden': 'true'}), x] : [x]);
 const day = d => d.toLocaleDateString(undefined, {day: 'numeric', month: 'short'});
+const weekday = d => d.toLocaleDateString(undefined, {weekday: 'short', day: 'numeric', month: 'short'});
+// a video's name inside its weekend's row, which already says which grand prix: the session ("Practice 2", "Race"),
+// else F1 TV's title without the year
+const LONG = {FP1: 'Practice 1', FP2: 'Practice 2', FP3: 'Practice 3', 'Sprint quali': 'Sprint Qualifying'};
+const named = v => sessionsOf([v]).length ? LONG[short(v)] ?? short(v) : v.title.replace(/^\d{4}\s+/, '');
 // a weekend's dates: "30 Oct – 1 Nov"
 const span = r => { const a = weekendStart(r), b = at(r, ''); return a && b && day(a) !== day(b) ? `${day(a)} – ${day(b)}` : b ? day(b) : ''; };
 // playing here needs this tab connected to an F1 TV subscription; until then a video opens on F1 TV's own site, which
@@ -57,18 +61,18 @@ const watch = (v, r) => {
 
 // a video: its artwork with nothing on it but LIVE (and, until this tab is connected, that it opens on F1 TV); on hover
 // it lifts and shows a play button. What it is, when and how long go in the caption.
-// resume: a Continue watching card, whose caption says how long is left instead of when it was
+// resume: a Continue watching card, titled with its grand prix and saying how long is left instead of when it was
 function card(v, r, resume = false) {
-  const label = tvLabel(v), e = resume ? v : saved(v);
+  const e = resume ? v : saved(v);
   return el('button', {class: 'scard', 'data-id': v.id, title: `${S.linked ? 'Watch here' : 'Opens on F1 TV'}: ${v.title}`, onclick: () => watch(v, r)},
     el('div', {class: 'sthumb'}, v.img && el('img', {src: pic(v, 480), alt: '', decoding: 'async', loading: 'lazy', onerror: retry}),
       live(v) && el('span', {class: 'slive'}, 'LIVE'),
       el('span', {class: 'sext', title: 'Opens on F1 TV'}, icon('ext')),
       el('span', {class: 'splay', 'aria-hidden': 'true'}, icon('play')),
       bar(e)),
-    el('b', {}, v.title),
-    el('small', {}, ...dots([kind(label), resume ? `${dur(v.len - v.pos)} left` : v.start && when(new Date(v.start)),
-      !resume && v.duration > 0 && dur(v.duration)])));
+    el('b', {}, resume ? v.title.replace(/^\d{4}\s+/, '') : named(v)),
+    el('small', {}, ...dots(resume ? [named(v), `${dur(v.len - v.pos)} left`]
+      : [v.start && weekday(new Date(v.start)), v.duration > 0 && dur(v.duration)])));
 }
 
 // how much of it you've watched: a thin line along the bottom of the artwork
@@ -107,7 +111,7 @@ function row(title, id, cards, sub = '') {
 export const short = v => { const m = v.title.match(/practice\s*(\d)/i); return m ? `FP${m[1]}` : /sprint (qualifying|shootout)/i.test(v.title) ? 'Sprint quali'
   : /sprint/i.test(v.title) ? 'Sprint' : /qualifying/i.test(v.title) ? 'Qualifying' : 'Race'; };
 export const sessionsOf = videos => videos.filter(v => ['Practice', 'Sprint quali', 'Sprint', 'Qualifying', 'Race', 'Live'].includes(tvLabel(v))
-  && /\bGP\b|grand prix/i.test(v.title) && !/highlights|show|warm-up|press/i.test(v.title)).sort((a, b) => (a.start ?? 0) - (b.start ?? 0));
+  && /\bGP\b|grand prix/i.test(v.title) && !/highlights|show|warm-up|press|kids/i.test(v.title)).sort((a, b) => (a.start ?? 0) - (b.start ?? 0));
 
 function billboard(v, r, videos = []) {
   const bill = $('sbill'), weekend = sessionsOf(videos);
@@ -116,17 +120,17 @@ function billboard(v, r, videos = []) {
   void bill.offsetWidth;  // restart the artwork's fade-in for the session picked
   bill.classList.add('swap');
   bill.replaceChildren(el('div', {class: 'sbilltext'},
-    live(v) ? el('span', {class: 'skicker live'}, 'Live now') : el('span', {class: 'skicker'}, `Round ${r.round}`, el('i', {class: 'sdot'}), r.raceName),
-    el('h1', {}, v.title),
-    el('p', {}, ...dots([!live(v) && tvLabel(v), v.start && when(new Date(v.start)), v.duration > 0 && dur(v.duration), v.tier && `F1 TV ${v.tier}`])),
-    // not connected: the main button connects (watching here), not a trip to F1 TV's site that rarely comes back
+    live(v) ? el('span', {class: 'skicker live'}, 'Live now') : el('span', {class: 'skicker'}, `Round ${r.round}`),
+    el('h1', {}, r.raceName),
+    el('p', {}, ...dots([named(v), v.start && when(new Date(v.start)), v.duration > 0 && dur(v.duration)])),
+    // not connected: the main button connects (watching here), not a trip to F1 TV's site that rarely comes back; the
+    // F1 TV link is only for then
     el('div', {class: 'sbillbtns'},
       S.linked ? el('button', {class: 'sprimary', onclick: () => watch(v, r)}, icon('play'), 'Play')
         : el('button', {class: 'sprimary', popovertarget: 'sconnectpanel'}, icon('play'), 'Watch here'),
-      el('a', {class: 'sghost', href: v.url, target: '_blank', rel: 'noopener', onclick: () => count('video_f1tv')}, 'Open on F1 TV', icon('ext'))),
+      !S.linked && el('a', {class: 'sghost', href: v.url, target: '_blank', rel: 'noopener', onclick: () => count('video_f1tv')}, 'Open on F1 TV', icon('ext'))),
     // the weekend at a glance: a chip per session puts it on the billboard
     weekend.length > 1 && el('div', {class: 'sweek', role: 'group', 'aria-label': 'This weekend'},
-      el('span', {}, 'This weekend'),
       ...weekend.map(x => el('button', {class: 'swchip', 'aria-pressed': String(x === v), onclick: () => billboard(x, r, videos)},
         live(x) && el('i', {class: 'swlive', 'aria-hidden': 'true'}), short(x))))));
 }
@@ -137,7 +141,10 @@ async function fill(rowEl, r, first) {
     const videos = await get(`/api/f1tv/${S.year}/${r.round}`);
     if (!rowEl.isConnected) return;
     if (!videos.length) return rowEl.remove();
-    rowEl.querySelector('.strack').replaceChildren(...videos.map(v => card(v, r)));
+    // the sessions only, the latest first, so a weekend's row leads with its race; F1 TV's shows, interviews and
+    // highlights stay on F1 TV (a weekend it has no sessions for shows whatever it has)
+    const sessions = sessionsOf(videos).reverse();
+    rowEl.querySelector('.strack').replaceChildren(...(sessions.length ? sessions : videos).map(v => card(v, r)));
     if (first) billboard(videos.find(live) ?? videos.find(v => tvLabel(v) === 'Race') ?? videos[0], r, videos);
   } catch (e) {
     if (rowEl.isConnected) rowEl.querySelector('.strack').replaceChildren(el('p', {class: 'empty err'}, e.message));
@@ -148,10 +155,10 @@ function build(year, races) {
   Object.assign(S, {year, races});
   const now = new Date();
   // Coming up: a schedule card per session, the grand prix and flag above, the session large, then when and how long until
-  const sched = upcoming(races, now).map(({r, name, d}) => el('div', {class: `sched${name === 'Race' ? ' race' : ''}`},
+  const sched = upcoming(races, now).map(({r, name, d}) => el('div', {class: 'sched'},
     el('div', {class: 'schedtop'}, flag(r['Circuit.Location.country'], 40), el('span', {}, r.raceName.replace(/ Grand Prix$/, ' GP'))),
     el('b', {}, name),
-    el('div', {class: 'schedbot'}, el('span', {}, when(d)), el('span', {class: 'scount'}, icon('clock'), until(d).replace(/^in /, '')))));
+    el('div', {class: 'schedbot'}, el('span', {}, when(d)), el('span', {class: 'scount'}, until(d)))));
   const weekends = races.filter(r => weekendStart(r) <= now).reverse();
   const rows = weekends.map(r => row([flag(r['Circuit.Location.country'], 40), r.raceName], `srow-${r.round}`,
     Array.from({length: 5}, () => el('div', {class: 'scard skel'}, el('div', {class: 'sthumb'}), el('b', {}), el('small', {}))), `Round ${r.round} · ${span(r)}`));

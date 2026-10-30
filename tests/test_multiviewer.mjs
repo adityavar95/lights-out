@@ -70,6 +70,7 @@ const wk = [
   {title: '2026 Mexico City GP - Practice 2', kind: 'LIVE', start: 2}, {title: '2026 Mexico City GP - Practice 1', kind: 'REPLAY', start: 1},
   {title: 'Practice 1 Highlights - Mexico City', kind: 'RACE HIGHLIGHTS', start: 1.5}, {title: '2026 Mexico City GP - Qualifying', kind: 'REPLAY', start: 4},
   {title: 'FIA Drivers Press Conference - Mexico', kind: 'PRESS CONFERENCE', start: 0.5}, {title: '2026 Mexico City GP - Sprint Qualifying', kind: 'REPLAY', start: 3},
+  {title: '2026 Mexico City GP - F1 Kids', kind: 'REPLAY', start: 5.1},  // the race again, for children: not a session of its own
 ];
 assert.deepEqual(sessionsOf(wk).map(short), ['FP1', 'FP2', 'Sprint quali', 'Qualifying', 'Race']);
 console.log('multiviewer renditions ok');

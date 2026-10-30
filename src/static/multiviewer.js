@@ -252,7 +252,8 @@ function markLightsOut() {
 // open the viewer on an F1 TV video ({id, title} from /api/f1tv/{year}/{round}, label: what it is, e.g. Qualifying)
 export async function openViewer(video) {
   if (!M) setup();
-  M.title.replaceChildren(video.label ? el('span', {class: `mvkicker${video.label === 'Live' ? ' live' : ''}`}, video.label) : '', video.title);
+  M.title.replaceChildren(video.label ? el('span', {class: `mvkicker${video.label === 'Live' ? ' live' : ''}`}, video.label) : '',
+    video.title.replace(/^\d{4}\s+/, ''));  // the season is in the page header already
   M.content = null;
   M.video = video;
   M.session = video.start && video.year >= 2023 ? sessionName(video) : null;
@@ -369,6 +370,7 @@ const PAD = 8, GAP = 6;
 function relayout() {
   const n = M.tiles.length, main = M.tiles.findIndex(t => t.root.classList.contains('big'));
   for (const t of M.tiles) t.close.hidden = n === 1;
+  M.layout.hidden = M.syncBtn.hidden = n < 2;  // a layout and lining streams up mean nothing with one stream
   for (const b of M.layout.children) b.setAttribute('aria-pressed', String((b === M.layout.lastChild) === (main >= 0 && n > 1)));
   if (!n) return void M.grid.replaceChildren(el('p', {class: 'empty'}, 'Add a stream to start watching.'));
   M.grid.querySelector(':scope > .empty')?.remove();
