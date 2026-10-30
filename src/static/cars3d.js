@@ -48,7 +48,7 @@ export function dataTex(size, fn, repeat = true) {
   t.magFilter = THREE.LinearFilter;
   t.minFilter = THREE.LinearMipmapLinearFilter;
   t.generateMipmaps = true;
-  t.anisotropy = 8;
+  t.anisotropy = 16;  // three clamps it to what the GPU supports
   if (repeat) t.wrapS = t.wrapT = THREE.RepeatWrapping;
   t.needsUpdate = true;
   return t;
@@ -92,15 +92,72 @@ const discDir = dataTex(128, (u, v) => {
 // From 2016 the finish is satin, no flakes: teams went matte to save the gloss's few hundred grams (Red Bull 2016,
 // Ferrari 2019, McLaren 2020). bare (2022+ procedural cars): below 0.24 m the bodywork is unpainted carbon, as teams
 // leave it to get down to the minimum weight; the RB22's model space is offset, so not there.
-function paintMat(color, year, bare = year >= 2022) {
+// Team liveries (2022+ cars; colour schemes only, no logos), in livery space: u along the car (0 rear, 1 nose tip),
+// v up (0 floor, 1 top of the airbox). base everywhere; second below the line v = low[0] + low[1] u and/or behind u = rear;
+// an accent band of half-width stripe[2] round v = stripe[0] + stripe[1] u, from u = stripe[3] for half the car's
+// length; nose: the tip's colour forward of u = 0.9. Matched on the team's name, first match wins.
+const LIVERIES = [
+  [/racing bulls|visa|^rb\b|rb f1|alphatauri|toro rosso/, {base: 0xf2f3f5, second: 0x1638c8, accent: 0xe4002b, rear: 0.52, stripe: [0.42, 0, 0.035, 0.12]}],
+  [/red bull/, {base: 0x1b2550, second: 0x0d1430, accent: 0xe4002b, low: [0.3, 0], stripe: [0.4, 0.06, 0.05, 0.22], nose: 0xffc906}],
+  [/mclaren/, {base: 0xff8000, second: 0x16181c, accent: 0x47c7fc, low: [0.32, 0], rear: 0.3, stripe: [0.6, -0.1, 0.012, 0.35]}],
+  [/ferrari/, {base: 0xd8000e, second: 0x111111, accent: 0xf6f6f6, low: [0.24, 0], stripe: [0.58, -0.18, 0.03, 0.25]}],
+  [/mercedes/, {base: 0xc5c9cd, second: 0x0d0e10, accent: 0x00d2be, low: [0.62, -0.5], stripe: [0.34, 0.12, 0.022, 0.3]}],
+  [/aston/, {base: 0x00594f, second: 0x033a32, accent: 0xcedc00, low: [0.28, 0], stripe: [0.44, 0.06, 0.03, 0.28]}],
+  [/alpine|renault/, {base: 0x0a6fd0, second: 0xff7eb6, accent: 0xf6f6f6, rear: 0.42, stripe: [0.5, -0.05, 0.02, 0.45], nose: 0xff7eb6}],
+  [/williams/, {base: 0x0b2b6e, second: 0x061c4a, accent: 0x00a3e0, low: [0.3, 0], stripe: [0.48, 0, 0.04, 0.2]}],
+  [/haas/, {base: 0xf0f1f2, second: 0x17181b, accent: 0xe10600, low: [0.45, -0.15], stripe: [0.45, -0.15, 0.03, 0.15], nose: 0xe10600}],
+  [/audi/, {base: 0xb6bbc0, second: 0x141517, accent: 0xe3000f, rear: 0.45, stripe: [0.4, 0, 0.03, 0.12], nose: 0xe3000f}],
+  [/kick|stake|sauber/, {base: 0x39e51f, second: 0x121212, accent: 0x39e51f, low: [0.42, -0.2], rear: 0.32}],
+  [/alfa romeo/, {base: 0xa40014, second: 0xf3f3f3, accent: 0x111111, rear: 0.45, stripe: [0.3, 0, 0.03, 0.5]}],
+  [/cadillac/, {base: 0x111214, second: 0xf2f2f2, accent: 0xc9a54d, rear: 0.5, stripe: [0.44, 0, 0.018, 0.2]}],
+];
+
+// The livery for a team (name), from LIVERIES or, before 2022 or for a team it lacks, one made from the team colour:
+// that colour over a darker lower body with a thin contrasting band. Colours as THREE.Color.
+export function livery(team, color, year) {
+  const hit = year >= 2022 && LIVERIES.find(([re]) => re.test((team ?? '').toLowerCase()))?.[1];
+  const L = hit || {base: color, second: new THREE.Color(color).multiplyScalar(0.45), accent: inkFor(color), low: [0.28, 0], stripe: [0.5, 0, 0.02, 0.2]};
+  const c = x => new THREE.Color(x);
+  return {base: c(L.base), second: c(L.second), accent: c(L.accent), nose: c(L.nose ?? L.base),
+          split: new THREE.Vector4(...(L.low ?? [-1, 0]), L.rear ?? -1, 0), stripe: new THREE.Vector4(...(L.stripe ?? [0, 0, 0, 0])),
+          noseAt: L.nose ? 0.9 : 2};
+}
+
+// mesh-local position -> livery space; box: the paint's bounds in the car's frame (x forward, y up, z across, metres),
+// toCar: mesh-local -> car frame
+function liveryFrame(box, toCar = new THREE.Matrix4()) {
+  const s = box.getSize(new THREE.Vector3()), w = Math.max(-box.min.z, box.max.z);
+  return new THREE.Matrix4().makeScale(1 / s.x, 1 / s.y, 1 / w).multiply(new THREE.Matrix4().makeTranslation(-box.min.x, -box.min.y, 0)).multiply(toCar);
+}
+
+// liv: livery(), painted in livery space (userData.toCar: mesh-local -> livery space, set by the car's builder). A map's
+// alpha marks what's painted on top (the RB22's race number) in its own colour.
+function paintMat(color, year, bare = year >= 2022, liv = livery(null, color, year)) {
   const satin = year >= 2016;
   const m = new THREE.MeshPhysicalMaterial(satin ? {color, metalness: 0.1, roughness: 0.5, clearcoat: 0.5, clearcoatRoughness: 0.3}
                                                  : {color, metalness: 0.45, roughness: 0.38, clearcoat: 1, clearcoatRoughness: 0.03});
+  const u = m.userData = {livery: true, toCar: {value: new THREE.Matrix4()}, uBase: {value: liv.base}, uSecond: {value: liv.second},
+                          uAccent: {value: liv.accent}, uNoseCol: {value: liv.nose}, uSplit: {value: liv.split}, uStripe: {value: liv.stripe},
+                          uNoseAt: {value: liv.noseAt}};
   m.onBeforeCompile = s => {
     s.uniforms.uBare = {value: bare ? 0.24 : -1};
+    Object.assign(s.uniforms, {uToCar: u.toCar, uBase: u.uBase, uSecond: u.uSecond, uAccent: u.uAccent, uNoseCol: u.uNoseCol,
+                               uSplit: u.uSplit, uStripe: u.uStripe, uNoseAt: u.uNoseAt});
     s.vertexShader = 'varying vec3 vObj;\n' + s.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\nvObj = position;');
-    s.fragmentShader = 'uniform float uBare;\nvarying vec3 vObj;\n' + s.fragmentShader
-      .replace('#include <map_fragment>', `#include <map_fragment>
+    s.fragmentShader = `uniform float uBare, uNoseAt;\nuniform vec3 uBase, uSecond, uAccent, uNoseCol;\nuniform vec4 uSplit, uStripe;
+      uniform mat4 uToCar;\nvarying vec3 vObj;\n` + s.fragmentShader
+      .replace('#include <map_fragment>', `
+        vec3 lp = (uToCar * vec4(vObj, 1.0)).xyz;
+        float aa = fwidth(lp.x) + fwidth(lp.y);  // a pixel in livery space: edges anti-aliased, not stair-stepped
+        vec3 liv = mix(uBase, uSecond, max(smoothstep(aa, -aa, lp.y - uSplit.x - uSplit.y * lp.x), smoothstep(aa, -aa, lp.x - uSplit.z)));
+        float band = smoothstep(aa, -aa, abs(lp.y - uStripe.x - uStripe.y * lp.x) - uStripe.z)
+                   * smoothstep(-aa, aa, lp.x - uStripe.w) * smoothstep(aa, -aa, lp.x - uStripe.w - 0.5);
+        liv = mix(mix(liv, uAccent, band), uNoseCol, smoothstep(-aa, aa, lp.x - uNoseAt));
+        #ifdef USE_MAP
+          vec4 painted = texture2D(map, vMapUv);
+          liv = mix(liv, painted.rgb, painted.a);
+        #endif
+        diffuseColor.rgb = liv;
         float bare = 1.0 - smoothstep(uBare - 0.004, uBare + 0.004, vObj.y);
         diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.008, 0.0085, 0.01), bare);`)
       .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = mix(roughnessFactor, 0.32, bare);')
@@ -417,9 +474,11 @@ function contactShadows(body, blob, len, width, tyres) {
 // that the renderer switches per camera. Both levels share the procedural car's tyre-stripe and rear-light materials,
 // so setTyre and the light flash drive both. The returned parts (body, eye, cameras, effects anchors) are the RB22's,
 // plus wheels / steeringWheel / mirrors for scene3d.js to animate.
-function withRB22(far, color, num, blob, dist) {
-  const near = buildRB22({paint: paintMat(0xffffff, 2026, false), color, accent: inkFor(color), num, stripe: far.stripe, light: far.light,
-                          helmet: new THREE.Color(color).lerp(new THREE.Color(0xffffff), 0.55)});
+function withRB22(far, color, num, blob, dist, liv) {
+  const near = buildRB22({paint: paintMat(0xffffff, 2026, false, liv), accent: liv.accent, ink: inkFor(liv.nose), num,
+                          stripe: far.stripe, light: far.light, helmet: new THREE.Color(color).lerp(new THREE.Color(0xffffff), 0.55)});
+  near.paintMesh.updateWorldMatrix(true, false);  // the car's frame: its group isn't in a scene yet
+  near.paintMesh.material.userData.toCar.value.copy(liveryFrame(new THREE.Box3().setFromObject(near.paintMesh), near.paintMesh.matrixWorld));
   const shadow = contactShadows(near.body, blob, near.len, near.width, near.hubs);
   const lod = new THREE.LOD(), group = new THREE.Group();
   lod.addLevel(near.group, 0);
@@ -432,9 +491,11 @@ function withRB22(far, color, num, blob, dist) {
 // returns {group, body, halo, stripe, light, discs (brake-glow materials), len, wb, eye, look, tcam, tcamLook, exhaust, plank, fronts}; blob: soft
 // contact-shadow texture; far: scene units beyond which a 2026+ car switches from the RB22 model to the procedural one,
 // and past 5 x far (~250 m, a car under ~15 px) every car is only its paint and tyres: 2 draw calls instead of ~12
-export function buildCar(color, num, year, blob, far = Infinity) {
-  const t = templates[spec(year).era] ??= build(year);
-  const paint = paintMat(color, year);
+export function buildCar(color, num, year, blob, far = Infinity, team = null) {
+  const t = templates[spec(year).era] ??= build(year), liv = livery(team, color, year);
+  const paint = paintMat(color, year, year >= 2022, liv);
+  t.geo.paint.boundingBox ?? t.geo.paint.computeBoundingBox();
+  paint.userData.toCar.value.copy(liveryFrame(t.geo.paint.boundingBox));  // the era's geometry is in the car's frame
   const own = {
     paint, disc: discMat(), stripe: new THREE.MeshStandardMaterial({color: 0xd8d8d8, roughness: 0.7}),
     helmet: new THREE.MeshPhysicalMaterial({color: new THREE.Color(color).lerp(new THREE.Color(0xffffff), 0.55), roughness: 0.25, clearcoat: 1}),
@@ -474,5 +535,5 @@ export function buildCar(color, num, year, blob, far = Infinity) {
   };
   const car = {group, body, halo, stripe: own.stripe, light: own.light, discs: [own.disc], len: s.len, wb: s.wb, eye: t.eye, look: t.look, tcam: t.tcam,
                tcamLook: t.tcamLook, exhaust: t.exhaust, plank: t.plank, fronts: t.fronts, dispose};
-  return s.era >= 2026 && rb22Ready() ? withRB22(car, color, num, blob, far) : car;
+  return s.era >= 2026 && rb22Ready() ? withRB22(car, color, num, blob, far, liv) : car;
 }

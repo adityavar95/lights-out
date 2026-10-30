@@ -84,9 +84,9 @@ export async function satellite(corners, maxPx) {
   // willReadFrequently: a CPU canvas. A GPU one's ImageBitmap belongs to the worker's GPU context and went invalid when the
   // worker ended (black ground, 'invalid mailbox name' GL errors)
   const canvas = new OffscreenCanvas((b[0] - a[0] + 1) * 256, (b[1] - a[1] + 1) * 256), g = canvas.getContext('2d', {willReadFrequently: true});
-  const jobs = [];
+  const jobs = [], get = (url, retry = 1) => fetch(url).catch(e => (retry ? get(url, retry - 1) : Promise.reject(e)));  // a network blip
   for (let x = a[0]; x <= b[0]; x++) for (let y = a[1]; y <= b[1]; y++) {
-    jobs.push(fetch(`${TILES}/${z}/${y}/${x}`).then(r => (r.ok ? r.blob() : null)).then(blob => blob && createImageBitmap(blob))
+    jobs.push(get(`${TILES}/${z}/${y}/${x}`).then(r => (r.ok ? r.blob() : null)).then(blob => blob && createImageBitmap(blob))
       .then(img => img && g.drawImage(img, (x - a[0]) * 256, (y - a[1]) * 256), () => {}));
   }
   await Promise.all(jobs);

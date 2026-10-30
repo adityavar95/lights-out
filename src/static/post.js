@@ -9,7 +9,7 @@ import {UnrealBloomPass} from 'three/addons/postprocessing/UnrealBloomPass.js';
 import {OutputPass} from 'three/addons/postprocessing/OutputPass.js';
 import {SMAAPass} from 'three/addons/postprocessing/SMAAPass.js';
 
-const EXPOSURE = 1 / 60;  // simulated camera shutter time, s
+const EXPOSURE = 1 / 100;  // simulated camera shutter time, s: a broadcast camera's (1/60 smeared fast pans and the ground)
 
 // Motion vectors: every object is drawn with this frame's and last frame's model-view-projection, and the difference of
 // the two projected positions is how far that surface moved on screen this frame. That covers camera motion (the view
@@ -56,7 +56,7 @@ const blurShader = {
     uniform mat4 uReproj;
     varying vec2 vUv;
     const int TAPS = 12;
-    const float MAX_LEN = 0.035;  // of the screen
+    const float MAX_LEN = 0.025;  // of the screen
     vec2 motion(vec2 uv) {
       vec4 v = texture2D(tVelocity, uv);
       if (v.a < 0.5) {
@@ -136,10 +136,10 @@ const caShader = {
     }`,
 };
 
-export function createPost(renderer, scene, camera) {
-  // 4x MSAA in a half-float target: anti-aliases geometry edges (wishbones, fences, track lines) and keeps HDR values
-  // above 1 for bloom; the OutputPass tone maps at the end
-  const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(1, 1, {type: THREE.HalfFloatType, samples: 4}));
+export function createPost(renderer, scene, camera, samples = 4) {
+  // MSAA (4x, 8x on a strong GPU) in a half-float target: anti-aliases geometry edges (wishbones, fences, track lines) and
+  // keeps HDR values above 1 for bloom; the OutputPass tone maps at the end
+  const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(1, 1, {type: THREE.HalfFloatType, samples}));
   const velocity = new THREE.WebGLRenderTarget(1, 1, {type: THREE.HalfFloatType});  // half resolution is plenty for blur
   const velMat = new THREE.ShaderMaterial({...velocityShader, side: THREE.DoubleSide});
   const prev = new WeakMap(), prevVP = new THREE.Matrix4(), prevRot = new THREE.Matrix4(), rot = new THREE.Matrix4();

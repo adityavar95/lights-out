@@ -39,12 +39,8 @@ def openf1(path: str) -> list:
             continue
         if r.status_code == 404:  # OpenF1 answers 404 for "no results"
             return []
-        if r.status_code in (401, 403):
-            try:
-                detail = r.json().get("detail")
-            except ValueError:
-                detail = None
-            raise OpenF1Locked(detail or "OpenF1 locks free access while a session is live; try again once it ends.")
+        if r.status_code in (401, 403):  # OpenF1's own text is a sales pitch with a payment link: ours, shown on the page
+            raise OpenF1Locked("Car data comes once the session ends: OpenF1 locks it while a session is live.")
         r.raise_for_status()
         return r.json()
     raise ReplayUnavailable("OpenF1 rate limit hit, try again in a minute.")

@@ -3,7 +3,6 @@
 // ground plane (scene x, z); heights become scene y. One instance per track; dispose() frees it on a circuit switch.
 import * as THREE from 'three';
 import {CSS2DObject} from 'three/addons/renderers/CSS2DRenderer.js';
-import {mergeGeometries, mergeVertices} from 'three/addons/utils/BufferGeometryUtils.js';
 import {asphalt, NOISE} from './track3d.js';
 import {racingLine} from './sim.js';
 import {garages} from './pit3d.js';
@@ -171,11 +170,14 @@ export function buildCircuit(world, {pts, map, tex, width, startKnown, ann, corn
   ground.computeVertexNormals();
   ground.computeBoundingSphere();
   tex.grass.repeat.set(EDGE * 2 * map.mps / 50, EDGE * 2 * map.mps / 50);  // one 50 m tile
+  for (const k of ['normalMap', 'roughnessMap']) tex.ground[k].repeat.setScalar(EDGE * 2 * map.mps / 3);  // the photo is 3 m across
   // the 50 m tile alone is one flat green from any height: world-space noise at ~160 m and ~40 m adds lush and dry
   // patches (darker blue-green, lighter straw), so the land reads at overview and helicopter distances
   // Satellite imagery (satellite()) replaces that over the area it covers, fading out at its edges; the grass tile's
   // grain stays on it as fine detail the ~1 m imagery can't show up close.
-  const grass = mat({map: tex.grass});
+  // tufts and soil in the light from a photographed ground's normal and roughness (textures3d.js ground), under any colour
+  const grass = mat({map: tex.grass, normalMap: tex.ground.normalMap, roughnessMap: tex.ground.roughnessMap},
+                    0xffffff, {normalScale: new THREE.Vector2(0.9, 0.9)});
   Object.assign(grass.userData, {sat: {value: null}, satM: {value: new THREE.Matrix3()}, satOn: {value: 0}, satMean: {value: new THREE.Color()}});
   grass.onBeforeCompile = sh => {
     Object.assign(sh.uniforms, {uMps: {value: map.mps}, uSat: grass.userData.sat, uSatM: grass.userData.satM, uSatOn: grass.userData.satOn,
@@ -233,7 +235,9 @@ export function buildCircuit(world, {pts, map, tex, width, startKnown, ann, corn
   let walls = [];
   // a 1.1 m barrier along frames Fr at offsets o, and the 3 m debris fence on top of it
   const wallAndFence = (Fr, o, closed) => [add(strip(Fr, o, 0, 0, barrier, closed, 8, map.mps, m(1.1))),
-    Object.assign(add(strip(Fr, o, 0, m(1.1), fence, closed, 4, map.mps, m(3))), {castShadow: true})];
+    onLayer1(Object.assign(add(strip(Fr, o, 0, m(1.1), fence, closed, 4, map.mps, m(3))), {castShadow: true}))];
+  // the fence is cut out by alpha too: on layer 1 like the tree crowns (see there), or it's a solid grey wall to AO and blur
+  function onLayer1(o) { o.layers.set(1); return o; }
   // offs[side]: lateral offset of that side's barrier at each outline point, null for an opening (pitLane moves them)
   const barriers = offs => {
     for (const w of walls) { world.remove(w); w.geometry.dispose(); owned.splice(owned.indexOf(w), 1); }
@@ -281,15 +285,24 @@ export function buildCircuit(world, {pts, map, tex, width, startKnown, ann, corn
     }
   }
 
-  // --- trees on the terrain, 20-160 m off the track: tiered conifers and lumpy broadleaf crowns, smooth-shaded ---
-  const trunkGeo = new THREE.CylinderGeometry(m(0.35), m(0.5), m(3), 6).translate(0, m(1.5), 0);
-  const coneGeo = crown(mergeGeometries([[3.2, 4.6, 5.2], [2.5, 3.8, 7.4], [1.7, 3.2, 9.4]]
-    .map(([r, h, y]) => new THREE.ConeGeometry(m(r), m(h), 12, 2).translate(0, m(y), 0).deleteAttribute('uv'))), m(7), 0.08);
-  const leafGeo = crown(new THREE.IcosahedronGeometry(m(3.6), 3).scale(1, 0.85, 1).translate(0, m(5.6), 0).deleteAttribute('uv'), m(5.6), 0.22);
+  // --- trees on the terrain, 20-160 m off the track: conifers and broadleaf crowns of leaf cards (textures3d.js
+  // foliage), cut out by alpha. Alpha-to-coverage turns the cut edges into MSAA coverage, so leaves are anti-aliased. ---
+  const trunkGeo = new THREE.CylinderGeometry(m(0.22), m(0.42), m(7), 7).translate(0, m(3.5), 0);
+  seed = 11;
+  const coneGeo = conifer(m), leafGeo = broadleaf(m);
   const N = 1500, mtx = new THREE.Matrix4();
   const trunks = new THREE.InstancedMesh(trunkGeo, new THREE.MeshStandardMaterial({color: 0x4a3a2a, roughness: 1}), N);
-  const crownMat = new THREE.MeshStandardMaterial({roughness: 0.95, vertexColors: true});
+  const crownMat = new THREE.MeshStandardMaterial({map: tex.foliage, alphaTest: 0.5, alphaToCoverage: true, side: THREE.DoubleSide,
+                                                   roughness: 0.8, vertexColors: true});
+  // a card's back face keeps the crown's outward normal: three flips it for back faces, which lit half the leaves from inside
+  crownMat.onBeforeCompile = sh => {
+    sh.fragmentShader = sh.fragmentShader.replace('#include <normal_fragment_begin>', '#include <normal_fragment_begin>\nnormal *= faceDirection;');
+  };
   const cones = new THREE.InstancedMesh(coneGeo, crownMat, N), leaves = new THREE.InstancedMesh(leafGeo, crownMat, N);
+  // Layer 1: left out of the motion-vector and ambient-occlusion passes, which draw with one override material and no
+  // alpha cut-out, so every card came out a solid square there (dark AO boxes, smeared blur round the crowns)
+  cones.layers.set(1);
+  leaves.layers.set(1);
   cones.count = leaves.count = 0;  // filled below
   const clear = (half + wall + m(10)) ** 2, sample = p3.filter((_, i) => i % (2 * every) === 0);
   seed = 7;
@@ -302,9 +315,10 @@ export function buildCircuit(world, {pts, map, tex, width, startKnown, ann, corn
     mtx.makeRotationY(rand() * Math.PI * 2).scale(new THREE.Vector3(s, s, s)).setPosition(x, groundAt(x, z) - m(0.3), z);
     trunks.setMatrixAt(k++, mtx);
     crowns.setMatrixAt(crowns.count, mtx);
-    // HSL in sRGB: in three's linear working space these lightnesses come out pastel
-    crowns.setColorAt(crowns.count++, new THREE.Color().setHSL(conifer ? 0.3 + rand() * 0.06 : 0.22 + rand() * 0.08,
-      0.35 + rand() * 0.25, conifer ? 0.17 + rand() * 0.07 : 0.23 + rand() * 0.09, THREE.SRGBColorSpace));  // darker reads as black from above
+    // HSL in sRGB, times the foliage texture's greens: in three's linear working space these lightnesses come out pastel
+    // conifers dark and blue-green (lighter ones came out lime)
+    crowns.setColorAt(crowns.count++, new THREE.Color().setHSL(conifer ? 0.34 + rand() * 0.06 : 0.2 + rand() * 0.08,
+      conifer ? 0.2 + rand() * 0.15 : 0.3 + rand() * 0.25, conifer ? 0.27 + rand() * 0.07 : 0.5 + rand() * 0.12, THREE.SRGBColorSpace));
   }
   trunks.count = k;
   for (const t of [trunks, cones, leaves]) add(t).castShadow = true;
@@ -443,25 +457,74 @@ export function buildCircuit(world, {pts, map, tex, width, startKnown, ann, corn
   };
 }
 
-// Tree crown: vertices welded (smooth normals), pushed out from the trunk axis by lumps (sums of sines in the vertex
-// direction, `lumpy` x radius, continuous so welded vertices agree), and a vertex colour that multiplies the instance
-// colour: self-shadowed underside and core darker, sunlit top brighter, the shading foliage gets from its own depth.
-function crown(geo, cy, lumpy) {
-  const g = mergeVertices(geo.deleteAttribute('normal')), p = g.attributes.position, col = [], v = new THREE.Vector3();
-  const box = new THREE.Box3().setFromBufferAttribute(p), y0 = box.min.y, y1 = box.max.y;
-  for (let i = 0; i < p.count; i++) {
-    v.fromBufferAttribute(p, i);
-    const r = Math.hypot(v.x, v.z), d = v.clone().setY(v.y - cy).normalize();
-    const lump = 1 + lumpy * (Math.sin(3.1 * d.x + 1.7) * Math.sin(3.4 * d.y + 0.4) * Math.sin(2.9 * d.z + 2.1)
-                              + 0.5 * Math.sin(7.3 * d.x + 4.2 * d.z) * Math.sin(6.1 * d.y + 1.3));
-    p.setXYZ(i, v.x * lump, cy + (v.y - cy) * (0.6 + 0.4 * lump), v.z * lump);
-    const up = (v.y - y0) / (y1 - y0), out = Math.min(1, r / (box.max.x || 1));
-    const k = (0.5 + 0.45 * up) * (0.8 + 0.25 * out);
-    col.push(k, k, k);
+// Tree crowns as leaf cards: quads [corner, edge u, edge v] with atlas uv rectangles. Normals point out of the crown's
+// shape (from `centre` of each vertex, scaled by the crown's radii), not the card's own facing, so the crown shades as one
+// soft volume, lit side and shadowed side, instead of a pile of flat quads. Vertex colour darkens the inside and underside:
+// the occlusion foliage gets from its own depth. Atlas: v = 0 is the canvas's top row (textures3d.js foliage).
+function cards(quads, normalOf, shadeOf) {
+  const pos = [], nor = [], uv = [], col = [], idx = [], v = new THREE.Vector3();
+  for (const [o, a, b, [u0, v0, u1, v1]] of quads) {
+    const base = pos.length / 3;
+    for (const [s, t, cu, cv] of [[0, 0, u0, v1], [1, 0, u1, v1], [1, 1, u1, v0], [0, 1, u0, v0]]) {
+      v.copy(o).addScaledVector(a, s).addScaledVector(b, t);
+      pos.push(v.x, v.y, v.z);
+      const n = normalOf(v);
+      nor.push(n.x, n.y, n.z);
+      uv.push(cu, cv);
+      const k = shadeOf(v);
+      col.push(k, k, k);
+    }
+    idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
   }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
   g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
-  g.computeVertexNormals();
+  g.setIndex(idx);
   return g;
+}
+
+// a random unit vector, and two unit vectors square to it and each other
+function basis() {
+  const z = rand() * 2 - 1, a = rand() * 2 * Math.PI, n = new THREE.Vector3(Math.sqrt(1 - z * z) * Math.cos(a), z, Math.sqrt(1 - z * z) * Math.sin(a));
+  const e = new THREE.Vector3().crossVectors(n, Math.abs(n.y) < 0.9 ? UP : new THREE.Vector3(1, 0, 0)).normalize();
+  return [n, e, new THREE.Vector3().crossVectors(n, e)];
+}
+
+// broadleaf: ~3.8 x 3.2 m ellipsoid crown centred 6 m up, 60 cards of 2.4-3.4 m, most of them in its outer shell
+function broadleaf(m) {
+  const C = new THREE.Vector3(0, m(6), 0), R = new THREE.Vector3(m(3.8), m(3.2), m(3.8)), quads = [];
+  for (let i = 0; i < 60; i++) {
+    const [d] = basis(), at = C.clone().add(d.clone().multiply(R).multiplyScalar(0.35 + 0.6 * Math.cbrt(rand())));
+    const s = m(2.4 + rand() * 1), [, e2, f2] = basis();
+    quads.push([at.clone().addScaledVector(e2, -s / 2).addScaledVector(f2, -s / 2), e2.multiplyScalar(s), f2.multiplyScalar(s), [0, 0, 0.5, 1]]);
+  }
+  const rel = v => v.clone().sub(C).divide(R);
+  return cards(quads, v => rel(v).normalize(), v => { const r = rel(v); return Math.min(1, (0.45 + 0.55 * Math.min(1, r.length())) * (0.78 + 0.22 * r.y)); });
+}
+
+// conifer: tiers of branch sprays from 1.8 m to the 11 m top, each spray from the trunk out (the atlas's trunk end at
+// u = 0.5) and drooping, 2-3.4 m long low down, shorter up the tree
+function conifer(m) {
+  const quads = [], top = 11, low = 1.8;
+  for (let y = low; y < top - 0.4; y += 0.55) {
+    const reach = 0.35 + 3.1 * (1 - (y - low) / (top - low)), n = Math.max(5, Math.round(5 + reach * 2)), spin = rand() * 2 * Math.PI;
+    for (let j = 0; j < n; j++) {
+      const a = spin + (j + 0.4 * rand()) / n * 2 * Math.PI, droop = 0.25 + 0.25 * rand(), L = m(reach * (0.95 + 0.25 * rand()));
+      const out = new THREE.Vector3(Math.cos(a) * Math.cos(droop), -Math.sin(droop), Math.sin(a) * Math.cos(droop));
+      // across the spray: tangential, rolled ~35 degrees up so it reads from the side as well as from above
+      const side = new THREE.Vector3(-Math.sin(a), 0, Math.cos(a)).applyAxisAngle(out, 0.6 * (rand() - 0.5) + 0.6);
+      const w = L * 0.9, root = new THREE.Vector3(0, m(y), 0).addScaledVector(side, -w / 2);
+      quads.push([root, out.multiplyScalar(L), side.multiplyScalar(w), [0.5, 0, 1, 1]]);
+    }
+  }
+  for (let j = 0; j < 2; j++) {  // the leader: two crossed upright sprays at the top
+    const a = j * Math.PI / 2, e = new THREE.Vector3(Math.cos(a), 0, Math.sin(a)), h = m(2.2);
+    quads.push([new THREE.Vector3(0, m(top - 2), 0).addScaledVector(e, -h / 2), new THREE.Vector3(0, h, 0), e.clone().multiplyScalar(h), [0.5, 0, 1, 1]]);
+  }
+  return cards(quads, v => new THREE.Vector3(v.x, m(1.2), v.z).normalize(),
+               v => { const out = Math.min(1, Math.hypot(v.x, v.z) / m(2.5)), up = v.y / m(top); return Math.min(1, (0.5 + 0.5 * out) * (0.8 + 0.25 * up)); });
 }
 
 function gantry(f, w, m, tex, mps) {

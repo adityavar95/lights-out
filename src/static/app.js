@@ -295,6 +295,7 @@ async function init() {
   $('themebtn').onclick = () => setTheme(THEMES[(THEMES.findIndex(x => x[0] === document.documentElement.dataset.theme) + 1) % THEMES.length][0]);
   document.addEventListener('click', e => { const th = e.target.closest('table.data th'); if (th) sortTable(th); });
   if (location.hash.startsWith('#f1tv=')) {  // back from formula1.com through the F1 TV Connect bookmarklet (multiviewer.js)
+    count('f1tv_connected');
     try {
       sessionStorage.setItem('f1tv', location.hash.slice(6));
       history.replaceState(null, '', sessionStorage.getItem('f1tv-back') || location.pathname);

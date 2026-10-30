@@ -50,3 +50,30 @@ export function lanes(cars, len, half) {
   for (const id in out) out[id] = clamp(out[id], -max, max);
   return out;
 }
+
+// GPS replays: OpenF1 positions are metres off and not quite in sync between cars, so two cars side by side or in a close
+// pass land on top of each other. cars: [{id, x, y, dx, dy}]: position (m, map axes, y down) and unit direction of travel.
+// sides: {pair: +1 / -1}, the caller's between frames: which side of the first car the second keeps until they're apart
+// again, taken when they first need the room, so a noisy gap never flips one through the other. Each car of an overlapping pair moves
+// half the overlap across its direction; the room needed tapers to nothing over 3 m past a car length. Returns {id: [ex, ey]} m.
+export function apart(cars, sides) {
+  const out = {}, room = CAR_W + 0.4;
+  for (const c of cars) out[c.id] = [0, 0];
+  for (let pass = 0; pass < 3; pass++) {  // chains: a pair pushed apart can push into a third car
+    for (let i = 0; i < cars.length; i++) for (let j = i + 1; j < cars.length; j++) {
+      const a = cars[i], b = cars[j], key = a.id + '|' + b.id, ea = out[a.id], eb = out[b.id];
+      const rx = b.x + eb[0] - a.x - ea[0], ry = b.y + eb[1] - a.y - ea[1];
+      if (Math.hypot(rx, ry) > CAR_L + 10) { if (pass === 0) delete sides[key]; continue; }
+      const ds = Math.abs(rx * a.dx + ry * a.dy), dl = rx * a.dy - ry * a.dx;  // along a's direction; + = b on a's left
+      const need = ds <= CAR_L ? room : ds >= CAR_L + 3 ? 0 : room * (0.5 + 0.5 * Math.cos(Math.PI * (ds - CAR_L) / 3));
+      if (need === 0) continue;
+      const side = sides[key] ??= Math.sign(dl) || 1;  // taken once alongside: by then the passer has pulled out
+      const push = side * need - dl;  // what b still has to move left of a (and a right of b)
+      if (push * side <= 0) continue;
+      const [nx, ny] = [a.dy * push / 2, -a.dx * push / 2];  // a's left normal (map y down), half each
+      eb[0] += nx; eb[1] += ny;
+      ea[0] -= nx; ea[1] -= ny;
+    }
+  }
+  return out;
+}

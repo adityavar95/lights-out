@@ -119,7 +119,7 @@ function showTeam() {
     D.stats.replaceChildren(badge('CONSTRUCTORS', `P${c.position}${D.year === 2026 ? ' so far' : ''}`), badge('WINS', c.wins), badge('POINTS', c.points),
       el('div', {class: 'csdrivers'}, names.join(' · ')));
   }
-  show(teamColor(id), D.year);
+  show(teamColor(id), D.year, c?.['Constructor.name'] ?? id);
 }
 
 // ---------- 360° preview: its own small renderer, drawn only while the deck is open ----------
@@ -153,16 +153,17 @@ function preview() {
   P = {renderer, scene, camera, controls, blob: new THREE.CanvasTexture(c), car: null, mats: [], raf: 0, token: 0};
 }
 
-async function show(color, year) {
+async function show(color, year, team) {
   const token = ++P.token;
   if (year >= 2026) await loadRB22().catch(() => {});  // the procedural 2026 car if the model can't load
   if (token !== P.token) return;
   if (P.car) { P.scene.remove(P.car.group); P.car.dispose(); P.mats.forEach(m => m.dispose()); }
-  P.car = buildCar(color, null, year, P.blob);
+  P.car = buildCar(color, null, year, P.blob, Infinity, team);
   // Clones: era and model materials are shared with the race scene, where scene3d.js patches them for its cascaded
-  // shadows (and keeps their compiled uniforms); copy() leaves that patch behind.
+  // shadows (and keeps their compiled uniforms); copy() leaves that patch behind. The livery paint is this car's own
+  // (never in the race scene), and a clone would lose its livery shader.
   P.mats = [];
-  P.car.group.traverse(o => { if (o.isMesh) P.mats.push(o.material = o.material.clone()); });
+  P.car.group.traverse(o => { if (o.isMesh && !o.material.userData.livery) P.mats.push(o.material = o.material.clone()); });
   P.scene.add(P.car.group);
   loop();
 }

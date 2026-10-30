@@ -4,8 +4,8 @@
 // feed or driver, as many as you like. The selected tile has the sound and is what Sync lines the others up with.
 // Each tile picks its video quality and audio track from every rendition in the stream, and can carry a see-through
 // telemetry overlay (speed, gear, RPM, throttle, brake, DRS) from OpenF1 car data (2023+ sessions).
-import {get, el, tvHeaders} from './util.js';
-import {controls} from './tvcontrols.js';
+import {get, el, tvHeaders, count} from './util.js';
+import {controls, icon} from './tvcontrols.js';
 
 const SHAKA = 'https://cdn.jsdelivr.net/npm/shaka-player@4.12.6/dist/';
 const FIRST = ['INTERNATIONAL', 'F1 LIVE', 'TRACKER', 'DATA'];  // feed order in the picker
@@ -21,8 +21,12 @@ let M = null, shakaReady = null;
 
 // OpenF1's name for the session an F1 TV video shows, or null (shows, highlights, interviews have no car data)
 export function sessionName(v) {
-  if (v.label === 'Practice') return `Practice ${v.title.match(/(?:practice|fp)\s*(\d)/i)?.[1] ?? 1}`;
-  return SESSIONS[v.label] ?? null;
+  // a live video is labelled just Live (stream.js): its title says which session, as a replay's label does
+  const t = v.title ?? '', label = v.label !== 'Live' ? v.label : /sprint (qualifying|shootout)/i.test(t) ? 'Sprint quali'
+    : /sprint/i.test(t) ? 'Sprint' : /qualifying/i.test(t) ? 'Qualifying' : /practice|\bfp\d/i.test(t) ? 'Practice'
+    : /grand prix|\bgp\b/i.test(t) ? 'Race' : null;  // a live studio show (The Cooldown Room…) has none
+  if (label === 'Practice') return `Practice ${t.match(/(?:practice|fp)\s*(\d)/i)?.[1] ?? 1}`;
+  return SESSIONS[label] ?? null;
 }
 
 // telemetry at a wall-clock time (s since epoch) from /api/f1tv/telemetry's grid, or null outside it / in a data gap
@@ -93,7 +97,8 @@ export function connectPanel(id, onChange) {
   const back = JSON.stringify(`${location.origin}${location.pathname}#f1tv=`);
   const mark = `javascript:(()=>{const m=document.cookie.match(/login-session=([^;]+)/),t=m&&JSON.parse(decodeURIComponent(m[1])).data?.subscriptionToken;if(t)location.href=${back}+t;else alert('Sign in on formula1.com with an F1 TV subscription first, then click this bookmark again.')})()`;
   const stash = () => { try { sessionStorage.setItem('f1tv-back', location.hash); } catch (e) {} };
-  return el('div', {class: 'mvconnect', popover: '', id, 'aria-label': 'Connect F1 TV'},
+  return el('div', {class: 'mvconnect', popover: '', id, 'aria-label': 'Connect F1 TV',
+    ontoggle: e => e.newState === 'open' && count('connect_open')},
     el('h3', {}, 'Connect F1 TV'),
     el('p', {}, "Sign in on F1's own site, like MultiViewer: your password never reaches this app, nothing is saved on the server, and the connection lasts until you close this tab."),
     el('ol', {},
@@ -106,22 +111,38 @@ export function connectPanel(id, onChange) {
 function setup() {
   M = {tiles: [], content: null, video: null, offset: 0};
   M.syncOut = el('output', {class: 'mvoffset'});
-  M.lights = el('button', {class: 'mvbtn', hidden: true, title: 'Press the moment the start lights go out: lines the data up with the video',
-    onclick: lightsOut}, '🏁 Lights out');
+  M.lights = el('button', {class: 'mvmi', hidden: true, title: 'Shift+click as the lights go out on screen to line the data up with the video',
+    onclick: e => { M.more.hidePopover(); lightsOut(e); }}, icon('flag'), el('span', {}, 'Jump to the start', el('small', {}, '10 s before lights out')));
   M.datasync = el('div', {class: 'mvsync', role: 'group', 'aria-label': 'Telemetry sync with the video'},
     el('span', {}, 'Data'), [-10, -1, 1, 10].map(d => el('button', {title: `Data ${Math.abs(d)} s ${d < 0 ? 'earlier' : 'later'}`,
-      onclick: () => setOffset(M.offset + d)}, `${d > 0 ? '+' : '−'}${Math.abs(d)}s`)), M.syncOut, M.lights);
-  M.grid = el('div', {class: 'mvgrid'});
+      onclick: () => setOffset(M.offset + d)}, `${d > 0 ? '+' : '−'}${Math.abs(d)}`)), M.syncOut);
+  M.grid = el('div', {class: 'mvgrid', tabindex: '-1', autofocus: ''});  // showModal focuses it: no focus ring on the first button
+  new ResizeObserver(() => relayout()).observe(M.grid);  // tiles are placed in pixels: again on every size change
   M.account = el('button', {class: 'mvaccount', popovertarget: 'mvconnect'});
   M.connect = connectPanel('mvconnect', showAccount);
   M.title = el('h2', {});
-  M.picker = el('div', {class: 'mvpicker', popover: '', id: 'mvpicker', 'aria-label': 'Add a stream'});
-  M.addBtn = el('button', {class: 'mvbtn mvadd', popovertarget: 'mvpicker', title: 'Add a stream: any feed or driver onboard'}, '＋ Add stream');
-  M.playBtn = el('button', {class: 'mvbtn', title: 'Play or pause every stream together (lined up first)', onclick: playPauseAll}, '⏯ All');
-  M.syncBtn = el('button', {class: 'mvbtn', title: 'Line every stream up with the selected one', onclick: sync}, '⟲ Sync');
-  M.uhd = (() => { try { return localStorage.getItem('f1tv-uhd') === '1'; } catch (e) { return false; } })();
-  M.uhdBtn = el('button', {class: 'mvbtn mv4k', 'aria-pressed': M.uhd, onclick: toggleUhd,
-    title: '4K: the main broadcast and F1 Live locked to 2160p50 HDR (15 Mb/s each); onboards, tracker and data stay up to 1080p'}, '4K');
+  // one stream picker, for adding a stream (Add stream) or switching one (a tile's label): M.pickFor is the tile, or null
+  M.pickTitle = el('h3', {}, 'Add a stream');
+  M.picker = el('div', {class: 'mvpicker mvpop', popover: '', id: 'mvpicker', 'aria-label': 'Choose a stream'});
+  M.addBtn = el('button', {class: 'mvbtn mvadd', popovertarget: 'mvpicker', title: 'Add a stream: any feed or driver onboard',
+    onclick: () => { M.pickFor = null; M.pickAt = M.addBtn; M.pickTitle.textContent = 'Add a stream'; }}, icon('plus'), 'Add stream');
+  M.playBtn = el('button', {class: 'mvmi', onclick: () => { M.more.hidePopover(); playPauseAll(); }},
+    icon('playall'), el('span', {}, 'Play or pause all', el('small', {}, 'Lined up with the selected stream first')));
+  M.syncBtn = el('button', {class: 'mvbtn', title: 'Line every stream up with the selected one', onclick: sync}, icon('sync'), 'Sync');
+  M.teams = el('div', {class: 'mvteams mvpop', popover: '', id: 'mvteams', 'aria-label': 'Team view'});
+  M.teamBtn = el('button', {class: 'mvbtn', popovertarget: 'mvteams', title: "Team view: the race feed with a team's two onboards"}, icon('teams'), 'Teams');
+  M.more = el('div', {class: 'mvmore mvpop', popover: '', id: 'mvmore', 'aria-label': 'More'});
+  M.moreBtn = el('button', {class: 'mvbtn mvicon', popovertarget: 'mvmore', title: 'More', 'aria-label': 'More'}, icon('more'));
+  // Apple's two layouts: every stream the same size, or the selected one big with the others beside it
+  const seg = (name, title, focus) => el('button', {title, 'aria-label': title, 'aria-pressed': String(!focus), onclick: () => setFocus(focus)}, icon(name));
+  M.layout = el('div', {class: 'mvseg', role: 'group', 'aria-label': 'Layout'},
+    seg('grid', 'Grid: every stream the same size', false), seg('spot', 'Focus: the selected stream big, the others beside it', true));
+
+  // 4K on unless it was switched off here (the decoder check below turns it off where the browser can't play it)
+  M.uhd = (() => { try { return localStorage.getItem('f1tv-uhd') !== '0'; } catch (e) { return true; } })();
+  M.uhdBtn = el('button', {class: 'mvmi', role: 'switch', 'aria-checked': String(M.uhd), onclick: toggleUhd,
+    title: 'The main broadcast and F1 Live in 2160p50 HDR where F1 TV has it (15 Mb/s each); every stream plays its highest quality either way'},
+    el('b', {class: 'mvbadge'}, '4K'), el('span', {}, '4K HDR', el('small', {}, 'Main feed in 2160p where F1 TV has it')), el('i', {class: 'mvtoggle'}));
   // F1 TV's 4K is HEVC Main10 at 2160p50: browsers without a decoder for it (Firefox, Chrome without GPU HEVC) can't play it
   navigator.mediaCapabilities?.decodingInfo({type: 'media-source', video: {contentType: 'video/mp4; codecs="hvc1.2.4.L153.B0"',
     width: 3840, height: 2160, bitrate: 15360000, framerate: 50}}).then(r => {
@@ -130,22 +151,59 @@ function setup() {
     M.uhdBtn.title = "This browser can't decode F1 TV's 4K video (HEVC 10-bit). Open the app in Microsoft Edge (with Microsoft's HEVC Video Extensions) or in Chrome on a GPU that decodes HEVC 10-bit.";
     if (M.uhd) toggleUhd();
   }, () => {});
-  M.picker.addEventListener('toggle', e => {  // opens under its button
+  anchor(M.picker, () => M.pickAt ?? M.addBtn);
+  anchor(M.teams, () => M.teamBtn);
+  anchor(M.more, () => M.moreBtn);
+  // the picker marks what's on screen already, and the stream a tile shows when it's switching that tile
+  M.picker.addEventListener('beforetoggle', e => {
     if (e.newState !== 'open') return;
-    const r = M.addBtn.getBoundingClientRect();
-    Object.assign(M.picker.style, {left: `${Math.max(8, Math.min(r.left, innerWidth - M.picker.offsetWidth - 8))}px`, top: `${r.bottom + 6}px`});
+    for (const b of M.picker.querySelectorAll('[data-ch]')) {
+      b.classList.toggle('on', M.tiles.some(t => t.pick.value === b.dataset.ch));
+      b.classList.toggle('cur', M.pickFor?.pick.value === b.dataset.ch);
+    }
   });
+  M.more.replaceChildren(M.playBtn, M.lights, M.uhdBtn,
+    M.syncRow = el('div', {class: 'mvmisync'}, el('span', {}, 'Telemetry sync', el('small', {}, 'Move the data to match the video')), M.datasync),
+    el('hr', {}), M.account);
   M.dlg = el('dialog', {class: 'mv', 'aria-label': 'F1 TV multiviewer', onclose: () => {
+    remember(true);
     // the close event comes a task later: if the viewer was reopened meanwhile, its new tiles stay
     if (!M.dlg.open) for (const t of M.tiles.splice(0)) drop(t);
   }},
-    el('header', {class: 'mvhead'}, M.title, M.account, M.addBtn, M.playBtn, M.syncBtn, M.uhdBtn, M.datasync,
-      el('button', {class: 'mvbtn', 'aria-label': 'Close', onclick: () => M.dlg.close()}, '✕')),
-    M.grid, M.picker, M.connect);
+    el('header', {class: 'mvhead'},
+      el('button', {class: 'mvbtn mvicon', title: 'Close (Esc)', 'aria-label': 'Close', onclick: () => M.dlg.close()}, icon('close')),
+      el('div', {class: 'mvtitle'}, M.title),
+      el('div', {class: 'mvtools'}, M.layout, M.teamBtn, M.syncBtn, M.addBtn, M.moreBtn)),
+    M.grid, M.picker, M.teams, M.more, M.connect);
   document.body.append(M.dlg);
   M.dlg.addEventListener('pointerdown', e => {  // an open ⚙ menu closes on a click anywhere else
     for (const d of M.dlg.querySelectorAll('.mvset[open]')) if (!d.contains(e.target)) d.open = false;
   });
+}
+
+function anchor(pop, at) {
+  pop.addEventListener('toggle', e => {
+    if (e.newState !== 'open') return;
+    const r = at().getBoundingClientRect(), w = pop.offsetWidth, h = pop.offsetHeight;
+    const top = r.bottom + 8 + h > innerHeight - 8 ? Math.max(8, r.top - 8 - h) : r.bottom + 8;
+    Object.assign(pop.style, {left: `${Math.max(8, Math.min(r.left, innerWidth - w - 8))}px`, top: `${top}px`});
+  });
+}
+
+// Continue watching (stream.js): where the selected stream is in a replay, every 10 s while the viewer is open and when
+// it closes; in this browser's localStorage only. Live sessions and the first 30 s aren't kept.
+const WATCH = 'f1tv-watch';
+export function watched() {
+  try { return JSON.parse(localStorage.getItem(WATCH)) || []; } catch (e) { return []; }
+}
+function remember(closing = false) {
+  const l = lead(), v = M?.video;
+  if (v && l?.player && !l.player.isLive() && l.video.duration > 0 && l.video.currentTime >= 30) {
+    const e = {id: v.id, title: v.title, img: v.img, kind: v.kind, year: v.year, round: v.round, start: v.start, end: v.end, duration: v.duration,
+      url: v.url, tier: v.tier, pos: Math.round(l.video.currentTime), len: Math.round(l.video.duration), at: Date.now()};
+    try { localStorage.setItem(WATCH, JSON.stringify([e, ...watched().filter(x => x.id !== v.id)].slice(0, 30))); } catch (err) { /* storage off */ }
+  }
+  if (closing) dispatchEvent(new CustomEvent('f1:watched'));
 }
 
 // the video's data offset, kept per video in this browser
@@ -159,14 +217,30 @@ const videoT0 = () => M.video.start / 1000 - LEAD + M.offset;
 // 4K on/off for every tile, each reloaded where it is
 function toggleUhd() {
   M.uhd = !M.uhd;
-  M.uhdBtn.setAttribute('aria-pressed', M.uhd);
+  M.uhdBtn.setAttribute('aria-checked', String(M.uhd));
   try { localStorage.setItem('f1tv-uhd', M.uhd ? '1' : '0'); } catch (e) { /* storage off: lasts this visit */ }
   for (const t of M.tiles) load(t, t.player && !t.player.isLive() ? t.video.currentTime : undefined);
 }
 const lead = () => M.tiles.find(t => t.root.classList.contains('audio')) ?? M.tiles[0];
 
-// pressed as the lights go out on the selected tile: that moment becomes the data's lights out
-function lightsOut() {
+// 🏁 Lights out: every tile jumps to 10 s before the start, found in a car's telemetry (its first launch after 20 s
+// stood still) and put on the video's clock. It used to only line the data up, which looked like it did nothing; that
+// is Shift+click now.
+async function lightsOut(e) {
+  if (e?.shiftKey) return markLightsOut();
+  let tel = M.tiles.find(x => x.tel)?.tel;
+  if (!tel) {  // no driver's data picked yet: any car's has the same start
+    const num = M.content?.streams.find(s => s.number)?.number;
+    tel = num && await get(`/api/f1tv/telemetry/${M.video.year}/${M.video.round}/${num}?session=${encodeURIComponent(M.session)}`).catch(() => null);
+  }
+  const at = tel && launchAt(tel, M.video.start / 1000);
+  if (at == null) return void (M.syncOut.value = 'no start found');
+  const to = Math.max(0, at - videoT0() - 10);
+  for (const t of M.tiles) if (t.player && !t.player.isLive()) t.video.currentTime = to;
+}
+
+// Shift+🏁, pressed as the lights go out on the selected tile: that moment becomes the data's lights out
+function markLightsOut() {
   const l = lead(), t = [l, ...M.tiles].find(x => x?.tel), at = t && launchAt(t.tel, M.video.start / 1000);
   if (at == null) return void (M.syncOut.value = 'pick a driver');
   const shift = at - (videoT0() + l.video.currentTime);
@@ -178,13 +252,14 @@ function lightsOut() {
 // open the viewer on an F1 TV video ({id, title} from /api/f1tv/{year}/{round}, label: what it is, e.g. Qualifying)
 export async function openViewer(video) {
   if (!M) setup();
-  M.title.textContent = video.label ? `${video.label} · ${video.title}` : video.title;
+  M.title.replaceChildren(video.label ? el('span', {class: `mvkicker${video.label === 'Live' ? ' live' : ''}`}, video.label) : '', video.title);
   M.content = null;
   M.video = video;
   M.session = video.start && video.year >= 2023 ? sessionName(video) : null;
-  M.datasync.hidden = !M.session;
+  M.syncRow.hidden = !M.session;
   M.lights.hidden = !['Race', 'Sprint'].includes(M.session);
   M.addBtn.disabled = true;
+  M.teamBtn.hidden = true;
   setOffset((() => { try { return +localStorage.getItem(`f1tv-sync-${video.id}`) || 0; } catch (e) { return 0; } })());
   M.dlg.showModal();
   dispatchEvent(new CustomEvent('f1:panel', {detail: M.dlg}));  // the circuits / cars / trace panels close (and stop drawing)
@@ -203,24 +278,39 @@ export async function openViewer(video) {
   }
   M.grid.replaceChildren();
   fillPicker();
+  // Team view: a card per team in its colour, its two drivers under its name
+  const teams = [...M.content.streams.filter(s => s.type === 'obc' && s.team)
+    .reduce((m, s) => m.set(s.team, [...(m.get(s.team) ?? []), s]), new Map())];
+  M.teams.replaceChildren(el('h3', {}, 'Team view'), el('p', {class: 'mvhint'}, "The race feed big, with the team's two onboards beside it"),
+    el('div', {class: 'mvteamgrid'}, teams.map(([team, ds]) => el('button', {style: `--c:${ds[0].hex || '#888'}`,
+      onclick: () => { M.teams.hidePopover(); teamView(team); }}, el('b', {}, team), el('small', {}, ds.map(d => d.title).join(' · '))))));
+  M.teamBtn.hidden = !teams.length;
   M.addBtn.disabled = false;
-  addTile(M.content.streams[0], first);  // one screen to start; ＋ adds the rest
+  addTile(M.content.streams[0], first, video.resumeAt);  // one screen to start (where you left off); Add stream adds the rest
 }
 
-// the ＋ menu: every feed, then every driver as a chip in team colours
+// the stream picker: every feed, then every driver as a card in team colours; adds a tile, or switches the one it opened from
 function fillPicker() {
   const feeds = M.content.streams.filter(s => s.type !== 'obc'), drivers = M.content.streams.filter(s => s.type === 'obc');
-  const pick = s => () => { M.picker.hidePopover(); addTile(s); };
-  M.picker.replaceChildren(
-    el('h4', {}, 'Feeds'), el('div', {class: 'mvfeeds'}, feeds.map(s => el('button', {onclick: pick(s)}, streamName(s)))),
+  const key = s => String(s.channelId ?? '');
+  const pick = s => () => {
+    M.picker.hidePopover();
+    const t = M.pickFor;
+    if (!t) return addTile(s);
+    if (t.pick.value !== key(s)) { t.pick.value = key(s); t.pick.onchange(); }
+  };
+  M.picker.replaceChildren(M.pickTitle,
+    el('h4', {}, 'Feeds'), el('div', {class: 'mvfeeds'}, feeds.map(s => el('button', {'data-ch': key(s), onclick: pick(s)}, streamName(s)))),
     drivers.length ? el('h4', {}, 'Driver onboards') : null,
-    el('div', {class: 'mvdrivers'}, drivers.map(s => el('button', {style: `--c:${s.hex || '#888'}`, onclick: pick(s), title: `${s.driver ?? s.title} · ${s.team ?? ''}`},
+    el('div', {class: 'mvdrivers'}, drivers.map(s => el('button', {'data-ch': key(s), style: `--c:${s.hex || '#888'}`, onclick: pick(s), title: `${s.driver ?? s.title} · ${s.team ?? ''}`},
       el('b', {}, s.number ?? ''), el('span', {}, s.title), el('small', {}, s.team ?? '')))));
 }
 
-function addTile(s, prefetch = null) {
+// at: where it starts (s): a replay resumed from Continue watching
+function addTile(s, prefetch = null, at = undefined) {
   const t = tile(s);
   t.prefetch = prefetch;
+  t.startAt = at;
   M.tiles.push(t);
   M.grid.append(t.root);
   relayout();
@@ -236,21 +326,80 @@ function removeTile(t) {
   if (had && M.tiles.length) listen(M.tiles[0]);
 }
 
-// as square a grid as the count allows (1, 2 side by side, 2×2, 3×3…), or with a main stream (⤢): it big on the left,
-// the others stacked beside it
-function relayout() {
-  const n = M.tiles.length;
-  M.grid.style.setProperty('--cols', n <= 1 ? 1 : Math.ceil(Math.sqrt(n)));
-  M.grid.style.setProperty('--rows', Math.max(1, n - 1));
-  M.grid.classList.toggle('spot', n > 1 && M.tiles.some(t => t.root.classList.contains('big')));
-  for (const t of M.tiles) t.close.hidden = n === 1;
-  if (!n) M.grid.replaceChildren(el('p', {class: 'empty'}, 'Add a stream with ＋ Add stream.'));
-  else M.grid.querySelector(':scope > .empty')?.remove();
+// Where each tile goes: [{x, y, w, h}] px, every tile 16:9 and as big as the space allows, `gap` apart. Grid: the column
+// count that gives the biggest tiles, rows centred (a short last row too). Focus (`main`: its index): it big, the others
+// as thumbnails in a column beside it or a row under it, whichever leaves it bigger. The old CSS grid split the window
+// into equal cells whatever their shape, so a 16:9 picture floated in black bands and a 4th stream sat alone in a row.
+export function arrange(n, W, H, gap = 6, main = -1) {
+  const R = 9 / 16, out = [];
+  if (!n || W <= 0 || H <= 0) return out;
+  if (main < 0 || main >= n || n === 1) {
+    let best = {w: 0};
+    for (let c = 1; c <= n; c++) {
+      const r = Math.ceil(n / c), w = Math.min((W - (c - 1) * gap) / c, (H - (r - 1) * gap) / r / R);
+      if (w > best.w) best = {w, c, r};
+    }
+    const {w, c, r} = best, h = w * R, y0 = (H - r * h - (r - 1) * gap) / 2;
+    for (let i = 0; i < n; i++) {
+      const row = Math.floor(i / c), inRow = Math.min(c, n - row * c), x0 = (W - inRow * w - (inRow - 1) * gap) / 2;
+      out.push({x: x0 + (i % c) * (w + gap), y: y0 + row * (h + gap), w, h});
+    }
+    return out;
+  }
+  const k = n - 1;
+  // beside: a column of thumbnails at most a quarter of the width; under: a row of them along the bottom
+  const tA = Math.min(W / 4, (H - (k - 1) * gap) / k / R), mA = Math.min(W - tA - gap, H / R);
+  const tB = Math.min(W / 4, (W - (k - 1) * gap) / k), mB = Math.min((H - tB * R - gap) / R, W);
+  const thumbs = [];
+  let big;
+  if (mA >= mB) {
+    const x0 = (W - mA - gap - tA) / 2, colH = k * tA * R + (k - 1) * gap;
+    big = {x: x0, y: (H - mA * R) / 2, w: mA, h: mA * R};
+    for (let j = 0; j < k; j++) thumbs.push({x: x0 + mA + gap, y: (H - colH) / 2 + j * (tA * R + gap), w: tA, h: tA * R});
+  } else {
+    const y0 = (H - mB * R - gap - tB * R) / 2, rowW = k * tB + (k - 1) * gap;
+    big = {x: (W - mB) / 2, y: y0, w: mB, h: mB * R};
+    for (let j = 0; j < k; j++) thumbs.push({x: (W - rowW) / 2 + j * (tB + gap), y: y0 + mB * R + gap, w: tB, h: tB * R});
+  }
+  for (let i = 0; i < n; i++) out.push(i === main ? big : thumbs.shift());
+  return out;
 }
 
+const PAD = 8, GAP = 6;
+function relayout() {
+  const n = M.tiles.length, main = M.tiles.findIndex(t => t.root.classList.contains('big'));
+  for (const t of M.tiles) t.close.hidden = n === 1;
+  for (const b of M.layout.children) b.setAttribute('aria-pressed', String((b === M.layout.lastChild) === (main >= 0 && n > 1)));
+  if (!n) return void M.grid.replaceChildren(el('p', {class: 'empty'}, 'Add a stream to start watching.'));
+  M.grid.querySelector(':scope > .empty')?.remove();
+  const {width, height} = M.grid.getBoundingClientRect();
+  arrange(n, width - 2 * PAD, height - 2 * PAD, GAP, n > 1 ? main : -1).forEach((r, i) => {
+    const st = M.tiles[i].root.style;
+    st.left = `${PAD + r.x}px`; st.top = `${PAD + r.y}px`; st.width = `${r.w}px`; st.height = `${r.h}px`;
+  });
+}
+
+// focus on a tile: it becomes the big one; again on the big one: back to the grid
 function spotlight(t) {
   const on = !t.root.classList.contains('big');
   for (const x of M.tiles) x.root.classList.toggle('big', on && x === t);
+  relayout();
+}
+
+// the header's layout switch: focus makes the selected stream (the one with the sound) big
+function setFocus(on) {
+  const big = M.tiles.find(t => t.root.classList.contains('big')) ?? lead();
+  for (const t of M.tiles) t.root.classList.toggle('big', on && t === big);
+  relayout();
+}
+
+// Apple's team view: the race feed big, the team's two onboards beside it; tiles already showing them stay as they are
+function teamView(team) {
+  const key = s => String(s.channelId ?? ''), feed = M.content.streams.find(s => s.type !== 'obc');
+  const want = [feed, ...M.content.streams.filter(s => s.type === 'obc' && s.team === team)].filter(Boolean);
+  for (const s of want) if (!M.tiles.some(t => t.pick.value === key(s))) addTile(s);
+  for (const t of [...M.tiles]) if (!want.some(s => key(s) === t.pick.value)) removeTile(t);
+  for (const t of M.tiles) t.root.classList.toggle('big', t.pick.value === key(feed));
   relayout();
 }
 
@@ -260,11 +409,15 @@ function tile(s) {
   const pick = el('select', {class: 'mvpick', 'aria-label': 'Stream in this tile'},
     el('optgroup', {label: 'Feeds'}, streams.filter(x => x.type !== 'obc').map(opt)),
     el('optgroup', {label: 'Onboards'}, streams.filter(x => x.type === 'obc').map(opt)));
-  const drv = el('select', {class: 'mvpick', 'aria-label': 'Driver data on this tile', title: 'Telemetry overlay', hidden: !M.session},
+  const drv = el('select', {'aria-label': 'Telemetry overlay on this tile'},
     new Option('Data off', ''), streams.filter(x => x.type === 'obc' && x.number).map(x => new Option(`${x.title} data`, x.number)));
   const vq = el('select', {'aria-label': 'Video quality'}), aq = el('select', {'aria-label': 'Audio track'});
   const t = {pick, drv, vq, aq, video: el('video', {playsinline: ''}), msg: el('p', {class: 'mvmsg'}), player: null,
-    hud: el('div', {class: 'mvtel', hidden: true, 'aria-hidden': 'true'}), now: el('small', {class: 'mvnow'})};
+    hud: el('div', {class: 'mvtel', hidden: true, 'aria-hidden': 'true'}), now: el('small', {class: 'mvnow'}),
+    radio: el('ol', {class: 'mvradio', hidden: true, 'aria-label': 'Team radio messages'})};
+  t.radioCount = el('span', {class: 'n'});
+  t.radioBtn = el('button', {class: 'mvibtn mvradiobtn', hidden: true, 'aria-pressed': 'false', title: "Team radio: show or hide this driver's messages",
+    'aria-label': 'Team radio', onclick: () => toggleRadio(t)}, icon('radio'), t.radioCount);
   t.video.muted = true;
   pick.onchange = () => {
     const x = streams.find(y => String(y.channelId ?? '') === pick.value);
@@ -273,21 +426,95 @@ function tile(s) {
   };
   drv.onchange = () => telemetry(t);
   vq.onchange = aq.onchange = () => applyQuality(t);
-  t.close = el('button', {class: 'mvbtn', title: 'Remove this stream', 'aria-label': 'Remove this stream', onclick: () => removeTile(t)}, '✕');
+  t.close = el('button', {class: 'mvibtn', title: 'Remove this stream', 'aria-label': 'Remove this stream', onclick: () => removeTile(t)}, icon('close'));
+  t.chipName = el('span', {class: 'mvchipname'}, streamName(s));
+  t.chip = el('button', {class: 'mvchip', title: 'Switch this stream', 'aria-haspopup': 'dialog',
+    onclick: () => { M.pickFor = t; M.pickAt = t.chip; M.pickTitle.textContent = 'Switch stream'; M.picker.showPopover(); }},
+    el('i', {class: 'mvteam'}), t.chipName, icon('down'));
   t.box = el('div', {class: 'mvvideo'}, t.video);
-  t.root = el('div', {class: 'mvtile', onpointerdown: () => listen(t)}, t.box, t.hud,
-    el('div', {class: 'mvbar'}, pick, drv,
-      el('details', {class: 'mvset'}, el('summary', {title: 'Video quality and audio track'}, '⚙'),
-        el('div', {class: 'mvsetpanel'}, el('label', {}, 'Video quality', vq), el('label', {}, 'Audio', aq), t.now)),
-      el('button', {class: 'mvbtn', title: 'Main stream: big, the others in a column beside it', 'aria-label': 'Make this the main stream',
-        onclick: () => spotlight(t)}, '⤢'), t.close),
-    el('span', {class: 'mvsound', title: 'Selected: has the sound, Sync lines the others up with it'}, '🔊'), t.msg);
+  // the top bar: the stream's label (team colour, number, driver; a menu to switch stream), then radio, settings, focus,
+  // remove; like the control bar it only shows while the mouse moves over the tile
+  t.root = el('div', {class: 'mvtile', onpointerdown: () => listen(t)}, t.box, t.hud, t.radio,
+    el('div', {class: 'mvbar'}, t.chip, el('span', {class: 'mvsp'}),
+      t.radioBtn,
+      el('details', {class: 'mvset'}, el('summary', {class: 'mvibtn', title: 'Quality, audio and telemetry', 'aria-label': 'Stream settings'}, icon('tune')),
+        el('div', {class: 'mvsetpanel'}, el('label', {}, 'Video quality', vq), el('label', {}, 'Audio', aq),
+          el('label', {hidden: !M.session}, 'Telemetry overlay', drv), t.now)),
+      el('button', {class: 'mvibtn', title: 'Focus: this stream big, the others beside it', 'aria-label': 'Focus on this stream',
+        onclick: () => spotlight(t)}, icon('focus')), t.close),
+    el('span', {class: 'mvsound', title: 'You hear this stream; Sync lines the others up with it'}, icon('vol')), t.msg);
   t.ctl = controls(t.video, t.root, () => t.player);
   t.root.append(t.ctl.bar);
   if (s.type === 'obc' && s.number) drv.value = s.number;
   telemetry(t);
   return t;
 }
+
+// A driver onboard's team radio (/api/f1tv/radio: F1's clips, transcribed on the server): the tile's 📻 button (with the
+// count so far) shows or hides a list of the messages to scroll through; feeds (International, F1 Live, tracker, data)
+// have none. Asked again every 8 s while clips are being transcribed, and all along on a live session, where F1 adds
+// each one ~30 s after it's said.
+async function radioFeed(t) {
+  clearTimeout(t.radioTimer);
+  const s = M.content.streams.find(x => String(x.channelId ?? '') === t.pick.value), num = s?.type === 'obc' && s.number;
+  if (t.radioNum !== num) { t.clips = null; t.radioShown = undefined; }
+  t.radioNum = num;
+  t.radioBtn.hidden = !num || !M.session;
+  t.radio.hidden = t.radioBtn.hidden || t.radioBtn.getAttribute('aria-pressed') !== 'true';
+  if (t.radioBtn.hidden) return;
+  try {
+    const r = await json(`/api/f1tv/radio/${M.video.year}/${M.video.round}/${num}?session=${encodeURIComponent(M.session)}`);
+    if (!M.tiles.includes(t) || t.radioNum !== num) return;  // closed or switched meanwhile
+    t.radioWords = r.transcribe;
+    // a transcribed clip with no words in it (a click, engine noise) isn't a message
+    t.clips = r.clips.filter(c => c.text !== '');
+    t.radioError = r.error;
+    if (r.pending || t.player?.isLive()) t.radioTimer = setTimeout(() => radioFeed(t), 8000);
+  } catch (e) {
+    t.radioError = e.message;
+  }
+}
+
+function toggleRadio(t) {
+  const on = t.radioBtn.getAttribute('aria-pressed') !== 'true';
+  t.radioBtn.setAttribute('aria-pressed', on);
+  t.radio.hidden = !on;
+  t.radioShown = undefined;  // drawn on the next frame, scrolled to the newest
+}
+
+// the messages said by the playhead's time (a live stream's own clock, a replay's via videoT0): a replay's list grows as
+// the video plays, so it never tells what's coming
+export function radioList(clips, wall) {
+  return clips.filter(c => c.t <= wall);
+}
+
+// One radio clip playing at a time, F1's audio fetched with this tab's F1 TV token (an <audio src> can't send it). Its
+// buttons (the box redraws every minute, so found by clip) show ■ while it plays; a second press stops it.
+let playing = null;
+const mark = (url, text, title) => M.dlg.querySelectorAll('.mvplay').forEach(b => {
+  if (b.dataset.url === url) { b.textContent = text; if (title) b.title = title; }
+});
+async function playClip(url) {
+  const same = playing?.url === url;
+  playing?.audio.pause();  // its onpause resets its buttons
+  if (same) return;
+  try {
+    const r = await fetch(`/api/f1tv/radio/audio?${new URLSearchParams({u: url})}`, {headers: tvHeaders()});
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || `HTTP ${r.status}`);
+    const src = URL.createObjectURL(await r.blob()), audio = new Audio(src);
+    playing = {url, audio};
+    mark(url, '■');
+    audio.onended = audio.onpause = () => {
+      URL.revokeObjectURL(src);
+      if (playing?.audio === audio) playing = null;
+      mark(url, '▶');
+    };
+    await audio.play();
+  } catch (e) {
+    mark(url, '!', e.message);
+  }
+}
+
 
 // the tile you touch is selected: it has the sound (like MultiViewer's audio focus) and is the one Sync follows
 function listen(t) {
@@ -296,7 +523,11 @@ function listen(t) {
     x.root.classList.toggle('audio', x === t);
   }
   const s = M.content.streams.find(x => String(x.channelId ?? '') === t.pick.value);
-  M.syncBtn.textContent = `⟲ Sync all to ${s?.type === 'obc' ? s.title : FEEDS[s?.title]?.split(' ')[0] ?? 'selected'}`;
+  M.syncBtn.title = `Line every stream up with ${s?.type === 'obc' ? s.title : FEEDS[s?.title] ?? 'the selected one'}`;
+  // the stream you hear: a bright ring as it changes, settling to a quiet one (YouTube TV, Apple TV multiview)
+  t.root.classList.add('flash');
+  clearTimeout(t.flashTimer);
+  t.flashTimer = setTimeout(() => t.root.classList.remove('flash'), 1800);
 }
 
 const playUrl = ch => `/api/f1tv/play/${M.content?.id ?? M.video.id}?${new URLSearchParams({...(ch ? {channel: ch} : {}), ...(M.uhd ? {uhd: 1} : {})})}`;
@@ -305,6 +536,8 @@ const playUrl = ch => `/api/f1tv/play/${M.content?.id ?? M.video.id}?${new URLSe
 async function load(t, at) {
   const ch = t.pick.value, s = M.content.streams.find(x => String(x.channelId ?? '') === ch);
   t.root.style.setProperty('--team', s?.hex || 'transparent');
+  t.chipName.textContent = s ? streamName(s) : '';
+  t.msg.className = 'mvmsg loading';
   t.msg.textContent = 'Loading…';
   try {
     const first = t.prefetch;  // the first tile's play request went out with the channel list
@@ -314,42 +547,65 @@ async function load(t, at) {
     if (!t.player) {
       t.player = new sh.Player();
       await t.player.attach(t.video);
-      // shortcut: live streams are Widevine DASH; the license header is untested (no live session while this was built)
+      // Live streams are Widevine DASH. The licence request goes through the server (/api/f1tv/license) with the account's
+      // tokens: straight from this page it was cross-origin and carried only the entitlement token, and failed.
+      // shortcut: only F1's own licence hosts go through it (the server refuses others); untested against a live session
       t.player.getNetworkingEngine().registerRequestFilter((type, req) => {
-        if (type === sh.net.NetworkingEngine.RequestType.LICENSE && t.ent) req.headers.entitlementtoken = t.ent;
+        if (type !== sh.net.NetworkingEngine.RequestType.LICENSE) return;
+        if (/(^|\.)formula1\.com$/.test(new URL(req.uris[0]).hostname)) {
+          req.uris = [new URL(`/api/f1tv/license?${new URLSearchParams({u: req.uris[0]})}`, location.href).href];
+          Object.assign(req.headers, tvHeaders(), t.ent ? {'X-F1-Entitlement': t.ent} : {});
+        } else if (t.ent) req.headers.entitlementtoken = t.ent;
       });
       t.player.addEventListener('variantchanged', () => showNow(t));
       t.player.addEventListener('adaptation', () => showNow(t));
     }
     t.ent = p.entitlementToken;
+    t.drm = !!p.laURL;  // live streams; replays carry no DRM
+    t.kind = p.streamType || '';  // a live stream's says whether it's 4K (HDR_UHD_…); a replay's is just DASH
+    t.no4k = null;
     t.hls = p.streamType === 'HLS';  // archive videos (seen on 1995, 2010, 2019): HLS H.264, 1080p at most, never 4K
     const uhd = M.uhd && hasUhd(s) && !t.hls;
-    t.player.configure({drm: {servers: p.laURL ? {'com.widevine.alpha': p.laURL} : {}}, preferredAudioLanguage: t.aq.value || 'en',
+    // an onboard opens on its team radio track (tea), a feed on the language picked before (English at first)
+    t.player.configure({drm: {servers: p.laURL ? {'com.widevine.alpha': p.laURL} : {}}, preferredAudioLanguage: s?.type === 'obc' ? 'tea' : t.aq.value || 'en',
       // 4K: shaka keeps one video set per stream and picks the cheaper one (HEVC Main, up to 1620p); the 2160p
       // renditions are only in the HEVC Main10 (HDR) set
       preferredVideoCodecs: M.uhd ? ['hvc1.2'] : [],
       // F1 TV's manifests say minBufferTime 30 s, so shaka waited for ~6 segments (5.8 s each) before the first frame
       // a 4K tile keeps 12 s behind the playhead (↺10 still lands in it), not 30 s: ~58 MB less memory per 4K stream
-      manifest: {dash: {ignoreMinBufferTime: true}}, streaming: {rebufferingGoal: 2, bufferBehind: uhd ? 12 : 30},
-      // abr sized to the tile (a small tile streams a small rendition, so many streams stay smooth), starting from the
-      // connection's speed rather than shaka's 1 Mb/s guess, which fetched the first segment twice; in 4K mode too for the
-      // streams without 4K (onboards), leaving the decoder and the bandwidth to the 4K ones
-      abr: {enabled: true, restrictToElementSize: !uhd, defaultBandwidthEstimate: (navigator.connection?.downlink || 10) * 0.7e6,
-        restrictions: {minHeight: uhd ? 2160 : 0}}});  // 4K: only 2160p from the first segment on
+      // 30 s ahead where the stream has it (a replay; live stops at the edge), to ride out a slow patch without stalling
+      manifest: {dash: {ignoreMinBufferTime: true}}, streaming: {rebufferingGoal: 2, bufferingGoal: 30, bufferBehind: uhd ? 12 : 30},
+      // Highest quality from the first segment, and it never steps down: a slow connection buffers rather than dropping
+      // resolution (the user's choice; ABR sized to the tile and stepped down). With ABR off shaka still picks the first
+      // rendition from the bandwidth estimate, so the estimate is set past any rendition (top: 2160p at 15.4 Mb/s).
+      abr: {enabled: false, restrictToElementSize: false, defaultBandwidthEstimate: 1e9, restrictions: {minHeight: 0}}});
     const l = lead();  // a new stream starts where the selected one is, playing or paused like it
     const join = l && l !== t && l.player && !l.player.isLive();
     // load straight at that time: loading from 0 and then seeking fetched the start of the session for nothing
-    await t.player.load(p.url, at ?? (join ? l.video.currentTime : undefined));
+    await t.player.load(p.url, at ?? t.startAt ?? (join ? l.video.currentTime : undefined));
+    t.startAt = undefined;
     t.msg.textContent = '';
     fillQuality(t);
-    if (M.uhd) lock4k(t);
+    lockTop(t);
+    radioFeed(t);
     // the selected one kept playing while this one buffered: catch up once it plays (usually inside what's buffered)
     if (join && at == null) t.video.addEventListener('playing', () => { if (!l.video.paused) t.video.currentTime = l.video.currentTime; }, {once: true});
     if (!l || l === t || !l.video.paused) t.video.play().catch(() => {});
   } catch (e) {
-    t.msg.textContent = e.code >= 6000 && e.code < 7000 ? 'This stream is DRM-protected and this browser has no Widevine: open it in Chrome or Edge.'
-      : e.code ? `Playback error ${e.code}` : e.message;
+    t.msg.className = 'mvmsg';
+    t.msg.textContent = playError(e);
   }
+}
+
+// What went wrong, in words. Only shaka's 6001 means no Widevine; the rest of its DRM errors (6000s) are a licence that
+// was refused or never came, which the old message blamed on the browser.
+export function playError(e) {
+  if (e.code === 6001) return 'This stream is DRM-protected and this browser has no Widevine: open it in Chrome or Edge.';
+  const http = [e, ...(e.data ?? [])].find(d => d?.code === 1001);  // BAD_HTTP_STATUS: [uri, status, response text, ...]
+  if (http) return `F1 TV refused the ${e.code >= 6000 && e.code < 7000 ? 'stream licence' : 'request'} (HTTP ${http.data[1]})`
+    + (http.data[2] ? `: ${String(http.data[2]).slice(0, 160)}` : '');
+  if (e.code >= 6000 && e.code < 7000) return `The stream's DRM licence failed (error ${e.code})`;
+  return e.code ? `Playback error ${e.code}` : e.message;
 }
 
 // the ⚙ menu: every video rendition and audio track the stream has
@@ -363,14 +619,21 @@ function fillQuality(t) {
 // the feeds F1 TV carries in 2160p (main broadcast, F1 Live); the tracker, data channel and onboards stop at 1080p
 const hasUhd = s => ['INTERNATIONAL', 'F1 LIVE', 'MAIN'].includes(s?.title);
 
-// 4K mode: a stream with a 2160p rendition is locked to it (Auto would size it to the tile and rarely pick it)
-function lock4k(t) {
+// Every stream is locked to its highest rendition (2160p where it has one), shown as picked in its ⚙ menu; the menu can
+// still choose another or Auto
+function lockTop(t) {
   const top = renditions(t.player.getVariantTracks()).video[0];
-  if (top?.height >= 2160 || (t.hls && top)) {  // an archive video has no 4K: 4K mode locks it to its best instead
+  const uhdFeed = hasUhd(M.content.streams.find(x => String(x.channelId ?? '') === t.pick.value));
+  if (top) {
     t.vq.value = top.id;
     applyQuality(t);
-  } else if (hasUhd(M.content.streams.find(x => String(x.channelId ?? '') === t.pick.value))) {
-    t.msg.textContent = 'No 4K here: this browser can’t decode F1 TV’s 4K (HEVC 10-bit) video.';
+  }
+  if (M.uhd && top && top.height < 2160 && !t.hls && uhdFeed) {
+    // it plays in HD: say why beside the quality, not over the picture. A live stream F1 TV sent in HD has no 4K to play
+    // (Mexico FP1 2026: F1 TV answered every 4K request with SDR_HD_DASHWV); one it sent in 4K but that has no 2160p here
+    // lost it to the DRM: the browser's Widevine generally won't decrypt 4K HEVC (needs hardware DRM)
+    t.no4k = !t.drm ? 'no 4K for this video' : /UHD/.test(t.kind) ? 'this browser’s DRM can’t play live 4K' : 'F1 TV sends this live stream in HD';
+    showNow(t);
   }
 }
 
@@ -378,7 +641,7 @@ function applyQuality(t) {
   const P = t.player, lang = t.aq.value;
   if (!P) return;
   if (lang) P.selectAudioLanguage(lang);
-  P.configure({abr: {enabled: !t.vq.value}});
+  P.configure({abr: {enabled: !t.vq.value, restrictToElementSize: !t.vq.value}});  // Auto (picked in ⚙) fits the tile
   if (t.vq.value) {
     const v = P.getVariantTracks().find(x => String(x.videoId) === t.vq.value && (!lang || x.language === lang));
     if (v) P.selectVariantTrack(v, true);
@@ -388,7 +651,8 @@ function applyQuality(t) {
 
 function showNow(t) {
   const v = t.player?.getVariantTracks().find(x => x.active);
-  if (v) t.now.textContent = `Playing ${v.height}p${Math.round(v.frameRate || 0) || ''} · ${langName(v.language)}`;
+  if (v) t.now.textContent = `Playing ${v.height}p${Math.round(v.frameRate || 0) || ''} · ${langName(v.language)}`
+    + (t.no4k && v.height < 2160 ? ` · HD only: ${t.no4k}` : '');
   t.root.classList.toggle('uhd', v?.height >= 2160);  // the tile's 4K badge
 }
 
@@ -411,7 +675,7 @@ async function telemetry(t) {
     t.tel = tel;
     t.shown = undefined;
   } catch (e) {
-    if (t.drv.value === num) t.hud.replaceChildren(name(), el('span', {class: 'lbl'}, e.message));
+    if (t.drv.value === num) t.hud.hidden = true;  // no data (a live session, before 2023): no panel, not an error on every tile
   }
 }
 
@@ -420,7 +684,26 @@ async function telemetry(t) {
 // the panel's place on the picture is CSS (.mvtel): reading tile sizes here forced a layout per tile per frame.
 function drawTelemetry() {
   M.raf = M.dlg.open ? requestAnimationFrame(drawTelemetry) : 0;
+  if (performance.now() - (M.savedAt ?? 0) > 10000) { M.savedAt = performance.now(); remember(); }
   for (const t of M.tiles) {
+    if (t.clips) {  // the onboard's 📻 count and radio list, touched only when its messages change
+      const live = t.player?.isLive(), wall = live ? (t.player.getPlayheadTimeAsDate?.()?.getTime() ?? 0) / 1000 : videoT0() + t.video.currentTime;
+      const said = radioList(t.clips, wall), key = said.map(c => `${c.t}${c.text}`).join() + (t.radioError ?? '');
+      if (key !== t.radioShown) {
+        t.radioShown = key;
+        t.radioCount.textContent = said.length || '';
+        if (!t.radio.hidden) {
+          const atEnd = t.radio.scrollHeight - t.radio.scrollTop - t.radio.clientHeight < 40;  // reading older ones: stay there
+          t.radio.replaceChildren(...said.map(c => el('li', {},
+            el('button', {class: 'mvplay', 'data-url': c.url, title: 'Play this radio message', 'aria-label': 'Play this radio message',
+              onclick: () => playClip(c.url)}, playing?.url === c.url ? '■' : '▶'),
+            el('time', {}, new Date(c.t * 1000).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit'})),
+            el('span', {}, c.text ?? (t.radioWords ? 'transcribing…' : 'Team radio')))),
+            ...(said.length ? [] : [el('li', {class: 'none'}, t.radioError ?? 'No radio yet')]));
+          if (atEnd) t.radio.scrollTop = t.radio.scrollHeight;
+        }
+      }
+    }
     if (!t.tel || !t.parts) continue;
     const r = t.player?.isLive() ? null : telAt(t.tel, videoT0() + t.video.currentTime), key = r && Object.values(r).join();
     if (key === t.shown) continue;

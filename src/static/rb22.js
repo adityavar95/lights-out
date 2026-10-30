@@ -158,11 +158,11 @@ const css = c => `#${new THREE.Color(c).getHexString()}`;
 // light text on dark paint and dark on light
 export const inkFor = paint => { const c = new THREE.Color(paint); return 0.299 * c.r + 0.587 * c.g + 0.114 * c.b > 0.45 ? 0x111418 : 0xf4f4f4; };
 
-// The car's paint texture: flat team colour, with the race number (if any) baked into the slot's texels.
-function paintTexture(color, accent, num, size = PAINT_SIZE) {
+// The car's paint texture: transparent (the paint shader draws the livery, cars3d.js), with the race number (if any) baked
+// into the slot's texels in `ink`, its alpha marking where.
+function paintTexture(ink, num, size = PAINT_SIZE) {
   const canvas = document.createElement('canvas'); canvas.width = canvas.height = size;
-  const ctx = canvas.getContext('2d');
-  ctx.fillStyle = css(color); ctx.fillRect(0, 0, size, size);
+  const ctx = canvas.getContext('2d'), accent = ink;
   if (num !== null && num !== undefined) {
     const PX = 800, lw = Math.ceil(NUMBER.w * PX), lh = Math.ceil(NUMBER.h * PX), label = document.createElement('canvas');
     label.width = lw; label.height = lh;
@@ -173,13 +173,13 @@ function paintTexture(color, accent, num, size = PAINT_SIZE) {
     const src = l.getImageData(0, 0, lw, lh).data, image = ctx.getImageData(0, 0, size, size), out = image.data, {idx, s, t} = texels;
     for (let i = 0; i < idx.length; i++) {
       const x = Math.min(lw - 1, Math.floor((s[i] / NUMBER.w + 0.5) * lw)), y = Math.min(lh - 1, Math.floor((0.5 - t[i] / NUMBER.h) * lh));
-      const q = (y * lw + x) * 4, a = src[q + 3] / 255, o = idx[i] * 4;
-      for (let k = 0; k < 3; k++) out[o + k] = src[q + k] * a + out[o + k] * (1 - a);  // the paint underneath is opaque
+      const q = (y * lw + x) * 4, o = idx[i] * 4;
+      for (let k = 0; k < 4; k++) out[o + k] = src[q + k];  // ink, and its coverage as alpha
     }
     ctx.putImageData(image, 0, 0);
   }
   const texture = new THREE.CanvasTexture(canvas);
-  Object.assign(texture, {colorSpace: THREE.SRGBColorSpace, flipY: false, wrapS: THREE.RepeatWrapping, wrapT: THREE.RepeatWrapping, anisotropy: 8});
+  Object.assign(texture, {colorSpace: THREE.SRGBColorSpace, flipY: false, wrapS: THREE.RepeatWrapping, wrapT: THREE.RepeatWrapping, anisotropy: 16});
   return texture;
 }
 
@@ -202,12 +202,12 @@ function wheelDecals(map) {
 
 // ---------- one car ----------
 
-// paint: the car's own paint material (cars3d.js's two-lobe flake paint, white so the texture carries the colour);
-// color / accent / helmet: hex; num: race number or null; stripe / light: materials shared with the far LOD level
-// (tyre-compound rings, rear light). Call only once rb22Ready().
-// Returns {group, body, halo, wheels: [{pivot, spin, front}], steeringWheel, mirrors, discs (brake-glow materials), tyre:
-// [r, w], len, wb, width, eye, look, tcam, tcamLook, exhaust, plank, fronts, hubs, dispose}.
-export function buildRB22({paint, color, accent, helmet, num, stripe, light}) {
+// paint: the car's own paint material (cars3d.js's livery paint; this adds the race number as its map);
+// accent: the livery's accent (trim, helmet band); ink: the number's colour; helmet: colour; num: race number or null;
+// stripe / light: materials shared with the far LOD level (tyre-compound rings, rear light). Call only once rb22Ready().
+// Returns {group, body, halo, paintMesh, wheels: [{pivot, spin, front}], steeringWheel, mirrors, discs (brake-glow
+// materials), tyre: [r, w], len, wb, width, eye, look, tcam, tcamLook, exhaust, plank, fronts, hubs, dispose}.
+export function buildRB22({paint, accent, ink, helmet, num, stripe, light}) {
   const car = new THREE.Group(), root = template.clone(true), own = [];
   root.rotation.y = Math.PI / 2;  // model nose +z, left +x -> car nose +x, right +z
   car.add(root);
@@ -215,7 +215,7 @@ export function buildRB22({paint, color, accent, helmet, num, stripe, light}) {
 
   let paintMesh; root.traverse(o => { if (o.isMesh && o.material.name.startsWith('redbull_paint')) paintMesh = o; });
   texels ??= slotTexels(paintMesh, NUMBER);
-  Object.assign(paint, {map: paintTexture(color, accent, num), side: THREE.DoubleSide});
+  Object.assign(paint, {map: paintTexture(ink, num), side: THREE.DoubleSide});
   own.push(paint, paint.map);
   const accentMats = new Map(), discMats = new Map();
   root.traverse(o => {
@@ -295,7 +295,7 @@ export function buildRB22({paint, color, accent, helmet, num, stripe, light}) {
       if (o.isMesh && (o.name.startsWith('mirror-') || o.geometry.type !== 'BufferGeometry')) o.geometry.dispose();  // clones, rings, helmet
     });
   };
-  return {group: car, body, halo: new THREE.Group(), wheels, steeringWheel, mirrors: MIRRORS.map(n => root.getObjectByName(n)), discs: [...discMats.values()],
+  return {group: car, body, halo: new THREE.Group(), paintMesh, wheels, steeringWheel, mirrors: MIRRORS.map(n => root.getObjectByName(n)), discs: [...discMats.values()],
           tyre: [hubs[0][2], hubs[0][3]], len: all.max.x - all.min.x, wb: fx - rx, width: all.max.z - all.min.z, hubs,
           eye, look: new THREE.Vector3(eye.x + 15, 0.55, 0), tcam, tcamLook: new THREE.Vector3(tcam.x + 15, 0.4, 0),
           exhaust: new THREE.Vector3(lamp + 0.1, 0.42, 0), plank: [rx + 0.2, fx - 1.0],

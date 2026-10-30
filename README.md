@@ -48,7 +48,7 @@ uv sync
 uv run python src/server.py
 ```
 
-Open **http://127.0.0.1:8086**.
+Open **http://127.0.0.1:8086** on this computer. To access it from another device on the same Wi-Fi or LAN, open **http://<this-computer-ip>:8086** there (for example, `http://192.168.1.25:8086`). If Windows Firewall prompts you, allow access on private networks.
 
 > The first replay of a GPS session downloads every car's trace from OpenF1 and takes 20–60 seconds. Finished sessions are then cached in `.cache/replay/` and load instantly.
 
@@ -70,7 +70,7 @@ Table endpoints return `{"columns": [...], "data": [[...]], "total": n}`, capped
 | `GET /api/live/track` | Outline and mini-sectors of the live session's circuit |
 | `GET /api/live/table/{topic}` | One live topic (e.g. `TimingData`) as a table |
 
-FastAPI's interactive docs are at **http://127.0.0.1:8086/docs**.
+FastAPI's interactive docs are at **http://127.0.0.1:8086/docs** (or **http://<this-computer-ip>:8086/docs** from another LAN device).
 
 ## Project structure
 

@@ -53,6 +53,17 @@ def _clean_loop(x: list, y: list, idx: list) -> tuple:
     for i in range(1, len(x)):
         if math.hypot(x[i] - x[keep[-1]], y[i] - y[keep[-1]]) >= 10:  # decimetres
             keep.append(i)
+    # a point the outline doubles back at (over 150 degrees between its two segments): Monaco's ran 2.4 m backwards and on
+    # again near Rascasse, a zig-zag that folded the road mesh. A real hairpin turns ~40 degrees a point at most.
+    k = 1
+    while k < len(keep) - 1 and len(keep) > 3:
+        a, b, c = keep[k - 1], keep[k], keep[k + 1]
+        ux, uy, vx, vy = x[b] - x[a], y[b] - y[a], x[c] - x[b], y[c] - y[b]
+        if ux * vx + uy * vy < -0.866 * math.hypot(ux, uy) * math.hypot(vx, vy):
+            del keep[k]
+            k = max(1, k - 1)  # the point before may double back now
+        else:
+            k += 1
     tail = keep[max(len(keep) // 2, len(keep) - 12):]  # the point closest to the start among the last few is where the lap closed
     close = min(tail, key=lambda i: math.hypot(x[i] - x[0], y[i] - y[0]))
     if math.hypot(x[close] - x[0], y[close] - y[0]) < 30:

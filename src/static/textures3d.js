@@ -15,7 +15,7 @@ function canvasTex(w, h, draw, repeat = true) {
   draw(c.getContext('2d'), w, h);
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace;
-  t.anisotropy = 8;
+  t.anisotropy = 16;  // three clamps it to what the GPU supports
   if (repeat) t.wrapS = t.wrapT = THREE.RepeatWrapping;
   return t;
 }
@@ -47,11 +47,90 @@ function photo(name, metres, tile, fallback, res = '1k') {
         const t = set[k];
         t.dispose();
         t.image = img;
-        t.repeat.setScalar(tile / metres);
+        if (tile) t.repeat.setScalar(tile / metres);  // tile 0: the user sets the repeat (the terrain, per circuit)
         t.needsUpdate = true;
       }, undefined, () => {});
   }
   return set;
+}
+
+// Tree foliage atlas, 4096 x 2048: a broadleaf leaf cluster (left half) and a conifer branch spray (right half, the trunk
+// end at its left edge), drawn leaf by leaf in near-neutral greens that the per-tree instance colour tints. Alpha is cut
+// out at 0.5 by the material. Built as RGBA data, not a canvas texture: a canvas stores premultiplied colour, so the
+// transparent pixels would be black and the mip levels would draw dark fringes round every leaf; here they carry the
+// foliage's mean colour instead.
+function foliage(S = 2048) {
+  const c = document.createElement('canvas');
+  c.width = 2 * S;
+  c.height = S;
+  const g = c.getContext('2d', {willReadFrequently: true}), u = S / 1024;
+  const shade = (k, warm) => `rgb(${Math.round(255 * k * (0.8 + 0.12 * warm))},${Math.round(255 * k)},${Math.round(255 * k * (0.62 - 0.1 * warm))})`;
+  // broadleaf: dark inner clumps so the crown is solid inside, then leaves, darker in the middle and underneath
+  const R = 470 * u, cx = 512 * u, cy = 512 * u;
+  for (let i = 0; i < 40; i++) {
+    const a = rand() * 2 * Math.PI, r = R * 0.55 * Math.sqrt(rand());
+    g.fillStyle = shade(0.32 + 0.1 * rand(), rand());
+    g.beginPath();
+    g.ellipse(cx + Math.cos(a) * r, cy + Math.sin(a) * r, R * (0.15 + 0.1 * rand()), R * (0.12 + 0.08 * rand()), rand() * Math.PI, 0, 2 * Math.PI);
+    g.fill();
+  }
+  g.strokeStyle = '#4a3a2c';
+  for (let i = 0; i < 26; i++) {  // twigs out of the middle
+    const a = rand() * 2 * Math.PI;
+    g.lineWidth = (2 + 3 * rand()) * u;
+    g.beginPath(); g.moveTo(cx, cy); g.lineTo(cx + Math.cos(a) * R * 0.8, cy + Math.sin(a) * R * 0.8); g.stroke();
+  }
+  const leaves = [];
+  for (let i = 0; i < 9000; i++) {
+    const a = rand() * 2 * Math.PI, edge = R * (0.82 + 0.1 * Math.sin(5 * a + 1) + 0.08 * Math.sin(11 * a)), r = edge * Math.sqrt(rand());
+    const x = cx + Math.cos(a) * r, y = cy + Math.sin(a) * r, up = 1 - (y - cy + R) / (2 * R);
+    leaves.push([x, y, a, 0.45 + 0.35 * (r / edge) * (0.6 + 0.4 * up) + 0.2 * rand()]);
+  }
+  leaves.sort((p, q) => p[3] - q[3]);  // lit leaves on top
+  for (const [x, y, a, k] of leaves) {
+    g.fillStyle = shade(Math.min(1, k), rand());
+    g.beginPath();
+    g.ellipse(x, y, (11 + 9 * rand()) * u, (5 + 3 * rand()) * u, a + (rand() - 0.5) * 1.6, 0, 2 * Math.PI);
+    g.fill();
+  }
+  // conifer spray: a branch from the trunk (left edge) to the tip, side twigs, needles along both
+  const ox = S, mid = S / 2, env = x => 0.4 * S * Math.sin(Math.PI * Math.min(1, x / S * 1.05)) ** 0.7;
+  const needles = (x0, y0, x1, y1, len, n, k) => {
+    for (let i = 0; i < n; i++) {
+      const t = rand(), x = x0 + (x1 - x0) * t, y = y0 + (y1 - y0) * t, d = Math.atan2(y1 - y0, x1 - x0);
+      for (const s of [-1, 1]) {
+        const b = d + s * (0.9 + 0.4 * rand());
+        g.strokeStyle = shade(k * (0.75 + 0.35 * rand()), 0.2 * rand());
+        g.beginPath(); g.moveTo(ox + x, y); g.lineTo(ox + x + Math.cos(b) * len, y + Math.sin(b) * len); g.stroke();
+      }
+    }
+  };
+  g.lineCap = 'round';
+  g.lineWidth = 3 * u;
+  for (let x = 30 * u; x < S * 0.92; x += (34 + 20 * rand()) * u) {
+    for (const s of [-1, 1]) {
+      const h = env(x) * (0.7 + 0.3 * rand()), tx = x + h * 0.6, ty = mid + s * h;
+      g.strokeStyle = '#4a3c2e';
+      g.lineWidth = 3 * u;
+      g.beginPath(); g.moveTo(ox + x, mid); g.lineTo(ox + tx, ty); g.stroke();
+      g.lineWidth = 2.2 * u;
+      needles(x, mid, tx, ty, (14 + 8 * rand()) * u, Math.ceil(h / (3 * u)), 0.42 + 0.4 * (x / S));
+    }
+  }
+  g.lineWidth = 5 * u;
+  g.strokeStyle = '#4a3c2e';
+  g.beginPath(); g.moveTo(ox, mid); g.lineTo(ox + S * 0.95, mid); g.stroke();
+  g.lineWidth = 2.2 * u;
+  needles(0, mid, S * 0.95, mid, 18 * u, 900, 0.6);
+
+  const img = g.getImageData(0, 0, 2 * S, S).data, sum = [0, 0, 0];
+  let n = 0;
+  for (let i = 0; i < img.length; i += 4 * 61) if (img[i + 3] > 200) { sum[0] += img[i]; sum[1] += img[i + 1]; sum[2] += img[i + 2]; n++; }
+  for (let i = 0; i < img.length; i += 4) if (img[i + 3] === 0) for (let k = 0; k < 3; k++) img[i + k] = sum[k] / n;
+  const t = new THREE.DataTexture(new Uint8Array(img.buffer), 2 * S, S);
+  Object.assign(t, {colorSpace: THREE.SRGBColorSpace, generateMipmaps: true, minFilter: THREE.LinearMipmapLinearFilter,
+                    magFilter: THREE.LinearFilter, anisotropy: 16, needsUpdate: true});
+  return t;
 }
 
 export function textures() {
@@ -74,6 +153,9 @@ export function textures() {
       g.fillRect(0, 0, w, 6);   // top rail
       g.fillRect(0, h - 6, w, 6);
     }),
+    // relief for the terrain under its satellite / grass colour: tufts and soil in the normal and roughness maps
+    ground: photo('sparse_grass', 3, 0, speckle('#5a7a3a', 2000, 0.2), '2k'),
+    foliage: foliage(),
     grass: canvasTex(256, 256, (g, w, h) => {  // plain speckle: mowing stripes shimmer from a distance
       g.fillStyle = '#427f31';
       g.fillRect(0, 0, w, h);

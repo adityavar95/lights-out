@@ -7,6 +7,7 @@ A session's live stream and its replay are the same content id.
 import time
 from datetime import date
 import unicodedata
+from urllib.parse import urlparse
 
 import requests
 
@@ -77,20 +78,50 @@ def channels(content_id: int) -> dict:
     return out
 
 
-def play(content_id: int, channel_id: int | None, subscription_token: str, uhd: bool = False) -> dict:
+def play(content_id: int, channel_id: int | None, subscription_token: str, uhd: bool = False, tries: int = 5,
+         override: str = "HDR_UHD_DASH") -> dict:
     """{url, streamType, laURL, entitlementToken}: the manifest url is signed for this play and expires.
     uhd: F1 TV's 4K HDR stream type (F1 TV Premium), asked for with the header its web player's developer settings use
-    (x-f1-override-video-stream); its manifest adds 1620p and 2160p50 HEVC Main10 to the main feed's renditions."""
+    (x-f1-override-video-stream); its manifest adds 1620p and 2160p50 HEVC Main10 to the main feed's renditions.
+    F1 TV hands out its CDNs at random per play (measured on a live session: ~1 in 3 on f1prodlive.akamaized.net). Akamai
+    doesn't allow this page's localhost origin, so the browser couldn't fetch the manifest (shaka 1002) and a feed failed
+    at random; formula1.com's own CDN does. An Akamai answer is asked again, up to `tries` plays in all."""
     params = {"contentId": content_id, **({"channelId": channel_id} if channel_id else {})}
-    headers = {"User-Agent": UA, "ascendontoken": subscription_token, **({"x-f1-override-video-stream": "HDR_UHD_DASH"} if uhd else {})}
+    headers = {"User-Agent": UA, "ascendontoken": subscription_token, **({"x-f1-override-video-stream": override} if uhd else {})}
     r = requests.get(f"{API}/CONTENT/PLAY", params=params, headers=headers, timeout=(5, 20))
     body = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
     o = body.get("resultObj") or {}
-    if uhd and not r.ok:  # no 4K rights (every video before 2025): the same video in HD
-        return play(content_id, channel_id, subscription_token)
+    if uhd and not r.ok and override == "HDR_UHD_DASH":  # no 4K rights (every video before 2025): the same video in HD
+        return play(content_id, channel_id, subscription_token, tries=tries)
     if not r.ok or not o.get("url"):
         raise F1TVError(body.get("message") or f"F1 TV play request failed ({r.status_code})")
+    if tries > 1 and not (urlparse(o["url"]).hostname or "").endswith(".formula1.com"):
+        return play(content_id, channel_id, subscription_token, uhd, tries - 1, override)
+    kind = o.get("streamType") or ""
+    if uhd and override == "HDR_UHD_DASH" and kind.endswith("WV") and "UHD" not in kind:
+        # A live stream is Widevine (streamType SDR_HD_DASHWV), and HDR_UHD_DASH gave it in HD (Mexico FP1 2026, every
+        # try). F1 TV's naming suggests its 4K one is HDR_UHD_DASHWV: asked for, and kept only if F1 TV answers with UHD.
+        # shortcut: that name is a guess from the naming; drop this once a live 4K session shows what F1 TV calls it
+        try:
+            alt = play(content_id, channel_id, subscription_token, uhd, tries, "HDR_UHD_DASHWV")
+            if "UHD" in (alt.get("streamType") or ""):
+                return alt
+        except F1TVError:
+            pass
     return {k: o.get(k) for k in ("url", "streamType", "laURL", "entitlementToken")}
+
+
+def license(url: str, challenge: bytes, subscription_token: str, entitlement_token: str | None) -> tuple:
+    """A Widevine licence for a live stream: (status, body, content type) from F1 TV's licence server, asked with the
+    account's tokens. The page's own request was cross-origin from localhost and carried only the entitlement token
+    (MultiViewer, a desktop app, makes it outside any browser). url comes from the page, so only F1's hosts are asked."""
+    u = urlparse(url)
+    if u.scheme != "https" or not (u.hostname == "formula1.com" or (u.hostname or "").endswith(".formula1.com")):
+        raise F1TVError(f"Not an F1 TV licence server: {u.hostname}")
+    headers = {"User-Agent": UA, "ascendontoken": subscription_token, "Content-Type": "application/octet-stream",
+               **({"entitlementtoken": entitlement_token} if entitlement_token else {})}
+    r = requests.post(url, data=challenge, headers=headers, timeout=(5, 20))
+    return r.status_code, r.content, r.headers.get("content-type", "application/octet-stream")
 
 
 class F1TVError(Exception):

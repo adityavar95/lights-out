@@ -44,6 +44,7 @@ export function makeMirror(mesh, { width = 512, hide = [], tilt = 0.025, extend 
 
   const target = new THREE.WebGLRenderTarget(width, Math.max(16, Math.round(width * (v1 - v0) / (u1 - u0))), { type: THREE.HalfFloatType, samples: 4 });
   const textureMatrix = new THREE.Matrix4(), mirrorCamera = new THREE.PerspectiveCamera();
+  mirrorCamera.layers.enable(1);  // tree crowns and fences are on layer 1 (circuit3d.js)
   const modelled = mesh.material, glass = new THREE.ShaderMaterial({
     name: 'mirror',
     uniforms: { map: { value: target.texture }, textureMatrix: { value: textureMatrix } },

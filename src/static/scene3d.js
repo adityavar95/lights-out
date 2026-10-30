@@ -27,6 +27,14 @@ let carsToken = 0, mode = 'overview', chased = null, glide = 1, trackMat = null,
 // one reuses (disposing first deleted them, and every race switch recompiled them all: ~0.3 s)
 let stale = null;
 let drawnAt = 0, resized = true;
+let high = false, supersample = true, frameTime = 0;  // GPU quality tier (init3d) and dynamic resolution (the render loop)
+
+// Canvas pixels per CSS pixel: the high tier renders up to 2x (supersampling on a 1-1.25x display), within a 4K frame's
+// pixel budget, so a big window on a 4K monitor isn't rendered at 8K
+function pixelRatio(w = innerWidth, h = innerHeight) {
+  const dpr = Math.min(devicePixelRatio, 2);
+  return high && supersample ? Math.max(dpr, Math.min(2, Math.sqrt(3840 * 2160 / (w * h)))) : dpr;
+}
 const drawnView = new THREE.Matrix4(), drawnProj = new THREE.Matrix4();
 const sky0 = {env: 0.35, hemi: 0.5, fog: new THREE.Color(0xc4d3e2)};  // clear-sky lighting, for the weather to dim
 const RAIN_GREY = new THREE.Color(0.3, 0.32, 0.35);
@@ -43,8 +51,13 @@ export function init3d(el) {
   container = el;
   // no canvas MSAA: the post-processing target is multisampled instead; high-performance asks for the discrete GPU on
   // dual-GPU laptops (Windows can still override it per browser in Settings > Display > Graphics)
-  renderer = new THREE.WebGLRenderer({antialias: false, logarithmicDepthBuffer: true, powerPreference: 'high-performance'});  // throws without WebGL
-  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  renderer = new THREE.WebGLRenderer({antialias: false, logarithmicDepthBuffer: true, powerPreference: 'high-performance', stencil: false});  // throws without WebGL
+  // A real GPU (not SwiftShader / llvmpipe / Microsoft Basic Render, i.e. hardware acceleration off) with 8x MSAA gets the
+  // high tier: the frame supersampled to 2x, 8x MSAA and 4096² shadow cascades
+  const gl = renderer.getContext(), info = gl.getExtension('WEBGL_debug_renderer_info');
+  const gpu = info ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL) : '';
+  high = !/swiftshader|llvmpipe|software|basic render/i.test(gpu) && renderer.capabilities.maxSamples >= 8;
+  renderer.setPixelRatio(pixelRatio());
   // Khronos PBR Neutral: keeps livery hues and saturation (ACES pushed kerb red to neon, blues to purple); x - 0.04 at mid-grey
   renderer.toneMapping = THREE.NeutralToneMapping;
   renderer.toneMappingExposure = 1.0;
@@ -81,21 +94,22 @@ export function init3d(el) {
   hemi = new THREE.HemisphereLight(0xdbe9ff, 0x5d7a45, 0.5);
   scene.add(hemi);
   // Cascaded shadow maps: the view frustum is cut at near * (far / near)^(i / 4) = ~0.7, 10, 140, 2000 units, each slice with
-  // its own 2048² sun shadow map, so texel size grows with distance like screen pixels do (centimetres on the car in front
-  // of a chase camera, metres across the circuit); fade cross-fades neighbouring cascades so the seams don't show.
-  csm = new CSM({camera, parent: scene, cascades: 4, mode: 'logarithmic', maxFar: SIZE * 2, shadowMapSize: 2048,
+  // its own 2048² (high tier 4096²) sun shadow map, so texel size grows with distance like screen pixels do (centimetres on
+  // the car in front of a chase camera, metres across the circuit); fade cross-fades neighbouring cascades so the seams don't show.
+  csm = new CSM({camera, parent: scene, cascades: 4, mode: 'logarithmic', maxFar: SIZE * 2, shadowMapSize: high ? 4096 : 2048,
                  lightDirection: SUN.clone().negate(), lightIntensity: 2.6, lightFar: SIZE * 6, lightMargin: SIZE * 0.5});
   csm.fade = true;
-  for (const l of csm.lights) l.color.set(0xfff1dc);
+  // layer 1 also holds the alpha cut-out tree crowns and fences (circuit3d.js), which do cast shadows
+  for (const l of csm.lights) { l.color.set(0xfff1dc); l.shadow.camera.layers.enable(1); }
   world = new THREE.Group();
   scene.add(world);
-  post = createPost(renderer, scene, camera);
+  post = createPost(renderer, scene, camera, high ? 8 : 4);
   vfx = createVfx(scene);
   loadSky(pmrem, sky);
   const fit = () => {
     const w = container.clientWidth, h = container.clientHeight;
     if (!w || !h) return;  // hidden: zero-size render targets would only warn
-    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));  // it changes with browser zoom or another monitor
+    renderer.setPixelRatio(pixelRatio(w, h));  // it changes with browser zoom or another monitor
     renderer.setSize(w, h);
     labels.setSize(w, h);
     post.setSize(w, h);
@@ -113,6 +127,17 @@ export function init3d(el) {
     const dt = Math.min(clock.getDelta(), 0.1);
     // tab hidden, no size yet, or under the F1 TV viewer (it drew ~1,800 calls a frame there, beside 4K video decoding)
     if (!container.offsetParent || !container.clientWidth || !container.clientHeight || covered()) return;
+    // dynamic resolution: averaging under ~40 fps (a weaker GPU, a laptop on battery) drops the supersampling, once.
+    // Measured only while the cars move and frames are drawn back to back; hitches (a circuit loading, shaders compiling)
+    // don't count, or loading the page alone tripped it
+    if (supersample && performance.now() - lastUpdate < 200 && performance.now() - drawnAt < 40 && dt < 0.1) {
+      frameTime += (dt - frameTime) * 0.02;  // ~50-frame average
+      if (frameTime > 1 / 40) {
+        console.info(`3D: ${(frameTime * 1000).toFixed(0)} ms a frame, supersampling off`);
+        supersample = false;
+        fit();
+      }
+    }
     if (fly) {  // after a circuit switch: ease from the old view to the new overview over 1.5 s
       fly.t = Math.min(1, fly.t + dt / 1.5);
       const e = THREE.MathUtils.smootherstep(fly.t, 0, 1);
@@ -137,7 +162,7 @@ export function init3d(el) {
     drawnView.copy(camera.matrixWorld);
     drawnProj.copy(camera.projectionMatrix);
     csm.update();
-    for (const l of csm.lights) l.shadow.normalBias = (l.shadow.camera.right - l.shadow.camera.left) / 2048;  // ~1 texel
+    for (const l of csm.lights) l.shadow.normalBias = (l.shadow.camera.right - l.shadow.camera.left) / csm.shadowMapSize;  // ~1 texel
     vfx.update(dt, camera, SUN, renderer.domElement.height);
     scene.updateMatrixWorld();
     const moving = performance.now() - lastUpdate < 200;  // the replay is still moving the cars
@@ -165,7 +190,7 @@ function keepInBounds() {
 // diffuse ambient and reflections. The sun light is aimed at its brightest texel so shadows agree with the sky: texel
 // (x, y) with row 0 at the top is longitude 2 pi (u - 0.5), latitude pi (0.5 - v), as three samples equirect maps.
 function loadSky(pmrem, sky) {
-  new RGBELoader().load(HDRI, hdr => {
+  new RGBELoader().load(high ? HDRI.replaceAll('2k', '4k') : HDRI, hdr => {  // 4k: 21 MB, a sharper sky behind a 2x frame
     const {data, width: w, height: h} = hdr.image, half = THREE.DataUtils.fromHalfFloat;
     let best = 0, at = 0;
     for (let i = 0; i < w * h / 2; i += 2) {  // upper half: the sun is above the horizon
@@ -263,7 +288,7 @@ export function setCars(drivers, onSelect, year) {
   // 2026+ cars use the RB22 model up close; until it has loaded they are procedural, then the grid is rebuilt once
   if (year >= 2026 && !rb22Ready()) loadRB22().then(() => token === carsToken && setCars(drivers, onSelect, year), e => console.warn('RB22 model', e));
   for (const d of drivers) {
-    const car = buildCar(d.color, d.num, year, tex.blob, map ? m(50) : Infinity);
+    const car = buildCar(d.color, d.num, year, tex.blob, map ? m(high ? 100 : 50) : Infinity, d.team);  // the high tier keeps the detailed car twice as far
     const num = document.createElement('b');
     num.textContent = d.num ?? '';
     num.style.background = d.color;
@@ -347,7 +372,7 @@ export async function setGround(year, round) {
     w.onerror = e => { w.terminate(); done({error: e.message || 'worker failed'}); };
     w.postMessage({url: `/api/geo/${year}/${round}`, pts: c.pts, map: {k: map.k, cx: map.cx, cy: map.cy}, L: SIZE / 2,
       box: [Math.min(...xs) - pad, Math.max(...xs) + pad, Math.min(...zs) - pad, Math.max(...zs) + pad],
-      maxPx: Math.min(4096, renderer.capabilities.maxTextureSize)});
+      maxPx: Math.min(high ? 8192 : 4096, renderer.capabilities.maxTextureSize)});  // high tier: one zoom level sharper (~0.5 m a pixel)
   });
   if (circuit !== c || !g?.image) {  // another circuit since, or no ground to show
     g?.image?.close();
@@ -355,7 +380,8 @@ export async function setGround(year, round) {
     else if (g?.rms > 15) console.warn(`satellite ground: outline fit off by ${g.rms.toFixed(0)} m`);
     return;
   }
-  const texture = Object.assign(new THREE.Texture(g.image), {colorSpace: THREE.SRGBColorSpace, flipY: false, anisotropy: 8, needsUpdate: true});
+  // anisotropy 16: the ground is seen at grazing angles; three clamps it to what the GPU supports
+  const texture = Object.assign(new THREE.Texture(g.image), {colorSpace: THREE.SRGBColorSpace, flipY: false, anisotropy: 16, needsUpdate: true});
   texture.addEventListener('dispose', () => g.image.close());
   const [a, b, u0, d, e, v0] = g.m, {w, h, data} = g.mask;
   const green = (X, Z) => {  // vegetation under scene (x, z), through the affine map the shader drapes the image with
@@ -425,7 +451,10 @@ function effects(c, at, next, simDt, dt, fx) {
 function chassis(c, turn, moved, f) {
   if (moved > 50) return;  // scrubbing jump
   const [r] = c.tyre, k = moved > 0.05 ? turn / moved : 0;  // path curvature 1/m, + = left
-  for (const w of c.wheels) w.spin.rotation.z -= moved / r;
+  // At speed (and on a 10x replay) a wheel turned up to thousands of degrees a frame: it strobed, stood still or ran
+  // backwards, and its motion vectors smeared it into garbage. Past ~20 degrees a frame it turns at that cap, which the
+  // motion blur draws as a spinning disc, the way a camera shutter sees a fast wheel.
+  for (const w of c.wheels) w.spin.rotation.z -= Math.min(moved / r, 0.35);
   const delta = f?.cam ? -f.cam.steer : THREE.MathUtils.clamp(Math.atan(c.wb * k), -0.38, 0.38);  // road-wheel angle, + = left
   c.delta = (c.delta ?? 0) + (delta - (c.delta ?? 0)) * 0.25;
   for (const w of c.wheels) if (w.front) w.pivot.rotation.y = c.delta;
@@ -527,8 +556,11 @@ export function updateCars(pos, ahead, focus, rate = 1, progress = 1, fx = null)
       const want = new THREE.Vector3(at.x - Math.cos(c.yaw) * m(70) + Math.sin(c.yaw) * m(35), at.y + m(55),
                                      at.z + Math.sin(c.yaw) * m(70) + Math.cos(c.yaw) * m(35));
       if (chased !== id) { chased = id; post.reset(); camera.position.copy(want); controls.target.copy(at); }
-      camera.position.lerp(want, 1 - Math.exp(-dt / 0.7));
-      controls.target.lerp(at, 1 - Math.exp(-dt / 0.2));
+      // lags in replay time: in real time a 10x replay left the camera ~560 m behind, flying to catch up at ~800 m/s,
+      // which the motion blur smeared over the whole frame
+      const lag = dt * Math.max(1, rate);
+      camera.position.lerp(want, 1 - Math.exp(-lag / 0.7));
+      controls.target.lerp(at, 1 - Math.exp(-lag / 0.2));
       camera.lookAt(controls.target);
     } else if (mode === 'chase' && chased === null) {  // drop in behind the car
       chased = id;

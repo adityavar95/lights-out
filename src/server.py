@@ -2,6 +2,7 @@
 import json
 import re
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime
 from functools import lru_cache
@@ -10,13 +11,15 @@ from pathlib import Path
 import livef1
 import pandas as pd
 import uvicorn
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 import f1auth
 import f1tv
+import radio
 from jolpica import JOLPICA, driver_career, jolpica_fetch, races
 from replay import CACHE, OpenF1Locked, ReplayUnavailable, elevation, find_session, laps_replay, pitlane, replay, save, season_session_rows, session_telemetry, telemetry
 import live
@@ -50,9 +53,27 @@ def index():
     return FileResponse(Path(__file__).parent / "static" / "index.html")
 
 
+SEASONS = CACHE.parent / "seasons.json"
+
+
 @app.get("/api/seasons")
 def seasons():
-    return livef1.list_seasons()
+    """Every season, oldest first. One new season a year, so Jolpica is asked once a day at most; when it's slow or down
+    (a read timeout here was a 500, and the page had no year picker) the last list, else every year since 1950."""
+    try:
+        if time.time() - SEASONS.stat().st_mtime < 86400:
+            return json.loads(SEASONS.read_text())
+    except (OSError, ValueError):
+        pass
+    try:
+        years = livef1.list_seasons()
+        save(SEASONS, years)
+        return years
+    except Exception:
+        try:
+            return json.loads(SEASONS.read_text())
+        except (OSError, ValueError):
+            return [str(y) for y in range(1950, date.today().year + 1)]
 
 
 @app.get("/api/season/{year}")
@@ -80,11 +101,44 @@ def f1_schedule(year: int):
 def jolpica(year: int, kind: str, round: int | None = None):
     if kind not in JOLPICA:
         raise HTTPException(404, f"Unknown kind '{kind}'. Use one of: {', '.join(JOLPICA)}")
+    fetch = lambda: jolpica_fetch(year, kind, round)
     try:
-        rows = jolpica_fetch(year, kind, round)
+        rows = last_or_fetch(f"{year}_{kind}_{round}", fetch) if year >= date.today().year else fetch()
     except Exception as e:
         raise HTTPException(502, f"Jolpica request failed: {e}")
     return table(pd.json_normalize(rows))
+
+
+LAST = CACHE.parent / "jolpica"  # the last answer to each of this season's Jolpica requests
+_refreshing = set()
+
+
+def last_or_fetch(key: str, fetch, max_age: float = 300):
+    """This season's answers change (calendar, results, standings), so they're fetched again after 5 minutes, but the
+    page gets the last one at once while that runs in the background: Jolpica took ~11 s for a race list, or timed out,
+    and the whole page waited on it. Only the first request for a key waits (and fails with Jolpica)."""
+    path = LAST / f"{key}.json"
+    try:
+        age, data = time.time() - path.stat().st_mtime, json.loads(path.read_text())
+    except (OSError, ValueError):
+        data = fetch()
+        try:
+            save(path, data)
+        except OSError:
+            pass  # two first requests at once share save's temp file: one keeps it, both answer
+        return data
+    if age > max_age and key not in _refreshing:
+        _refreshing.add(key)
+
+        def refresh():
+            try:
+                save(path, fetch())
+            except Exception:
+                pass  # Jolpica slow or down: the last answer stands, and the next request tries again
+            finally:
+                _refreshing.discard(key)
+        threading.Thread(target=refresh, daemon=True).start()
+    return data
 
 
 @app.get("/api/driver/{driver_id}")
@@ -242,6 +296,24 @@ def f1tv_play(content_id: int, channel: int | None = None, uhd: bool = False, x_
         raise HTTPException(502, f"F1 TV play request failed: {e}")
 
 
+@app.post("/api/f1tv/license")
+async def f1tv_license(request: Request, u: str, x_f1_token: str | None = Header(None), x_f1_entitlement: str | None = Header(None)):
+    """A live stream's Widevine licence (f1tv.license): the page's licence request, passed on with the account's tokens."""
+    t = f1auth.valid(x_f1_token)
+    if not t:
+        raise HTTPException(401, "Connect your F1 TV account to play videos")
+    challenge = await request.body()
+    if len(challenge) > 65536:  # a Widevine challenge is a few kB
+        raise HTTPException(413, "Licence request too large")
+    try:
+        status, body, kind = await run_in_threadpool(f1tv.license, u, challenge, t, x_f1_entitlement)
+    except f1tv.F1TVError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(502, f"F1 TV licence request failed: {e}")
+    return Response(body, status_code=status, media_type=kind)
+
+
 @app.get("/api/f1tv/telemetry/{year}/{round}/{driver}")
 def f1tv_telemetry(year: int, round: int, driver: int, session: str = "Race"):
     """One car's telemetry over a whole session, for the multiviewer's overlay on an F1 TV stream."""
@@ -257,6 +329,36 @@ def f1tv_telemetry(year: int, round: int, driver: int, session: str = "Race"):
         raise HTTPException(404, str(e))
     except Exception as e:
         raise HTTPException(502, f"Telemetry request failed: {e}")
+
+
+@app.get("/api/f1tv/radio/{year}/{round}/{driver}")
+def f1tv_radio(year: int, round: int, driver: int, session: str = "Race", x_f1_token: str | None = Header(None)):
+    """A driver's team radio as text (radio.py) for the multiviewer's onboard tiles: clips so far, each with its words
+    once transcribed. The caller's F1 TV token fetches the audio, which F1 refuses without one."""
+    if year < 2023:
+        return {"clips": [], "pending": 0, "error": None}  # OpenF1 has team radio from 2023
+    try:
+        race = race_info(year, round)
+        names = [session, "Sprint Shootout"] if session == "Sprint Qualifying" else [session]
+        s = next((x for n in names if (x := find_session(year, race["date"], n))), None)
+        return radio.radio(s, session, year, driver, f1auth.valid(x_f1_token))
+    except Exception as e:
+        raise HTTPException(502, f"Team radio request failed: {e}")
+
+
+# registered before /api/f1tv/{year}/{round}, which would take /radio/audio for a year and refuse it
+@app.get("/api/f1tv/radio/audio")
+def f1tv_radio_audio(u: str, x_f1_token: str | None = Header(None)):
+    """One team radio clip's audio (radio.audio), fetched from F1 with the caller's F1 TV token."""
+    try:
+        return Response(radio.audio(u, f1auth.valid(x_f1_token)), media_type="audio/mpeg",
+                        headers={"Cache-Control": "private, max-age=86400"})
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except PermissionError as e:
+        raise HTTPException(401, str(e))
+    except Exception as e:
+        raise HTTPException(502, f"Team radio clip unavailable: {e}")
 
 
 # registered after /api/f1tv/channels and /play, or it would catch them
@@ -335,7 +437,7 @@ app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), na
 # Anonymous usage counts (docs/ux-audit.md item 11): per day, how often each of these happened. The page sends only the
 # event's name (util.js count): no id, cookie, IP or page address is kept, and nothing goes to a third party.
 EVENTS = {"visit", "return_7d", "intro_shown", "intro_explore", "intro_simulate", "intro_stream", "watched_60s",
-          "new_race_watch", "stream_open", "video_here", "video_f1tv"}
+          "new_race_watch", "stream_open", "video_here", "video_f1tv", "connect_open", "f1tv_connected"}
 COUNTS = CACHE.parent / "counts.json"  # shortcut: lives in .cache, so deleting the cache resets it; move it if it matters
 _counts_lock = threading.Lock()  # one read-add-write at a time (save's temp file is per process, not per thread)
 
@@ -393,6 +495,20 @@ def warm_up():
         pool.map(quietly, jobs)
 
 
+def lan_ip() -> str | None:
+    """This computer's address on the local network: the one a UDP socket would send from (connect sends nothing)."""
+    import socket
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("192.0.2.1", 9))  # TEST-NET-1: never routed anywhere
+            return s.getsockname()[0]
+    except OSError:
+        return None
+
+
 if __name__ == "__main__":
     threading.Thread(target=warm_up, daemon=True).start()
-    uvicorn.run(app, host="127.0.0.1", port=8086)
+    # 0.0.0.0 listens on every address but isn't one a browser can open (ERR_ADDRESS_INVALID): say which ones work
+    ip = lan_ip()
+    print("Lights Out: open http://127.0.0.1:8086" + (f"  (other devices on this network: http://{ip}:8086)" if ip else ""), flush=True)
+    uvicorn.run(app, host="0.0.0.0", port=8086)

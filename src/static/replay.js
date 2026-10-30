@@ -11,7 +11,7 @@ import {drsZones} from './telemetry.js';
 import {fetchCircuit, annotate, f1Coords} from './circuits.js';
 import {focusFrame} from './focus.js';
 import {pitTrace} from './strategy.js';
-import {lanes, GRID} from './lanes.js';
+import {lanes, GRID, apart} from './lanes.js';
 
 const SPEEDS = [0.5, 1, 2, 5, 10, 20, 50, 100];
 
@@ -471,11 +471,29 @@ function gpsPitLane() {
 // ---------- per-frame state ----------
 
 // a car's map position at time t: GPS frames interpolated (null when it has none), or along the outline by lap time
+// Catmull-Rom through the frames either side: straight lines between 0.5 s frames cut up to ~0.8 m inside every corner
 function gpsPos(id, t) {
   const f = S.data.frames[id], fi = t / S.data.step, i = Math.floor(fi), k = fi - i;
   if (!f || f.x[i] === null || f.x[i] === undefined) return null;
-  const j = f.x[i + 1] !== null && f.x[i + 1] !== undefined ? i + 1 : i;
-  return S.proj.rot(f.x[i] + (f.x[j] - f.x[i]) * k, f.y[i] + (f.y[j] - f.y[i]) * k);
+  const has = n => f.x[n] !== null && f.x[n] !== undefined;
+  const j = has(i + 1) ? i + 1 : i, h = has(i - 1) ? i - 1 : i, l = has(i + 2) ? i + 2 : j;
+  const k2 = k * k, k3 = k2 * k;
+  const cr = (a, b, c, d) => 0.5 * (2 * b + (c - a) * k + (2 * a - 5 * b + 4 * c - d) * k2 + (3 * b - a - 3 * c + d) * k3);
+  return S.proj.rot(cr(f.x[h], f.x[i], f.x[j], f.x[l]), cr(f.y[h], f.y[i], f.y[j], f.y[l]));
+}
+
+// GPS cars pushed apart where they overlap (lanes.js apart), across each car's direction over the surrounding half second
+function spread(cars, t) {
+  if (!(Math.abs(t - S.spreadT) < 5)) S.sides = {};  // after a seek, pass sides start over
+  S.spreadT = t;
+  const mpu = S.proj.mpu, list = [];
+  for (const [id, p] of Object.entries(cars)) {
+    const a = gpsPos(id, t - 0.25) ?? p, b = gpsPos(id, t + 0.25) ?? p, n = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    if (n * mpu > 1) list.push({id, x: p[0] * mpu, y: p[1] * mpu, dx: (b[0] - a[0]) / n, dy: (b[1] - a[1]) / n});  // parked: left alone
+  }
+  const shift = apart(list, S.sides);
+  for (const id in shift) cars[id] = [cars[id][0] + shift[id][0] / mpu, cars[id][1] + shift[id][1] / mpu];
+  return cars;
 }
 
 function lapPos(id, t) {
@@ -513,7 +531,7 @@ function carsAt(t) {
   if (S.data.mode === 'laps') return lapCars(t);
   const cars = {}, pos = gpsPos;
   for (const d of S.drivers) { const p = pos(d.id, t); if (p) cars[d.id] = p; }
-  return cars;
+  return spread(cars, t);
 }
 
 function gpsState(t) {
@@ -530,6 +548,7 @@ function gpsState(t) {
                 age: stint ? Math.max(lap, 1) - stint[1] + (stint[4] ?? 0) : null,
                 pit: pit && t - pit[0] < (pit[2] || 25), out: !cars[d.id]});
   }
+  spread(cars, t);
   board.sort((a, b) => a.pos - b.pos);
   const race = S.data.intervals.length > 0;
   for (const b of board) {

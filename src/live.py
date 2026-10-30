@@ -21,7 +21,7 @@ import f1auth
 HOST = "livetiming.formula1.com/signalrcore"
 TOPICS = ["Heartbeat", "SessionInfo", "SessionStatus", "DriverList", "TimingData", "TimingAppData", "TrackStatus",
           "LapCount", "RaceControlMessages", "WeatherData", "ExtrapolatedClock", "TopThree", "TimingStats",
-          "Position.z", "CarData.z"]
+          "TeamRadio", "Position.z", "CarData.z"]
 IDLE = 120
 BUFFER = 6  # seconds of GPS / car data samples kept for the browser
 RS = "\x1e"  # SignalR message separator
@@ -127,6 +127,14 @@ def _run():
             _status.update(connected=False, error=str(e))
             time.sleep(5)
     _status["connected"] = False
+
+
+def radio() -> tuple:
+    """(SessionInfo, [{Utc, RacingNumber, Path}]): the running session and its team radio clips so far (radio.py), from
+    the feed as it stands; empty when the feed isn't running."""
+    with _lock:
+        caps = (_state.get("TeamRadio") or {}).get("Captures") or []
+        return copy.deepcopy(_state.get("SessionInfo")), copy.deepcopy(list(caps.values()) if isinstance(caps, dict) else caps)
 
 
 def snapshot(token: str | None = None) -> dict:

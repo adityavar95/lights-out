@@ -84,7 +84,7 @@ export function teamColor(teamId = '', fallbackName = '') {
   if (TEAM_COLORS[teamId]) return TEAM_COLORS[teamId];
   let h = 0;
   for (const ch of teamId || fallbackName) h = (h * 31 + ch.charCodeAt(0)) % 360;
-  return `hsl(${h} 65% 58%)`;
+  return `hsl(${h}, 65%, 58%)`;  // commas: three.js can't parse the space-separated form (the 3D car came out white)
 }
 
 const ISO = {

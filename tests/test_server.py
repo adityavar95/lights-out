@@ -95,6 +95,9 @@ assert idx == [1, 3, 3], idx  # mini-sector indices follow their points; past th
 # the lap's last point 4 m past the start (over 3 m from it, so the trim above keeps it): dropped as well (Baku)
 bx, by, _ = _clean_loop([0, 400, 1000, 1000, 0, 0, 40], [0, 0, 0, 1000, 1000, 100, 2], [])
 assert (bx, by) == ([0, 400, 1000, 1000, 0, 0], [0, 0, 0, 1000, 1000, 100]), (bx, by)
+# a zig-zag on the bottom straight (out 32, back 24, on again: Monaco's): the point it doubles back at goes, the rest stay
+zx, zy, _ = _clean_loop([0, 300, 332, 308, 600, 1000, 1000, 0], [0, 0, 1, 2, 0, 0, 1000, 1000], [])
+assert (zx, zy) == ([0, 300, 308, 600, 1000, 1000, 0], [0, 0, 2, 0, 0, 1000, 1000]), (zx, zy)
 
 # circuits MultiViewer lacks: an OpenF1 lap becomes the outline, tidied the same way; MultiViewer still wins when it has one
 import tracks
@@ -197,3 +200,158 @@ with tempfile.TemporaryDirectory() as tmp:
     assert count_event("watched_60s", "2026-10-31", path) == {"2026-10-30": {"visit": 2}, "2026-10-31": {"watched_60s": 1}}
 assert "visit" in EVENTS and "../etc" not in EVENTS
 print("usage counts ok")
+
+# /api/seasons: a fresh copy from disk; Jolpica down with a stale copy -> that copy; down with none -> every year since 1950
+import os, tempfile, livef1, server
+from datetime import date
+with tempfile.TemporaryDirectory() as tmp:
+    real, server.SEASONS = (livef1.list_seasons, server.SEASONS), Path(tmp) / "seasons.json"
+    try:
+        livef1.list_seasons = lambda: ["2025", "2026"]
+        assert server.seasons() == ["2025", "2026"] and server.SEASONS.exists()
+        def down(): raise TimeoutError("read timed out")
+        livef1.list_seasons = down
+        assert server.seasons() == ["2025", "2026"]  # still fresh
+        os.utime(server.SEASONS, (0, 0))  # a day old: Jolpica is asked, fails, the old list stands
+        assert server.seasons() == ["2025", "2026"]
+        server.SEASONS.unlink()
+        years = server.seasons()
+        assert years[0] == "1950" and years[-1] == str(date.today().year), years
+    finally:
+        livef1.list_seasons, server.SEASONS = real
+print("seasons fallback ok")
+
+# this season's Jolpica answers: the first waits; later ones come from disk at once, a stale one refreshes in the background,
+# and a failing refresh keeps the last answer
+import threading as _t, time
+with tempfile.TemporaryDirectory() as tmp:
+    real_last, server.LAST = server.LAST, Path(tmp)
+    try:
+        calls = []
+        assert server.last_or_fetch("k", lambda: calls.append(1) or [{"round": "1"}]) == [{"round": "1"}] and calls == [1]
+        assert server.last_or_fetch("k", lambda: calls.append(2) or [{"round": "2"}]) == [{"round": "1"}] and calls == [1]  # fresh
+        os.utime(server.LAST / "k.json", (0, 0))
+        done = _t.Event()
+        def slow():
+            calls.append(3)
+            done.set()
+            return [{"round": "3"}]
+        assert server.last_or_fetch("k", slow) == [{"round": "1"}]  # stale: the old answer now, the new one fetched behind it
+        done.wait(5)
+        for _ in range(50):
+            if not server._refreshing: break
+            time.sleep(0.02)
+        assert server.last_or_fetch("k", lambda: [{"round": "x"}]) == [{"round": "3"}]
+        os.utime(server.LAST / "k.json", (0, 0))
+        def down(): raise TimeoutError("read timed out")
+        assert server.last_or_fetch("k", down) == [{"round": "3"}]
+        for _ in range(50):
+            if not server._refreshing: break
+            time.sleep(0.02)
+        assert server.last_or_fetch("k", down) == [{"round": "3"}]  # still the last good answer
+    finally:
+        server.LAST = real_last
+print("jolpica last answer ok")
+
+# live licences go only to F1's own hosts (the url comes from the page)
+import f1tv
+for bad in ["https://evil.example/la", "http://f1tv.formula1.com/la", "https://formula1.com.evil.example/la", "file:///etc/passwd"]:
+    try:
+        f1tv.license(bad, b"x", "tok", None)
+        raise AssertionError(f"forwarded to {bad}")
+    except f1tv.F1TVError:
+        pass
+print("f1tv licence hosts ok")
+
+# play: an Akamai manifest (no CORS for localhost) is asked for again until formula1.com's CDN answers, within `tries`
+class _R:
+    def __init__(self, url): self.ok, self.status_code, self.headers, self._u = True, 200, {"content-type": "application/json"}, url
+    def json(self): return {"resultObj": {"url": self._u, "streamType": "DASHWV", "laURL": "https://f1tv.formula1.com/la"}}
+real_get, hosts = f1tv.requests.get, iter(["https://f1prodlive.akamaized.net/a.mpd", "https://f1prodlive.akamaized.net/b.mpd", "https://ott-video-cf.formula1.com/c.mpd"])
+f1tv.requests.get = lambda *a, **k: _R(next(hosts))
+try:
+    assert f1tv.play(1, None, "tok")["url"] == "https://ott-video-cf.formula1.com/c.mpd"
+    f1tv.requests.get = lambda *a, **k: _R("https://f1prodlive.akamaized.net/x.mpd")
+    assert f1tv.play(1, None, "tok", tries=3)["url"].endswith("x.mpd")  # still Akamai after 3: that one, not an error
+finally:
+    f1tv.requests.get = real_get
+print("f1tv cdn retry ok")
+
+# live 4K: an HD Widevine answer to HDR_UHD_DASH is asked for again as HDR_UHD_DASHWV, kept only if F1 TV says UHD
+class _K(_R):
+    def __init__(self, kind): super().__init__("https://ott-video-cf.formula1.com/m.mpd"); self.kind = kind
+    def json(self): return {"resultObj": {"url": self._u, "streamType": self.kind, "laURL": "https://f1tv.formula1.com/la"}}
+seen = []
+def fake(url, params=None, headers=None, timeout=None):
+    seen.append(headers.get("x-f1-override-video-stream"))
+    return _K("HDR_UHD_DASHWV" if seen[-1] == "HDR_UHD_DASHWV" else "SDR_HD_DASHWV")
+f1tv.requests.get = fake
+try:
+    assert f1tv.play(1, None, "tok", uhd=True)["streamType"] == "HDR_UHD_DASHWV" and seen == ["HDR_UHD_DASH", "HDR_UHD_DASHWV"], seen
+    seen.clear()
+    f1tv.requests.get = lambda url, params=None, headers=None, timeout=None: seen.append(1) or _K("SDR_HD_DASHWV")
+    assert f1tv.play(1, None, "tok", uhd=True)["streamType"] == "SDR_HD_DASHWV" and len(seen) == 2  # no live 4K: the HD one
+    seen.clear()
+    f1tv.requests.get = lambda url, params=None, headers=None, timeout=None: seen.append(1) or _K("DASH")
+    assert f1tv.play(1, None, "tok", uhd=True)["streamType"] == "DASH" and len(seen) == 1  # replays: one request, as before
+finally:
+    f1tv.requests.get = real_get
+print("f1tv live 4k ok")
+
+# team radio: OpenF1's clips after a session, the live feed's while it's locked; each clip transcribed once, kept on disk
+import radio, replay as _rp
+with tempfile.TemporaryDirectory() as tmp:
+    real = (radio.DIR, radio.openf1, radio.live.radio, radio.transcribe, radio.requests.get)
+    radio.DIR = Path(tmp)
+    try:
+        radio.openf1 = lambda path: [{"date": "2026-10-25T20:05:00+00:00", "recording_url": "https://livetiming.formula1.com/static/a.mp3"}]
+        assert radio.clips({"session_key": 1}, "Race", 2026, 44) == [(1792958700.0, "https://livetiming.formula1.com/static/a.mp3")]
+        def locked(path): raise _rp.OpenF1Locked("live")
+        radio.openf1 = locked
+        radio.live.radio = lambda: ({"Name": "Practice 1", "Path": "2026/x/y/"}, [
+            {"Utc": "2026-10-30T12:40:00.1Z", "RacingNumber": "44", "Path": "TeamRadio/HAM.mp3"},
+            {"Utc": "2026-10-30T12:41:00Z", "RacingNumber": "16", "Path": "TeamRadio/LEC.mp3"}])
+        assert radio.clips({"session_key": 2}, "Practice 1", 2026, 44) == [(1793364000.1, "https://livetiming.formula1.com/static/2026/x/y/TeamRadio/HAM.mp3")]
+        assert radio.clips({"session_key": 2}, "Practice 2", 2026, 44) == []  # the feed is on another session
+        # transcription off (as shipped): F1's clips with their audio urls, nothing queued, no words
+        radio.TRANSCRIBE = False
+        r = radio.radio({"session_key": 2}, "Practice 1", 2026, 44, "tok")
+        assert r == {"clips": [{"t": 1793364000.1, "url": "https://livetiming.formula1.com/static/2026/x/y/TeamRadio/HAM.mp3", "text": None}],
+                     "pending": 0, "error": None, "transcribe": False}, r
+        assert not radio._queued
+        for bad in ["https://evil.example/a.mp3", "https://livetiming.formula1.com/static/../x", "file:///etc/passwd"]:
+            try:
+                radio.audio(bad, "tok")
+                raise AssertionError(f"fetched {bad}")
+            except ValueError:
+                pass
+        # transcription on: the worker fetches the audio with the caller's token and keeps the words; a refused clip says why
+        radio.TRANSCRIBE = True
+        sent = []
+        class _A:
+            def __init__(self, ok): self.ok, self.status_code, self.content = ok, 200 if ok else 401, b"mp3"
+        radio.requests.get = lambda url, headers=None, timeout=None: sent.append(headers) or _A("HAM" in url)
+        radio.transcribe = lambda audio: {"text": "Box this lap"}
+        r = radio.radio({"session_key": 2}, "Practice 1", 2026, 44, "tok")
+        assert r["clips"][0]["t"] == 1793364000.1 and r["pending"] in (0, 1)
+        for _ in range(100):
+            if not radio._queued: break
+            time.sleep(0.02)
+        assert radio.radio({"session_key": 2}, "Practice 1", 2026, 44, "tok")["clips"][0]["text"] == "Box this lap"
+        assert sent[0] == {"Authorization": "Bearer tok"}
+        r = radio.radio({"session_key": 2}, "Practice 1", 2026, 16, None)
+        for _ in range(100):
+            if not radio._queued: break
+            time.sleep(0.02)
+        r = radio.radio({"session_key": 2}, "Practice 1", 2026, 16, None)
+        assert r["clips"][0]["text"] is None and "refused" in r["error"], r
+    finally:
+        radio.DIR, radio.openf1, radio.live.radio, radio.transcribe, radio.requests.get = real
+        radio.TRANSCRIBE = False
+# a message is timed from its recording start in the clip's name (circuit local time), not F1's publish time ~30 s later
+from datetime import datetime as _dt, timezone as _tz
+pub = _dt(2026, 10, 30, 18, 33, 37, tzinfo=_tz.utc).timestamp()
+assert pub - radio.started(pub, "https://livetiming.formula1.com/static/2026/x/TeamRadio/HAD_6_20261030_123307.mp3") == 30
+assert pub - radio.started(pub, "https://livetiming.formula1.com/static/2026/x/TeamRadio/HAD_6_20261031_003307.mp3") == 30  # UTC+6
+assert radio.started(pub, "https://livetiming.formula1.com/static/x/HAM.mp3") == pub  # no time in the name
+print("team radio ok")
