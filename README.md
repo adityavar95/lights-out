@@ -96,7 +96,7 @@ The app has two sections, **Analytics** and **Stream**, switched in the header.
 > Needs **Python 3.14+** and **[uv](https://docs.astral.sh/uv/)**. [Node.js](https://nodejs.org) is only needed to run the frontend tests.
 
 ```bash
-git clone <your-repo-url> F1
+git clone https://github.com/adityavar95/lights-out.git F1
 cd F1
 uv sync
 uv run python src/server.py
@@ -120,13 +120,43 @@ uv run python src/desktop.py
 
 A small launcher asks **Open in the app** or **Open in the browser**. The app window uses the system's WebView2 (pywebview), so nothing else needs installing. In the browser, the launcher stays open: close it to stop Lights Out. If `src/server.py` is already running, the launcher uses it; set `LIGHTSOUT_PORT` to run on a port other than 8086.
 
-**Build the Windows executable:**
+**Download the Windows executable:** get `LightsOut-windows-x64.zip` from the repo's [Releases](https://github.com/adityavar95/lights-out/releases), unzip it anywhere and run `LightsOut\LightsOut.exe`. No Python needed. Windows SmartScreen may warn about an unsigned app: **More info → Run anyway**.
 
-```bash
-uv run python scripts/build_exe.py
-```
+**Build the Windows executable yourself** (Windows 10/11, with the Quick start prerequisites):
 
-This produces `dist/LightsOut/LightsOut.exe`. Share the whole `dist/LightsOut` folder (about 450 MB; zip it). The exe keeps its cache in `dist/LightsOut/.cache` and its log in `dist/LightsOut/lightsout.log`.
+1. Install the dependencies. `uv sync` also installs the dev group, which has PyInstaller:
+
+   ```bash
+   uv sync
+   ```
+
+2. Build it (a few minutes):
+
+   ```bash
+   uv run python scripts/build_exe.py
+   ```
+
+   This produces the folder `dist/LightsOut/`, with `LightsOut.exe` inside it. PyInstaller's working files go in `build/`. Both folders are git-ignored, and each build replaces the last.
+
+3. Try it:
+
+   ```bash
+   dist/LightsOut/LightsOut.exe
+   ```
+
+4. Zip the whole folder to share it (about 450 MB unzipped). The exe needs the `_internal` folder beside it, so share the folder, not the exe alone:
+
+   ```powershell
+   Compress-Archive -Path dist\LightsOut -DestinationPath dist\LightsOut-windows-x64.zip -Force
+   ```
+
+5. Optional: publish it as a GitHub release with the [GitHub CLI](https://cli.github.com):
+
+   ```bash
+   gh release create v0.1.0 dist/LightsOut-windows-x64.zip --title "Lights Out v0.1.0" --notes "Windows build"
+   ```
+
+The exe keeps its cache in `LightsOut/.cache` and its log in `LightsOut/lightsout.log`, beside itself. If it doesn't open, look in that log.
 
 > [!NOTE]
 > The exe leaves out NVIDIA's 2 GB of CUDA libraries, so radio transcription runs on the CPU there. Remove `--exclude-module nvidia` in `scripts/build_exe.py` to include them.
