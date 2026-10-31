@@ -601,6 +601,7 @@ async function load(t, at) {
     // load straight at that time: loading from 0 and then seeking fetched the start of the session for nothing
     await t.player.load(p.url, at ?? t.startAt ?? (join ? l.video.currentTime : undefined));
     t.startAt = undefined;
+    t.msg.className = 'mvmsg';  // .mvmsg.loading outranks .mvmsg:empty: an empty spinner stayed over the picture
     t.msg.textContent = '';
     fillQuality(t);
     lockTop(t);
