@@ -24,24 +24,6 @@ URL = f"http://127.0.0.1:{PORT}/"
 LOGIN = "https://account.formula1.com/#/en/login"
 # the login-session cookie F1's account site sets for scripts (see the bookmarklet in static/multiviewer.js)
 TOKEN = "(document.cookie.match(/login-session=([^;]+)/) || [])[1] || ''"
-CHOOSE = """<!doctype html><meta charset="utf-8"><title>Lights Out</title>
-<style>
-body { margin: 0; height: 100vh; display: grid; place-content: center; gap: 14px; text-align: center;
-  background: #08080c; color: #f2f3f7; font: 15px system-ui, sans-serif; }
-h1 { margin: 0 0 6px; font-size: 26px; letter-spacing: .04em; } h1 b { color: #e10600; }
-button { font: inherit; padding: 12px 28px; border-radius: 8px; border: 1px solid #3a3b44; background: #1b1c22; color: inherit; cursor: pointer; }
-button:hover { border-color: #8a8b96; } button.main { background: #e10600; border-color: #e10600; font-weight: 600; }
-p { margin: 0; color: #9a9ba6; } [hidden] { display: none; }
-</style>
-<h1>LIGHTS <b>OUT</b></h1>
-<div id="pick" style="display: grid; gap: 10px">
-  <button class="main" autofocus onclick="pywebview.api.open_app().then(url => location.href = url)">Open in the app</button>
-  <button onclick="pywebview.api.open_browser(); pick.hidden = true; away.hidden = false">Open in the browser</button>
-</div>
-<div id="away" hidden style="display: grid; gap: 10px">
-  <p>Lights Out is running in your browser.<br>Close this window to stop it.</p>
-  <button onclick="pywebview.api.open_browser()">Open another tab</button>
-</div>"""
 
 
 def token_of(cookie: str) -> str | None:
@@ -52,14 +34,22 @@ def token_of(cookie: str) -> str | None:
 
 
 class Api:
-    """Exposed to the page as window.pywebview.api."""
+    """Exposed to the pages (the launcher, the app's own window) as window.pywebview.api."""
 
     def open_app(self):
-        main.maximize()
-        return URL  # the page goes there itself once this call has answered: load_url here left pywebview no page to answer
+        """The app in a window of its own (framed, maximised); the launcher closes once this call has answered."""
+        webview.create_window("Lights Out", URL, js_api=self, maximized=True, min_size=(960, 640), background_color="#08080c")
+        threading.Timer(0.3, launcher.destroy).start()
 
     def open_browser(self):
         webbrowser.open(URL)
+
+    def minimize(self):
+        launcher.minimize()
+
+    def quit(self):
+        for win in list(webview.windows):
+            win.destroy()
 
     def f1tv_login(self):
         """Opens F1's sign-in in its own window, waits for the subscription token, closes it. None if the user closes it first."""
@@ -88,5 +78,7 @@ if __name__ == "__main__":
         threading.Thread(target=uvicorn.Server(uvicorn.Config(app, host="0.0.0.0", port=PORT)).run, daemon=True).start()
         while not serving():
             time.sleep(0.1)
-    main = webview.create_window("Lights Out", html=CHOOSE, js_api=Api(), width=420, height=340, min_size=(400, 320))
+    # the launcher (static/launcher.html): frameless glass with its own title bar, served by the app's server
+    launcher = webview.create_window("Lights Out", URL + "static/launcher.html", js_api=Api(), width=460, height=560,
+                                     resizable=False, frameless=True, easy_drag=False, shadow=True, background_color="#08080c")
     webview.start()  # private mode (the default): no cookies or storage outlive the app, as in the browser tab

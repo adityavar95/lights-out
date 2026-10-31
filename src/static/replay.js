@@ -29,6 +29,7 @@ export function setupReplay(root) {
     clock: el('span', {class: 'clock'}, '0:00:00'),
     lap: el('div', {class: 'lapcount'}, ''),
     flag: el('div', {class: 'flagpill'}, ''),
+    startLights: el('div', {class: 'startlights', hidden: true, role: 'img', 'aria-label': 'Start lights'}, ...Array.from({length: 5}, () => el('i'))),
     mode: el('div', {class: 'mode'}, ''),
     weather: el('div', {class: 'weather'}),
     map: el('div', {class: 'trackmap', role: 'img', 'aria-label': '3D track map: drag to rotate, scroll to zoom'}),
@@ -77,6 +78,7 @@ export function setupReplay(root) {
   const hud = setupHud(ui.stage, {onClose: () => S?.selected && select(S.selected),
     onErsMode: m => S?.sim?.setErsMode(S.selected, m), onDrsTest: () => S?.sim?.toggleDrsTest(S.selected)});
   hud.top.append(ui.flag, ui.lap, ui.mode, ui.weather);
+  ui.stage.append(ui.startLights);
   hud.left.append(el('div', {class: 'towerhead'}, el('span', {}, 'TIMING'), ui.colBtn), el('div', {class: 'towerscroll'}, ui.tower));
   // the deck itself: session, play, speed, position, camera. Cinematic, sound and the telemetry trace sit in the ⋯ menu
   const moreBtn = el('button', {class: 'neu', popovertarget: 'moremenu', 'aria-haspopup': 'true', 'aria-expanded': false,
@@ -610,7 +612,10 @@ function render(force) {
   const race = S.live ? S.data.race : S.sim || S.data.mode === 'laps' || S.data.intervals.length > 0;
   ui.lap.textContent = race ? `LAP ${st.lap || 0} / ${S.data.total_laps}` : S.data.session.toUpperCase();
   const status = S.live ? liveStatus(S.live) : S.sim ? st.status : S.data.mode === 'gps' ? trackStatus(S.data.race_control || [], t) : null;
-  if (status) {
+  const lights = /^LIGHTS (\d)/.exec(status ?? '');  // the start gantry: five red lights, then out
+  ui.startLights.hidden = !lights;
+  if (lights) ui.startLights.querySelectorAll('i').forEach((l, i) => l.classList.toggle('on', i < +lights[1]));
+  if (status && !lights) {
     ui.flag.textContent = status;
     ui.flag.className = `flagpill ${STATUS[status] || ''}`;
   } else {
@@ -630,7 +635,7 @@ function render(force) {
   updateDecks(S, st, f);
 }
 
-// m: 'overview' | 'chase' | 'onboard' | 'tcam' | 'heli'; all but overview follow the selected driver (the leader
+// m: 'overview' | 'chase' | 'follow' | 'onboard' | 'tcam' | 'heli'; all but overview follow the selected driver (the leader
 // if none is selected). Picking another driver keeps the camera mode, and the chase camera pans across.
 function setMode(m) {
   if (m !== 'overview' && !S.selected) {
@@ -658,5 +663,5 @@ function loadTelemetry(id) {
 
 function select(id) {
   S.selected = S.selected === id ? null : id;
-  setMode(!S.selected ? 'overview' : S.cam === 'overview' ? 'chase' : S.cam);
+  setMode(!S.selected ? 'overview' : S.cam === 'overview' ? (S.sim ? 'follow' : 'chase') : S.cam);  // the sim: a game's chase cam
 }

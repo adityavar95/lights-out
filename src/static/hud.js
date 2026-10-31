@@ -55,6 +55,8 @@ export function setupHud(wrap, {onClose, onErsMode, onDrsTest}) {
       el('div', {class: 'pedal thr', title: 'Throttle'}, h.thr)),
     el('div', {class: 'cfoot'}, h.drs,
       el('div', {class: 'ersbox', title: 'Energy store (modelled)'}, el('small', {}, 'ERS'), el('div', {class: 'ersbar'}, h.ers), h.ersPct, h.ersMode)),
+    h.lap = el('div', {class: 'laptime', title: 'Lap time, live delta to this car’s best lap, best lap'},
+      h.lapT = el('b'), h.lapD = el('span', {class: 'dt'}), h.lapB = el('span', {class: 'muted'})),
     h.proxL = el('i', {class: 'prox left', 'aria-hidden': 'true'}), h.proxR = el('i', {class: 'prox right', 'aria-hidden': 'true'}),
     h.simCtl = el('div', {class: 'simctl'},
       el('div', {class: 'neugroup', role: 'group', 'aria-label': 'ERS deployment mode'}, h.ersBtns), h.drsTest),
@@ -163,6 +165,14 @@ export function renderFocus(f) {
   if (f.sim) {
     h.ersBtns.forEach((btn, i) => btn.setAttribute('aria-pressed', ERS_MODES[i][0] === f.ers.user));
     h.drsTest.setAttribute('aria-pressed', !!f.drsForced);
+  }
+  h.lap.hidden = !f.lap;
+  if (f.lap) {
+    const lapT = s => `${Math.floor(s / 60)}:${(s % 60).toFixed(3).padStart(6, '0')}`, dt = f.lap.delta;
+    h.lapT.textContent = f.lap.time === null ? '–:––.–––' : lapT(f.lap.time);
+    h.lapD.textContent = dt === null ? '' : `${dt < 0 ? '−' : '+'}${Math.abs(dt).toFixed(3)}`;
+    h.lapD.dataset.s = dt < 0 ? '-' : '+';
+    h.lapB.textContent = f.lap.best ? `BEST ${lapT(f.lap.best)}` : '';
   }
   h.thr.style.height = `${f.throttle ?? 0}%`;
   h.brk.style.height = `${f.brake ?? 0}%`;

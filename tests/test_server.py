@@ -328,6 +328,7 @@ with tempfile.TemporaryDirectory() as tmp:
                 pass
         # transcription on: the worker fetches the audio with the caller's token and keeps the words; a refused clip says why
         radio.TRANSCRIBE = True
+        radio.IDLE = 0.05  # the worker (started below) frees the model after this long without a clip
         sent = []
         class _A:
             def __init__(self, ok): self.ok, self.status_code, self.content = ok, 200 if ok else 401, b"mp3"
@@ -346,6 +347,9 @@ with tempfile.TemporaryDirectory() as tmp:
             time.sleep(0.02)
         r = radio.radio({"session_key": 2}, "Practice 1", 2026, 16, None)
         assert r["clips"][0]["text"] is None and "refused" in r["error"], r
+        radio._model = "loaded"
+        time.sleep(0.3)
+        assert radio._model is None  # unloaded while idle
     finally:
         radio.DIR, radio.openf1, radio.live.radio, radio.transcribe, radio.requests.get = real
         radio.TRANSCRIBE = False

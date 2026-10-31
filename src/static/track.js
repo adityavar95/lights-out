@@ -89,10 +89,12 @@ export function buildTrack(mapPts, mpu, width = 13, ann = null) {
     kerb.push(ann?.kerb[Math.round(u) % N] ?? '');
   }
   const ds = len / n, tx = [], ty = [];
-  const turn = (i, W) => {  // signed heading change across +-W samples, per metre
+  // signed heading change between the chords either side of sample i, per metre: each chord's heading is the tangent at
+  // its midpoint, and the two midpoints are W samples apart (dividing by 2 W ds halved every curvature until Oct 2026)
+  const turn = (i, W) => {
     const a = (i - W + n) % n, c = (i + W) % n;
     const d = Math.atan2(y[c] - y[i], x[c] - x[i]) - Math.atan2(y[i] - y[a], x[i] - x[a]);
-    return Math.atan2(Math.sin(d), Math.cos(d)) / (2 * W * ds);
+    return Math.atan2(Math.sin(d), Math.cos(d)) / (W * ds);
   };
   for (let i = 0; i < n; i++) {
     const nx = x[(i + 1) % n] - x[(i - 1 + n) % n], ny = y[(i + 1) % n] - y[(i - 1 + n) % n], l = Math.hypot(nx, ny) || 1;
@@ -100,10 +102,13 @@ export function buildTrack(mapPts, mpu, width = 13, ann = null) {
     ty.push(ny / l);
   }
   const k1 = x.map((_, i) => turn(i, 1)), ks = x.map((_, i) => turn(i, 4));
-  const k = k1.map((v, i) => {
+  const kd = k1.map((v, i) => {
     const near = Math.max(Math.abs(k1[(i - 2 + n) % n]), Math.abs(k1[(i + 2) % n]));
     return Math.abs(v) > 3 * near ? Math.sign(v) * near : v;
   });
+  // then averaged over +-10 m: the outline's 5 m wiggles (radii jumping 50 <-> 3,000 m through Austin's esses) are no
+  // corner a 5.5 m car follows, and any real corner longer than ~25 m keeps its full curvature
+  const k = kd.map((_, i) => (kd[(i - 2 + n) % n] + kd[(i - 1 + n) % n] + kd[i] + kd[(i + 1) % n] + kd[(i + 2) % n]) / 5);
   // Elevation along the lap, from the heights h(s):
   //   grade  = dh/ds over +-10 m (the road's pitch is atan(grade); gravity along it is g sin(pitch))
   //   kv     = d2h/ds2 over +-15 m, the vertical curvature: > 0 in a compression (a dip, like the bottom of Eau Rouge,
@@ -116,7 +121,12 @@ export function buildTrack(mapPts, mpu, width = 13, ann = null) {
     ? ann.zones.map(z => ({start: sOf(z.start), end: sOf(z.end) + (z.end < z.start ? len : 0), detect: sOf(z.detect)}))
     : drsZones(pts).map(([a, b]) => ({start: a * ds, end: (b < a ? b + n : b) * ds, detect: ((a * ds - 150) % len + len) % len}));
   const tunnel = ann?.tunnel ? [sOf(ann.tunnel[0]), sOf(ann.tunnel[1])] : null;
-  return {n, ds, len, x, y, tx, ty, k, ks, line: racingLine(pts, half), half, zones, mpu, h, grade, kv, bank, kerb, tunnel,
+  // the racing line and the curvature of its own path: kappa = k / (1 - k d) + d'', with d'' over +-15 m (the line
+  // opens a corner out, swings across before it), which the AI corners on and plans its speed by (sim.js)
+  const line = racingLine(pts, half), W = 3;
+  const dd = line.map((_, i) => (line[(i + W) % n] - 2 * line[i] + line[(i - W + n) % n]) / (W * ds) ** 2);
+  const kLine = k.map((v, i) => v / Math.max(0.3, 1 - v * line[i]) + dd[i]);
+  return {n, ds, len, x, y, tx, ty, k, ks, line, dd, kLine, half, zones, mpu, h, grade, kv, bank, kerb, tunnel,
           sinBank: bank.map(Math.sin), wall: ann?.wall ?? 10};  // sinBank: for the physics' hot loops
 }
 

@@ -38,7 +38,7 @@ function pixelRatio(w = innerWidth, h = innerHeight) {
 const drawnView = new THREE.Matrix4(), drawnProj = new THREE.Matrix4();
 const sky0 = {env: 0.35, hemi: 0.5, fog: new THREE.Color(0xc4d3e2)};  // clear-sky lighting, for the weather to dim
 const RAIN_GREY = new THREE.Color(0.3, 0.32, 0.35);
-const RIGGED = new Set(['onboard', 'tcam', 'heli']);  // camera placed by code each frame, so no orbit controls
+const RIGGED = new Set(['onboard', 'tcam', 'heli', 'follow']);  // camera placed by code each frame, so no orbit controls
 // depth of field: lens f-number per camera, focused on the camera's target (the car, or 15 m ahead of it on board); the
 // overview and the helicopter have none
 const APERTURE = {chase: 2, tcam: 2.8, onboard: 2.8};
@@ -103,7 +103,9 @@ export function init3d(el) {
   for (const l of csm.lights) { l.color.set(0xfff1dc); l.shadow.camera.layers.enable(1); }
   world = new THREE.Group();
   scene.add(world);
-  post = createPost(renderer, scene, camera, high ? 8 : 4);
+  // 4x MSAA on every tier: the high tier already renders up to 2x supersampled, and 8x on top of that doubled the
+  // composer's two MSAA half-float targets (~0.8 GB of GPU memory at a 4K frame) for no visible edge
+  post = createPost(renderer, scene, camera, 4);
   vfx = createVfx(scene);
   loadSky(pmrem, sky);
   const fit = () => {
@@ -209,7 +211,10 @@ function loadSky(pmrem, sky) {
     scene.environment = pmrem.fromEquirectangular(hdr).texture;
     scene.environmentIntensity = sky0.env = 0.7;
     sky0.fog.copy(scene.fog.color);
-    scene.background = hdr;
+    // the background as a GPU cube map (the size three picks itself), so the panorama's pixels (64 MB at 4k) can go:
+    // kept as scene.background they stayed in the JS heap for the page's life
+    scene.background = new THREE.WebGLCubeRenderTarget(h / 2).fromEquirectangularTexture(renderer, hdr).texture;
+    hdr.dispose();
     scene.remove(sky);
     hemi.intensity = sky0.hemi = 0.15;  // the HDRI now supplies the ambient light
   }, undefined, () => {});
@@ -321,12 +326,12 @@ function disposeCars() {
   crews.clear();
 }
 
-// mode: overview (free orbit) | chase (TV) | onboard (cockpit, driver's eye) | tcam (on the airbox) | heli (helicopter)
+// mode: overview (free orbit) | chase (TV) | follow (game chase cam) | onboard (cockpit, driver's eye) | tcam (on the airbox) | heli (helicopter)
 export function setView(m) {
   mode = m;
   chased = null;
   controls.enabled = !RIGGED.has(m);
-  camera.fov = {overview: 42, chase: 50, onboard: 72, tcam: 64, heli: 30}[m];
+  camera.fov = {overview: 42, chase: 50, onboard: 72, tcam: 64, heli: 30, follow: 62}[m];
   camera.updateProjectionMatrix();
   csm.updateFrustums();  // the cascades are slices of the view frustum
   post.reset();
@@ -382,6 +387,8 @@ export async function setGround(year, round) {
   }
   // anisotropy 16: the ground is seen at grazing angles; three clamps it to what the GPU supports
   const texture = Object.assign(new THREE.Texture(g.image), {colorSpace: THREE.SRGBColorSpace, flipY: false, anisotropy: 16, needsUpdate: true});
+  // the bitmap (up to 8192² = 256 MB) is only needed for the one upload: kept, it held that RAM until the next circuit
+  texture.onUpdate = () => g.image.close();
   texture.addEventListener('dispose', () => g.image.close());
   const [a, b, u0, d, e, v0] = g.m, {w, h, data} = g.mask;
   const green = (X, Z) => {  // vegetation under scene (x, z), through the affine map the shader drapes the image with
@@ -562,6 +569,25 @@ export function updateCars(pos, ahead, focus, rate = 1, progress = 1, fx = null)
       camera.position.lerp(want, 1 - Math.exp(-lag / 0.7));
       controls.target.lerp(at, 1 - Math.exp(-lag / 0.2));
       camera.lookAt(controls.target);
+    } else if (mode === 'follow') {  // the racing-game chase cam: low behind the car, swinging round with it
+      // weight (sim cars): it hangs back under power and closes in under braking, swings out and leans in corners,
+      // and shakes over kerbs and at top speed; smoothed over ~0.15 s so it reads as the car's mass, not noise
+      const g = fx?.[id]?.g, cf = c.chaseFx ??= {lon: 0, lat: 0};
+      const ease = 1 - Math.exp(-dt / 0.15);
+      cf.lon += ((g?.gLong ?? 0) - cf.lon) * ease;
+      cf.lat += ((g?.gLat ?? 0) - cf.lat) * ease;
+      const back = 1.6 * len * (1 + THREE.MathUtils.clamp(cf.lon, -5, 3) * 0.04), side = -cf.lat * 0.025 * len;
+      const want = new THREE.Vector3(at.x - Math.cos(c.yaw) * back + Math.sin(c.yaw) * side, at.y + 0.42 * len,
+                                     at.z + Math.sin(c.yaw) * back + Math.cos(c.yaw) * side);
+      if (chased !== id) { chased = id; post.reset(); camera.position.copy(want); }
+      camera.position.lerp(want, 1 - Math.exp(-dt * Math.max(1, rate) / 0.08));  // replay time, as the heli's
+      controls.target.set(at.x + Math.cos(c.yaw) * len, at.y + 0.18 * len, at.z - Math.sin(c.yaw) * len);
+      camera.lookAt(controls.target);
+      const shake = (g?.kerb ? 0.004 + 0.06 * g.kerb : 0) + (c.v > 70 ? 0.0012 * (c.v - 70) / 10 : 0);
+      camera.rotateZ(cf.lat * 0.008 + (Math.random() - 0.5) * shake);
+      camera.rotateX((Math.random() - 0.5) * shake);
+      const fov = 62 + 10 * THREE.MathUtils.clamp(c.v / 90, 0, 1);  // widens with speed, 72 deg at ~320 km/h
+      if (Math.abs(fov - camera.fov) > 0.5) { camera.fov = fov; camera.updateProjectionMatrix(); csm.updateFrustums(); }
     } else if (mode === 'chase' && chased === null) {  // drop in behind the car
       chased = id;
       post.reset();

@@ -25,9 +25,25 @@ export function kinematics(p0, p1, p2, h) {
 // 2007); turbo: turbocharged (whistle and hiss in the audio); pIce: engine peak power, W; minMass: minimum mass with
 // driver, kg; pK: KERS / MGU-K power, W, with the store (battery) and per-lap harvest / deploy limits, J (KERS: 60 kW and
 // 400 kJ a lap, unused in 2010; MGU-K: 120 kW, 2 MJ harvest, 4 MJ deploy; 2026: 350 kW, ~8.5 MJ); drs: from 2011.
+// Before 1995 there was mostly no minimum mass worth the name: minMass is then a typical car with its driver.
 const ENGINES = [
-  [0, {name: '3.0L V10', cyl: 10, rpmMax: 17000, turbo: false, pIce: 520e3, minMass: 595, pK: 0, battery: 4e6, harvestLap: 0,
-       deployLap: 0, drs: false}],
+  [0, {name: '1.5L supercharged straight-8', cyl: 8, rpmMax: 9000, turbo: false, pIce: 310e3, minMass: 780, pK: 0, battery: 4e6,
+       harvestLap: 0, deployLap: 0, drs: false}],
+  [1952, {name: '2.0L straight-4', cyl: 4, rpmMax: 7500, pIce: 140e3, minMass: 640}],    // run to Formula 2 rules
+  [1954, {name: '2.5L straight-6', cyl: 6, rpmMax: 8000, pIce: 200e3, minMass: 700}],
+  [1961, {name: '1.5L V6', rpmMax: 10000, pIce: 140e3, minMass: 525}],
+  [1966, {name: '3.0L V8', cyl: 8, rpmMax: 9500, pIce: 260e3, minMass: 575}],
+  [1967, {name: '3.0L Cosworth DFV V8', rpmMax: 10000, pIce: 300e3}],
+  [1973, {rpmMax: 10500, pIce: 340e3, minMass: 650}],
+  [1978, {rpmMax: 11000, pIce: 360e3}],
+  [1981, {minMass: 660}],
+  [1983, {name: '1.5L turbo V6', cyl: 6, turbo: true, rpmMax: 11500, pIce: 600e3, minMass: 615}],
+  [1986, {pIce: 750e3}],                   // race boost; qualifying engines made far more
+  [1987, {pIce: 620e3, minMass: 575}],     // 4.0 bar pop-off valve
+  [1988, {pIce: 500e3}],                   // 2.5 bar
+  [1989, {name: '3.5L V10', cyl: 10, turbo: false, rpmMax: 13000, pIce: 490e3}],
+  [1992, {rpmMax: 14000, pIce: 560e3}],
+  [1995, {name: '3.0L V10', rpmMax: 17000, pIce: 520e3, minMass: 595}],
   [2000, {rpmMax: 18000, pIce: 600e3}],
   [2003, {rpmMax: 19000, pIce: 670e3}],
   [2004, {minMass: 605}],

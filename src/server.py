@@ -1,4 +1,8 @@
 """Lights Out backend: livef1/Jolpica tables, track maps and race replay data."""
+import os
+# Before numpy loads (via livef1/pandas): OpenBLAS commits a buffer per CPU thread, ~740 MB on a 32-thread CPU, and
+# nothing here does matrix maths
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 import json
 import re
 import threading

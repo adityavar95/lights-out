@@ -180,6 +180,8 @@ function paintTexture(ink, num, size = PAINT_SIZE) {
   }
   const texture = new THREE.CanvasTexture(canvas);
   Object.assign(texture, {colorSpace: THREE.SRGBColorSpace, flipY: false, wrapS: THREE.RepeatWrapping, wrapT: THREE.RepeatWrapping, anisotropy: 16});
+  // uploaded once, never redrawn: the canvas (4 MB a car, 88 MB for a 2026 grid) can go once it's on the GPU
+  texture.onUpdate = () => { canvas.width = canvas.height = 0; };
   return texture;
 }
 

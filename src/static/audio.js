@@ -229,6 +229,13 @@ function makeHeroExtras(v) {
   v.windF = filter('lowpass', 400, 0.5);
   v.wind = gain(0);
   chain(loop(pinkBuf), v.windF, v.wind, fx);
+  // gear whine: straight-cut gears meshing, a tone at the tooth-mesh rate of the final drive, ~wheel revs x 4 (final
+  // ratio) x 20 teeth: ~3 kHz at 290 km/h; loudest under load, heard most from the cockpit
+  v.whine = ctx.createOscillator();
+  v.whine.type = 'triangle';
+  v.whineG = gain(0);
+  chain(v.whine, filter('bandpass', 3000, 1.5), v.whineG, fx);
+  v.whine.start();
   // spray: water torn off the tyres, a hard high-passed hiss
   v.spray = gain(0);
   chain(loop(noiseBuf), filter('highpass', 4500, 0.7), v.spray, fx);
@@ -338,18 +345,24 @@ function drive(v, c, cam, inside, now) {
   ramp(v.drive.gain, 1 + 2.5 * th, 0.06);
   ramp(v.raspG.gain, 0.35 + 0.9 * th, 0.06);
   ramp(v.formant.frequency, 1200 + 4500 * th + f0 * 1.5, 0.06);
-  ramp(v.out.gain, (0.19 + 0.28 * th) * (0.6 + 0.4 * Math.min(1, c.rpm / 12000)) * (c.speed > 0.5 || c.rpm > 0 ? 1 : 0), 0.06);
-  // turbo whistle with boost (the shaft spools with inertia); hiss when the throttle snaps shut at high revs
-  const boost = Math.min(1, Math.max(0, (c.rpm - 6000) / 9000)) * (0.4 + 0.6 * th);
+  // the era's rev range: a 9,000 rpm 1950s straight-8 at its limit is as loud as a 19,000 rpm V10 at its
+  const top = c.rpmMax ?? 15000;
+  ramp(v.out.gain, (0.19 + 0.28 * th) * (0.6 + 0.4 * Math.min(1, c.rpm / (0.8 * top))) * (c.speed > 0.5 || c.rpm > 0 ? 1 : 0), 0.06);
+  // turbo whistle with boost (the simulation's spooling turbo when it has one, else estimated from revs and throttle);
+  // blow-off hiss when the boost dumps on a lift, a lighter chatter of wastegate while it bleeds at full boost
+  const boost = c.boost ?? Math.min(1, Math.max(0, (c.rpm - 0.4 * top) / (0.6 * top))) * (0.4 + 0.6 * th);
   ramp(v.turbo.frequency, (2200 + 3300 * boost) * v.dop, 0.2);
   ramp(v.turboG.gain, c.turbo === false ? 0 : 0.008 + 0.022 * boost, 0.15);  // naturally aspirated eras: no whistle or hiss
-  if (c.turbo !== false && v.throttle - th > 0.5 && c.rpm > 9000) {
+  if (c.turbo !== false && c.wastegate && !v.bov) ramp(v.hiss.gain, 0.03, 0.05);
+  const blowOff = c.bov !== undefined ? c.bov && !v.bov : v.throttle - th > 0.5 && c.rpm > 0.6 * top;
+  v.bov = c.bov;
+  if (c.turbo !== false && blowOff) {
     hold(v.hiss.gain, now);
     v.hiss.gain.setTargetAtTime(0.14, now, 0.006);
     v.hiss.gain.setTargetAtTime(0, now + 0.03, 0.12);
   }
   // overrun crackle: off throttle at high revs, unburnt fuel popping in the exhaust (close cars only)
-  if (th < 0.05 && c.rpm > 8500 && dist < 120 && now > v.popT) { pop(v, now); v.popT = now + 0.05 + Math.random() * 0.25; }
+  if (th < 0.05 && c.rpm > 0.57 * top && dist < 120 && now > v.popT) { pop(v, now); v.popT = now + 0.05 + Math.random() * 0.25; }
   v.throttle = th;
   ramp(v.mguk.frequency, c.rpm * (c.harvest ? 0.28 : 0.32) * v.dop);
   ramp(v.mgukG.gain, c.deploy ? 0.045 : c.harvest ? 0.03 : 0, 0.1);
@@ -373,10 +386,14 @@ function drive(v, c, cam, inside, now) {
     burst(v.fx, {type: 'lowpass', f: 85, Q: 1.5, level: 1.6, decay: 0.18});
     v.humpT = now + 0.09;
   }
-  // past ~92 % of the friction circle the tyres start sliding; locking a wheel under braking squeals hardest
-  const slide = Math.min(1, Math.max(0, (c.util - 0.92) / 0.2)) * (spd > 8 ? 1 : 0), lock = c.lock ? 1 : 0;
+  // tyres sliding: past ~85 % of the slip angle of their peak grip (the simulation's), else ~92 % of the friction
+  // circle; locking a wheel under braking squeals hardest
+  const over = c.scrub !== undefined ? (c.scrub - 0.85) / 0.3 : (c.util - 0.92) / 0.2;
+  const slide = Math.min(1, Math.max(0, over)) * (spd > 8 ? 1 : 0), lock = c.lock ? 1 : 0;
   ramp(v.scrub.gain, 0.25 * slide + 0.2 * lock, 0.04);
   ramp(v.squeal.gain, 0.12 * slide + 0.3 * lock, 0.04);
+  ramp(v.whine.frequency, Math.max(40, spd / (2 * Math.PI * 0.33) * 4 * 20));
+  ramp(v.whineG.gain, (inside ? 0.05 : 0.012) * (0.3 + 0.7 * th) * Math.min(1, spd / 20), 0.05);
   ramp(v.windF.frequency, 300 + 7000 * q);
   ramp(v.wind.gain, (inside ? 0.35 : 0.12) * q, 0.1);
   ramp(v.spray.gain, 0.22 * c.wet * Math.min(1, spd / 70), 0.1);

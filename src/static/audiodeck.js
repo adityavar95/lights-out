@@ -61,7 +61,7 @@ export function updateAudioDeck(S, st, focus) {
     const vel = p ? p.vel.clone().lerp(raw && !fast(raw) ? raw : p.vel, k) : new THREE.Vector3();
     const speed = vel.length(), accel = p && on ? (speed - p.speed) / dt : 0;
     prev[id] = {pos, vel, speed};
-    cars.push({id, pos, vel, speed, dist: pos.distanceTo(sc.cam), accel, cyl, turbo, ...carState(S, id, focus, speed, accel, rpmMax)});
+    cars.push({id, pos, vel, speed, dist: pos.distanceTo(sc.cam), accel, cyl, turbo, rpmMax, ...carState(S, id, focus, speed, accel, rpmMax)});
   }
   cars.sort((a, b) => (b.id === S.selected) - (a.id === S.selected) || a.dist - b.dist);
   const heard = cars.filter((c, i) => i < VOICES && (c.id === S.selected || c.dist < RANGE));
@@ -73,8 +73,10 @@ export function updateAudioDeck(S, st, focus) {
 // gear and revs estimated from its speed (telemetry.js gearbox) with throttle from its acceleration.
 function carState(S, id, focus, speed, accel, rpmMax) {
   const c = S.sim?.car(id);
+  // the simulation's own state, era hooks included: turbo boost, wastegate and blow-off, tyre slip against its peak
   if (c) return {rpm: c.rpm, gear: c.gear, throttle: c.throttle, brake: c.brake, deploy: c.ers.deploying, harvest: c.ers.harvesting,
-                 kerb: c.onKerb, sausage: c.sausage, util: c.util ?? 0, lock: c.smoke > 0, wet: c.wet, speed: c.v, tcCut: c.tcCut};
+                 kerb: c.onKerb, sausage: c.sausage, util: c.util ?? 0, lock: c.smoke > 0, wet: c.wet, speed: c.v, tcCut: c.tcCut,
+                 boost: c.spec.turbo && !c.spec.mguh ? c.boost : undefined, wastegate: c.wastegate, bov: c.bov > 0, scrub: c.scrub};
   // car data comes once per replay step (0.5 s): interpolate revs and throttle between samples, or the pitch stair-steps
   const tele = !S.live && typeof S.tele?.[id] === 'object' ? S.tele[id] : null, x = S.t / S.data.step, i = Math.floor(x);
   const lerp = f => (tele?.[f]?.[i] != null && tele[f][i + 1] != null ? tele[f][i] + (tele[f][i + 1] - tele[f][i]) * (x - i) : null);

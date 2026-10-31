@@ -137,7 +137,7 @@ const caShader = {
 };
 
 export function createPost(renderer, scene, camera, samples = 4) {
-  // MSAA (4x, 8x on a strong GPU) in a half-float target: anti-aliases geometry edges (wishbones, fences, track lines) and
+  // MSAA (4x) in a half-float target: anti-aliases geometry edges (wishbones, fences, track lines) and
   // keeps HDR values above 1 for bloom; the OutputPass tone maps at the end
   const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(1, 1, {type: THREE.HalfFloatType, samples}));
   const velocity = new THREE.WebGLRenderTarget(1, 1, {type: THREE.HalfFloatType});  // half resolution is plenty for blur

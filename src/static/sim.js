@@ -2,41 +2,26 @@
 // with weather (weather.js), wet tyres (tyres.js), pit stops and strategy (strategy.js) and race control
 // (racecontrol.js). Pure (no DOM / three.js) so node tests can run whole races. Units: SI throughout (m, s, kg, N, W, J);
 // positions in metres on the map plane (x right, y down), so a right-hand turn has positive curvature, on the +normal side.
-import {gearbox, engine, clamp} from './telemetry.js';
+import {clamp} from './telemetry.js';
 import {buildTrack, trackPos, at, idx} from './track.js';
 import {COMPOUNDS, thermalGrip, wearGrip, surfaceGrip, aquaplaneSpeed} from './tyres.js';
 import {createWeather, weatherStep, setWetness, wetAt, trackWetness} from './weather.js';
 import {createControl, controlStep, deploy, neutralised, vscDelta, safetyCar} from './racecontrol.js';
 import {createPit, pitControl, inPitLane, aiStrategy, aiPace, predictRejoin, PACE, pitLayout, lanePath, lanePos, pitPath, laneFor, ease} from './strategy.js';
 import {racecraft, resolveContacts, blocker} from './racecraft.js';
-import {playerDrive, ASSISTS, rpmFor} from './player.js';
+import {playerControls, ASSISTS} from './player.js';
+import {carSpec, gearUp, aero as aeroStep, vehicleStep, lateralLimit, autoShift, control} from './vehicle.js';
 
-export {COMPOUNDS, thermalGrip, wearGrip};
+export {COMPOUNDS, thermalGrip, wearGrip, carSpec};
 export {racingLine, trackPos} from './track.js';
 
 const RHO = 1.225, G = 9.81;  // air density kg/m^3, gravity
 const smooth = (v, a, b) => { const t = clamp((v - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
 
-// ---------- car and tyre constants ----------
+// ---------- the car ----------
 
-// Per regulation era. Engine, energy recovery, DRS and the minimum mass (car + driver) come from telemetry.js
-// engine(year); mass adds ~50 kg of average fuel. ClA / CdA are lift and drag coefficients times frontal area, in m^2:
-// at 300 km/h (q = 0.5 rho v^2 ~ 4.25 kPa) ClA 4.8 gives ~20 kN of downforce, about 2.5x the car's weight, and CdA 1.5
-// sets a ~330 km/h top speed at full power. Power: ICE plus MGU-K.
-// shortcut: aero is the same in every era (no published per-car figures); add era multipliers if wanted.
-export function carSpec(year) {
-  const e = engine(year);
-  return {
-    mass: e.minMass + 50, ClA: 4.8, CdA: 1.5, crr: 0.015, mu: 1.45, muLong: 0.95,  // muLong: longitudinal / lateral grip
-    pIce: e.pIce, pK: e.pK, rpmMax: e.rpmMax, drs: e.drs,                       // W, rev limit, DRS allowed
-    battery: e.battery, harvestLap: e.harvestLap, deployLap: e.deployLap,      // J: store, per-lap harvest / deploy limits
-    maxBrakeG: 6,                                                           // brake system and driver limit, g
-    // heave: plank clearance h0 at rest, spring k, damping ratio; ground-effect cars (2022+) gain downforce as they get
-    // lower, which with soft damping makes the car porpoise
-    h0: 0.030, k: 700e3, zeta: year >= 2022 ? 0.25 : 0.6, ge: year >= 2022 ? 0.35 : 0.1,
-  };
-}
-
+// Everything about the car comes from its era's profile (eras.js through vehicle.js carSpec): mass and fuel, aero,
+// tyres, power unit, gearbox, aids. Each car gets its own copy (its mass changes as its fuel burns).
 // ---------- physics ----------
 
 // Cornering speed limit. Lateral grip must supply the centripetal force: m v^2 |k| <= mu (m g + 0.5 rho v^2 ClA).
@@ -45,9 +30,16 @@ export function carSpec(year) {
 // Banking adds to it: on a road tilted by beta towards the corner's inside, gravity's component along the road surface
 // supplies g sin(beta) of the centripetal force for free (off-camber, beta < 0, takes it away), so the numerator becomes
 // g (mu + sin beta). help = sin(beta) signed for this corner's direction.
-function cornerSpeed(k, mu, ClA, m, help = 0) {
-  const den = Math.abs(k) - mu * RHO * ClA / (2 * m);
-  return den <= 0 ? 150 : Math.min(150, Math.sqrt(Math.max(0.05, mu + help) * G / den));
+// Load sensitivity (ls): a tyre's friction falls as it is pressed harder, mu = mu0 (N / m g)^-ls, so a slow corner
+// (light load) gets more of mu0 than a fast one; solved here by two fixed-point passes on the speed.
+function cornerSpeed(k, mu0, ClA, m, help = 0, ls = 0) {
+  let mu = mu0, v = 150;
+  for (let pass = 0; pass < (ls ? 3 : 1); pass++) {
+    const den = Math.abs(k) - mu * RHO * ClA / (2 * m);
+    v = den <= 0 ? 150 : Math.min(150, Math.sqrt(Math.max(0.05, mu + help) * G / den));
+    mu = mu0 * (1 + 0.5 * RHO * v * v * ClA / (m * G)) ** -ls;
+  }
+  return v;
 }
 const bankHelp = (T, s, k) => at(T, T.sinBank, s) * (Math.sign(k) || 0);
 
@@ -61,27 +53,22 @@ function envelope(T, c, plan, s0, n) {
   const v = new Float64Array(n + 1), vmax = new Float64Array(n + 1);
   let next = 150;
   for (let j = n; j >= 0; j--) {
-    const i = idx(T, s0 + j * T.ds), k = T.k[i], help = T.sinBank[i] * (Math.sign(k) || 0);  // ~3,000 samples per car per second
-    vmax[j] = cornerSpeed(k, plan.mu, plan.ClA, c.mass, help);
+    // the racing line's own curvature: the path the AI drives (vs the centre line: corners opened out, the swing across)
+    const i = idx(T, s0 + j * T.ds), k = T.kLine[i], help = T.sinBank[i] * (Math.sign(k) || 0);  // ~3,000 samples per car per second
+    vmax[j] = cornerSpeed(k, plan.mu, plan.ClA, c.mass, help, c.loadSens);
     if (j < n) {
       // judge the cornering load at the speed the car will have HERE (faster than at the next point), estimated from the
       // full-grip upper bound: using the lower next-point speed would promise braking grip the car doesn't have
-      const q = 0.5 * RHO * next * next, grip = plan.mu * (G + q * plan.ClA / c.mass);
+      const q = 0.5 * RHO * next * next, load = 1 + q * plan.ClA / (c.mass * G), grip = plan.mu * load ** -c.loadSens * G * load;
       const here = next * next + 2 * grip * T.ds, lat = Math.max(0, here * Math.abs(k) - G * help);
-      const brake = c.muLong * Math.sqrt(Math.max(0, grip * grip - lat * lat)) + q * plan.CdA / c.mass + G * T.grade[i];
+      // x0.9: the brakes really get ~90 % of the circle (ABS pulses at 93-97 %, and a sliver is kept for steering)
+      const brake = 0.9 * c.muLong * Math.sqrt(Math.max(0, grip * grip - lat * lat)) + q * plan.CdA / c.mass + G * T.grade[i];
       next = Math.sqrt(next * next + 2 * clamp(brake, 3, c.maxBrakeG * G) * T.ds);
     }
     next = Math.min(next, vmax[j]);
     v[j] = next;
   }
   return {v, vmax};
-}
-
-// Peak deceleration at speed v: tyre braking force (longitudinal mu times normal load, downforce included) plus aero drag,
-// capped by what the brakes and driver can do.
-function brakeDecel(v, mu, ClA, CdA, c) {
-  const q = 0.5 * RHO * v * v;
-  return Math.min(c.muLong * mu * (c.mass * G + q * ClA) / c.mass + q * CdA / c.mass, c.maxBrakeG * G);
 }
 
 const CORNERS = ['FL', 'FR', 'RL', 'RR'];
@@ -94,23 +81,29 @@ export function createRace({year, mapPts, mpu, width, drivers, laps, compounds, 
   c.ClA *= aero?.cl ?? 1;
   c.CdA *= aero?.cd ?? 1;
   c.drsCut = aero?.drs ?? 0.22;  // a small Monza rear wing gains less from opening the flap
+  gearUp(c, c.CdA * (c.active ? c.active.xCd : c.drs ? 1 - c.drsCut : 1));  // geared for the circuit's top speed
   const total = laps ?? Math.ceil(305e3 / T.len);  // race distance: the fewest complete laps covering 305 km
   const cars = drivers.map((id, g) => ({
-    id, grid: g, s: -(8 * g + 6), d: g % 2 ? -1.6 : 1.6, v: 0, a: 0, gLat: 0, gLong: 0, throttle: 0, brake: 0, gear: 0, rpm: 4000,
+    id, grid: g, s: -(8 * g + 6), d: g % 2 ? -1.6 : 1.6, v: 0, a: 0, gLat: 0, gLong: 0, throttle: 0, brake: 0, gear: 1, rpm: 4000,
+    spec: {...c}, ctl: control(),  // its own copy of the car (its fuel burns) and the controls it is driven with
     skill: 1 + 0.012 * (1 - 2 * g / Math.max(1, drivers.length - 1)),  // qualifying order as car/driver pace, +-1.2 %
     tyre: {compound: compounds?.[g] ?? ['MEDIUM', 'SOFT', 'MEDIUM', 'HARD'][g % 4], health: [100, 100, 100, 100],
            ts: [70, 70, 60, 60], tc: [70, 70, 60, 60]},                     // blankets: ~70 C front, 60 C rear
     pit: createPit(compounds?.[g] ?? ['MEDIUM', 'SOFT', 'MEDIUM', 'HARD'][g % 4]), stint: 0, hist: [], attackLaps: 0,
     pace: 'BALANCED', paceUser: null, slide: 0, wet: 0, spray: 0, vref: new Float32Array(T.n),  // green-flag speed per sample
-    player: false, delta: 0, kPath: 0, psi: 0, aLong: 0, spin: 0, locked: false, tcCut: false, damage: 0, contact: 0,
+    player: false, delta: 0, kPath: 0, psi: 0, vy: 0, r: 0, aLong: 0, spin: 0, locked: false, tcCut: false, damage: 0, contact: 0,
+    shiftT: 0, boost: 0, aeroX: 0, seal: 1, snatch: 0,
     ers: {soc: 0.9, mode: 'BALANCED', user: null, harvested: 0, deployed: 0, harvesting: false, deploying: false, derate: false},
     drs: {armed: false, open: false, forced: false, zone: -1},
     z: 0, zv: 0, clearance: c.h0, sparks: 0, smoke: 0, wake: 0, dirty: 0, ahead: null, gapAhead: Infinity,
     pass: null, lapStart: 0, secStart: 0, secs: [], lapsDone: 0, finished: false,
+    react: 0.15 + 0.2 * Math.random(), err: 0,  // reaction to lights out (s); a driver error's time left (s)
+    lapTrace: new Float32Array(T.n), bestTrace: null, best: Infinity, lapDelta: null,  // lap time at each sample: the delta
   }));
-  const R = {T, c, total, cars, t: 0, status: 'RED', laps: {}, leaderPass: [], winner: null, done: false,
-             W: createWeather(), control: createControl(year >= 2026 ? 'OVERTAKE' : 'DRS'),
-             ai: {pace: 1, aggression: 0.5}, assists: {...ASSISTS}, input: {throttle: 0, brake: 0, steer: 0}, player: null,
+  // the start: five red lights come on a second apart, then go out together after a random 0.2-3 s hold
+  const R = {T, c, total, cars, t: 0, status: 'RED', lightsOut: 5.2 + 2.8 * Math.random(), laps: {}, leaderPass: [], winner: null, done: false,
+             W: createWeather(), control: createControl(c.overtake ? 'OVERTAKE' : 'DRS'),
+             ai: {pace: 1, aggression: 0.5}, assists: {...ASSISTS}, input: {throttle: 0, brake: 0, steer: 0, clutch: 0}, player: null,
              wing: 0,  // pit-wall trim, -5..+5 clicks
              // the circuit's real pit lane from GPS when there is one, else one alongside the main straight
              pit: (pitLane && lanePath(T, pitLane)) ?? pitLayout(T, pitLoss ? laneFor(+pitLoss.normal) : 400)};
@@ -136,7 +129,7 @@ export function createRace({year, mapPts, mpu, width, drivers, laps, compounds, 
 
   function step(h) {
     R.t += h;
-    if (R.status === 'RED' && R.t >= 3) R.status = 'GREEN';  // five red lights, then lights out
+    if (R.status === 'RED' && R.t >= R.lightsOut) R.status = 'GREEN';
     for (const car of cars) Object.assign(car, {blue: null, behind: null, gapBehind: Infinity, inLane: inPitLane(car)});
     for (const car of cars) findAhead(car);
     // weather: traffic = car passes per point of track per second, relative to a 20-car field at ~180 km/h
@@ -159,12 +152,14 @@ export function createRace({year, mapPts, mpu, width, drivers, laps, compounds, 
   }
 
   function drive(car, h) {
-    if (R.status === 'RED') return;
-    const tyre = car.tyre, comp = COMPOUNDS[tyre.compound], k = at(T, T.k, car.s), ks = at(T, T.ks, car.s), v = car.v;
-    const lapS = ((car.s % T.len) + T.len) % T.len, line = at(T, T.line, car.s), ctl = R.control;
+    if (R.status === 'RED' || (!car.player && R.t < R.lightsOut + car.react)) return;  // the player reacts for themself
+    const c = car.spec, X = car.ctl, tyre = car.tyre, comp = COMPOUNDS[tyre.compound], v = car.v;
+    const k = at(T, T.k, car.s), ks = at(T, T.ks, car.s), lapS = ((car.s % T.len) + T.len) % T.len, line = at(T, T.line, car.s), ctl = R.control;
+    // fuel burns in proportion to race distance (refuelling era: a constant average stint load)
+    c.mass = c.minMass + (c.refuel ? c.fuel : Math.max(1, c.fuel * (1 - Math.max(0, car.s) / (total * T.len))));
     const pit = pitControl(R, car, h, line);
     if (pit?.hold) {  // stationary in the box while the crew changes tyres
-      Object.assign(car, {v: 0, a: 0, throttle: 0, brake: 1, gear: 0, rpm: 4000, sparks: 0, smoke: 0, spray: 0});
+      Object.assign(car, {v: 0, a: 0, throttle: 0, brake: 1, gear: 1, rpm: 0.3 * c.rpmMax, sparks: 0, smoke: 0, spray: 0, vy: 0, r: 0, psi: 0});
       return;
     }
 
@@ -173,67 +168,63 @@ export function createRace({year, mapPts, mpu, width, drivers, laps, compounds, 
     // dirty air: the same turbulent, downwashed air starves the wings and floor in corners (up to -22 % Cl)
     const o = car.ahead, aligned = o ? 1 - clamp(Math.abs(car.d - o.d) / 2.2, 0, 1) : 0;
     const inWake = car.gapSec >= 0.1 && car.gapSec <= 1.5 ? 1 - (car.gapSec - 0.1) / 1.4 : 0;
-    const straight = clamp(1 - Math.abs(ks) * 150, 0, 1), cornering = (1 - straight) * smooth(v, 25, 45);  // 90+ km/h corners
+    const straight = clamp(1 - Math.abs(ks) * 75, 0, 1), cornering = (1 - straight) * smooth(v, 25, 45);  // 90+ km/h corners
     car.wake = aligned * inWake;
     car.dirty = car.wake * cornering;
-    const tow = 1 - 0.18 * car.wake * straight;
-    const dirtyAir = 1 - 0.22 * car.dirty;
 
-    // --- heave: ride height under aero load, bumps and kerbs ---
-    // m z'' = F_down(z) - k z - c z'   (z = compression from static ride height)
-    // Ground effect makes downforce rise as the floor nears the track (ge * z / h0); if the gap closes below ~8 mm the
-    // floor flow stalls and downforce collapses, the car springs up, the flow reattaches: porpoising.
+    // --- aero and ride height (vehicle.js aero): bumps, kerbs, the wake, a broken wing, the pit wall's trim ---
     const bump = 0.003 * Math.sin(lapS * 0.071) * Math.sin(lapS * 0.013 + 1.3) + 0.0015 * Math.sin(lapS * 0.53);
     // riding the kerb at the apex: flat FIA kerbs lift the floor ~12 mm; the tall "sausage" kerbs at chicanes like Monza's
     // Rettifilo ~50 mm, enough to slam the plank into the track
     const sausage = at(T, T.kerb, car.s) === 'sausage' && Math.abs(car.d) > T.half - 1.3 && v > 15;
-    const kerb = sausage ? 0.05 : Math.abs(car.d) > T.half - 1.6 && Math.abs(k) > 1 / 200 ? 0.012 : 0;
+    const kerb = sausage ? 0.05 : Math.abs(car.d) > T.half - 1.6 && Math.abs(k) > 1 / 100 ? 0.012 : 0;
     car.sausage = sausage;
-    car.clearance = c.h0 - car.z - bump - kerb;
-    const stall = c.ge > 0.2 && car.clearance < 0.008 ? 0.75 : 1;
-    // a broken front wing (damage 0..1) costs up to 18 % of the downforce until the nose is changed in the pits
-    // wing trim from the pit wall: each click ~4 % downforce for ~3 % drag
-    const ClA = c.ClA * (1 + c.ge * clamp(car.z / c.h0, 0, 1.5)) * dirtyAir * stall * (1 - 0.18 * car.damage) * (1 + 0.04 * R.wing);
-    const drsOpen = car.drs.open;
-    // open flap: -22 % drag by default (less at Monza), worth ~15-18 km/h at the end of a straight
-    const CdA = c.CdA * tow * (drsOpen ? 1 - c.drsCut : 1) * (1 + 0.03 * R.wing);
-    const q = 0.5 * RHO * v * v, down = q * ClA, drag = q * CdA;
-    const damp = 2 * c.zeta * Math.sqrt(c.k * c.mass);
+    car.kerb = kerb;
     // Elevation: the road's pitch angle is atan(grade). Gravity along it, g sin(pitch), slows the car uphill and pushes
     // it downhill; across it, g cos(pitch) plus v^2 kv presses the car into the road: a compression (kv > 0) piles
     // several g of extra load onto the suspension (bottoming at Eau Rouge), a crest (kv < 0) unloads the tyres.
     const grade = at(T, T.grade, car.s), pitchCos = 1 / Math.sqrt(1 + grade * grade), slope = G * grade * pitchCos;
     const vertical = c.mass * (v * v * at(T, T.kv, car.s));
-    car.zv += (down + vertical - c.k * car.z - damp * car.zv) / c.mass * h;
-    car.z += car.zv * h;
-    const plank = Math.max(0, -car.clearance);  // floor below the track surface: the skid block is grinding
-    if (plank > 0) { car.z -= plank * 0.5; car.zv = Math.min(car.zv, 0); }
-    car.sparks = v > 50 ? clamp(plank / 0.003, 0, 1) : 0;
+    // a broken front wing (damage 0..1) costs up to 18 % of the downforce until the nose is changed in the pits; each
+    // click of pit-wall wing ~4 % downforce for ~3 % drag
+    const A = aeroStep(car, c, X, h, {mult: (1 - 0.22 * car.dirty) * (1 - 0.18 * car.damage) * (1 + 0.04 * R.wing),
+      drag: (1 - 0.18 * car.wake * straight) * (1 + 0.03 * R.wing), vertical, kerb, bump, drsCut: c.drsCut});
 
     // --- grip: compound x surface water x temperature x wear x driver, on a normal load that includes downforce ---
     // Water: the track's wetness where this car is (the racing line dries first) against what its tread can handle.
     // Aquaplaning: above the tread's critical speed for this much water, high-speed corners bring brief micro-slides
-    // (a 0.3 s grip loss to 65 % that pushes the car wide), more often the further over that speed it is.
+    // (a 0.3 s grip loss to 65 %), more often the further over that speed it is. Off the track: run-off and grass x0.55.
     const w = car.wet = wetAt(R.W, Math.abs(car.d - line)), surf = surfaceGrip(tyre.compound, w);
     const vAq = aquaplaneSpeed(tyre.compound, w);
     if (car.slide > 0) car.slide -= h;
-    else if (v > vAq && Math.abs(ks) > 1 / 600 && Math.random() < h * 3 * (v / vAq - 1)) car.slide = 0.3;
+    else if (v > vAq && Math.abs(ks) > 1 / 300 && Math.random() < h * 3 * (v / vAq - 1)) car.slide = 0.3;
     const temp = tyre.ts.reduce((a, b) => a + b) / 4, health = tyre.health.reduce((a, b) => a + b) / 4;
+    const win = [comp.window[0] + c.warm, comp.window[1] + c.warm];  // the era's rubber (eras.js tyre.warm)
     const skill = car.player ? 1 : car.skill * R.ai.pace;  // the AI pace slider (80-110 %) scales the AI cars' grip
-    const mu = c.mu * skill * comp.grip * surf.grip * thermalGrip(temp, comp.window) * wearGrip(health) * (car.slide > 0 ? 0.65 : 1);
-    const N = Math.max(0.2 * c.mass * G, c.mass * G * pitchCos + vertical + down), aGrip = mu * N / c.mass;
-    let aLat = v * v * k;
+    const off = !pit && Math.abs(car.d) > T.half + 1.6;
+    const mu = c.mu * skill * comp.grip * surf.grip * thermalGrip(temp, win) * wearGrip(health) * (car.slide > 0 ? 0.65 : 1) * (off ? 0.55 : 1);
+    const N = Math.max(0.2 * c.mass * G, c.mass * G * pitchCos + vertical + A.down);
+    const muN = mu * (N / (c.mass * G)) ** -c.loadSens, aGrip = muN * N / c.mass;  // load sensitivity (cornerSpeed)
     const help = bankHelp(T, car.s, k);  // banking towards the corner's inside carries g sin(beta) of the cornering load
     // the driver's pace mode sets how much of that grip they plan to use (pushing, standard, saving tyres)
     car.pace = aiPace(R, car);
-    const pace = PACE[car.pace], muPlan = mu * pace.plan * (1 + (car.deeper || 0));  // attacking: brakes a little later
+    // the plan counts on the weaker axle's share (vehicle.js lateralLimit), what the car can really hold, judged without
+    // the moment's braking or drive (counting it, the plan would chase its own braking down)
+    const balance = Math.min(1, lateralLimit(car, c, muN, N, A.down, 0) / aGrip);
+    // driver error: now and then an AI driver commits too late to a braking zone (more often pushing and in the wet),
+    // planning on 12 % more grip than there is: it locks the fronts and runs wide, a second or so lost (~2 a race)
+    if (car.err > 0) car.err -= h;
+    else if (!car.player && !pit && !neutralised(ctl) && car.brake > 0.5
+             && Math.random() < h * 0.003 * (0.5 + R.ai.aggression) * (1 + 3 * trackWetness(R.W))) car.err = 1.5;
+    // attacking: brakes a little later, up to the car's full grip (planning past it only misses the corner)
+    const pace = PACE[car.pace], muPlan = mu * balance * (car.err > 0 ? 1.12 : Math.min(1, pace.plan * (1 + (car.deeper || 0))));
 
     // --- what speed can the car carry? scan the next braking distance for the tightest constraint ---
-    // allowed speed now = min over points j ahead of sqrt(vmax_j^2 + 2 a_brake(vmax_j) x_j)
     // horizon: enough to brake at ~0.8 g plus margin; braking shares grip with curving approaches, so it can take far
-    // longer than a straight-line stop (the envelope must see the corner before the car is committed)
+    // longer than a straight-line stop (the envelope must see the corner before the car is committed). The plan uses
+    // corner-mode aero (the 2026 flaps shut the moment the driver lifts) at the settled ride height.
     const look = Math.min(140, Math.ceil((v * v / 16 + 80) / T.ds));
-    car.plan = {mu: muPlan, ClA, CdA};  // also for the racing-line ribbon
+    car.plan = {mu: muPlan, ClA: A.ClAplan, CdA: A.CdA};  // also for the racing-line ribbon
     const env = envelope(T, c, car.plan, car.s, look);
     let vAllow = env.v[0], brakeAhead = Infinity, turn = 1, slowest = 150;
     for (let j = 1; j <= look; j++) {
@@ -256,75 +247,57 @@ export function createRace({year, mapPts, mpu, width, drivers, laps, compounds, 
     if (car.finished) vAllow = Math.min(vAllow, 45);  // cool-down lap
 
     // --- ERS mode, and (AI) the lane: racecraft.js picks racing line / tow / attack / defence and leaves the space ---
-    const ers = car.ers, manual = car.player && !pit;
+    const ers = car.ers, manual = car.player && !pit, drs = car.drs;
     ers.mode = ers.user ?? (car.attackPush ? 'PUSH' : ers.soc < 0.2 ? 'HARVEST' : pace.ers);
+    let dTarget = car.d;
     if (!manual) {
-      let dTarget = racecraft(R, car, {o, straight, brakeAhead, turn, line, neutral: neutralised(ctl) || !!pit});
+      dTarget = racecraft(R, car, {o, straight, brakeAhead, turn, line, neutral: neutralised(ctl) || !!pit});
       if (car.blue) dTarget = (car.d >= 0 ? 1 : -1) * (T.half - 1.2);  // blue flag: move over to the edge and let the leader by
-      dTarget -= Math.sign(ks) * (0.8 * car.dirty + (car.slide > 0 ? 1.5 : 0));  // understeer / a slide pushes it wide
+      if (c.skirts) dTarget = clamp(dTarget, 1.7 - T.half, T.half - 1.7);  // a kerb breaks the skirts' seal: stay off them
       if (pit) dTarget = pit.d;
       car.dTarget = dTarget;
-      const rate = pit ? 20 : 2.5;  // m/s across; in the pit sequence it follows the lane's entry and exit paths (eased)
-      car.d += clamp(dTarget - car.d, -rate * h, rate * h);
     }
 
-    // --- energy: returns the power available (ICE + any MGU-K deployment) and books the battery ---
-    // Deployment by mode: push spends down to 2 %, balanced keeps a 25 % reserve, harvest saves it all. Regenerative
-    // braking turns up to the MGU-K's power limit of the car's kinetic energy back into charge; lifting harvests ~a third.
-    ers.deploying = ers.derate = false;
-    const power = (thr, brk, lift) => {
-      const reserve = {PUSH: 0.02, BALANCED: 0.25, HARVEST: 1.1}[ers.mode];
-      const deploy = thr > 0.95 && v > 28 && ers.soc > reserve && ers.deployed < c.deployLap;
-      ers.derate = thr > 0.95 && ers.mode !== 'HARVEST' && ers.soc <= 0.03;  // flat out with an empty battery
-      ers.deploying = deploy;
-      if (deploy) { ers.soc -= c.pK * h / c.battery; ers.deployed += c.pK * h; }
-      const regen = (brk > 0 ? c.pK : lift ? c.pK * 0.35 : 0) * (ers.harvested < c.harvestLap ? 1 : 0);
-      ers.harvesting = regen > 0;
-      ers.soc = clamp(ers.soc + regen * h / c.battery, 0, 1);
-      ers.harvested += regen * h;
-      return c.pIce + (deploy ? c.pK : 0);
-    };
-
-    // --- longitudinal: brake, lift and coast, or drive (AI), or the player's pedals and steering (player.js) ---
-    // friction circle: whatever lateral grip the corner uses is not available for braking or traction
-    let throttle = 0, brake = 0, a;
-    const s0 = car.s;
-    const coast = ers.mode === 'HARVEST' && brakeAhead < 70 && v > 40;  // lift early to recharge (lift and coast)
-    if (manual) {
-      ({a, aLat, throttle, brake} = playerDrive(R, car, h, {T, c, k, drag, N, aGrip, vAllow, power, slope, roll: at(T, T.bank, car.s)}));
-    } else {
-      // the friction circle only has to supply the cornering force the banking doesn't
-      const aLong = Math.sqrt(Math.max(0, aGrip * aGrip - (Math.abs(aLat) - G * help) ** 2));
-      if (v > vAllow + 0.3) {
-        brake = clamp((v - vAllow) / 0.8, 0.4, 1);  // track the envelope tightly: a lagging controller arrives too fast
-        // over the limit mid-corner the friction circle leaves no braking; a real car scrubs speed anyway (understeer)
-        a = -brake * Math.min(c.muLong * Math.max(aLong, 0.35 * aGrip), c.maxBrakeG * G) - drag / c.mass;
-        power(0, brake, false);
-      } else if (coast) {
-        a = -(drag + c.crr * N) / c.mass;
-        power(0, 0, true);
-      } else {
-        throttle = clamp((vAllow - v) / 2, 0, 1);
-        // power-limited thrust P / v, traction-limited: the driven rear axle (~60 % of the load) and only the grip the
-        // corner leaves over (friction circle)
-        const thrust = Math.min(power(throttle, 0, false) / Math.max(v, 5), 0.6 * c.muLong * aLong * c.mass) * throttle;
-        a = (thrust - drag - c.crr * N) / c.mass;
-      }
+    // --- the controls: the player's (player.js filters their input), or the AI driver's ---
+    // Straight-line aero (2026 X mode) wherever the track runs straight with the next braking point well ahead, on a
+    // green flag and a dry track; DRS (2011-25) or the overtake override (2026) once armed (below).
+    const xOk = !!c.active && straight > 0.9 && brakeAhead > Math.max(100, v) && !neutralised(ctl) && trackWetness(R.W) <= 0.2 && !pit;
+    X.aeroMode = c.active ? (xOk ? 'X_MODE_STRAIGHT' : 'Z_MODE_CORNER') : drs.open ? 'DRS_OPEN' : 'FIXED';
+    X.ersMode = c.overtake && drs.open ? 'BOOST_OVERRIDE' : ers.mode;
+    const sinBank = at(T, T.sinBank, car.s), coast = ers.mode === 'HARVEST' && brakeAhead < 70 && v > 40;
+    if (manual) playerControls(R, car, h, X, {vAllow, aGrip, help, k});
+    else {
+      // pedals track the speed envelope: the brake above it (the foot of a pro, which like ABS holds each axle at what
+      // the corner leaves it: vehicle.js), part throttle up to it, lift and coast to harvest
+      X.brake = v > vAllow + 0.3 ? clamp((v - vAllow) / 0.8, 0.4, 1) : 0;
+      X.throttle = X.brake || coast ? 0 : clamp((vAllow - v) / 2, 0, 1);
+      // a turbo without an MGU-H: crack the throttle against the brakes into the corner so the boost is up at the apex
+      X.preload = c.turbo && !c.mguh && X.brake > 0 && v < vAllow + 12 ? 0.6 : 0;
+      X.gearShift = autoShift(car, c, X.brake);
+      Object.assign(X, {clutch: 0, abs: true, tc: 1, autoBlip: true, autoClutch: true});  // a pro's feet: no lock-ups, no wheelspin
+      // Lateral: the AI drives its lane (racing line, tow, attack, defence: racecraft.js) as an ideal driver, moving
+      // across at up to 2.5 m/s (20 in the pit sequence) and cornering on its lane's curvature (the track's where it
+      // is, plus the racing line's own bend, which its lanes follow); the car
+      // takes the corner as far as its tyres allow and runs wide by the rest (vehicle.js)
+      X.kappa = k / Math.max(0.3, 1 - k * car.d) + at(T, T.dd, car.s);  // its lane bends with the racing line
+      X.lane = {d: dTarget, rate: pit ? 20 : 2.5};
+      X.steer = Math.atan(c.wb * X.kappa) / c.maxLock;  // for the cockpit wheel and the front wheels
+      // what to keep back for cornering (trail braking); about to run into the car ahead, the brakes come first and
+      // the car runs wide instead
+      const closing = car.block && car.block.gap < 10 + 0.15 * v && v > car.block.o.v + 1;
+      X.fyNeed = closing ? 0 : c.mass * v * v * Math.abs(X.kappa);
     }
+    const s0 = car.s, out = vehicleStep(R, car, X, h, {T, k, mu: muN, N, down: A.down, drag: A.drag, slope, sinBank, off, rail: !!pit, dRail: dTarget});
+    const {a, aLat, throttle, brake} = out;
 
     // --- DRS: armed when crossing a detection point within 1.000 s of the car ahead (from lap 3), opens in the zone
-    // on throttle, snaps shut on the brakes or at the end of the zone ---
-    const drs = car.drs;
-    if (!manual) {
-      a -= slope;  // uphill / downhill
-      car.v = Math.max(0, v + a * h);
-      car.s += car.v * h;
-    }
+    // on throttle, snaps shut on the brakes or at the end of the zone. From 2026 the same rule arms the overtake
+    // override (extra MGU-K power and energy) instead of a flap ---
     if (!neutralised(ctl) && !pit && car.lapsDone >= 1 && !car.player) car.vref[vi] = car.v;  // learn racing pace (after lap 1)
     const cross = x => { const p = ((s0 % T.len) + T.len) % T.len; return p <= x && p + (car.s - s0) > x; };
     // Race control's interlock (green flag, dry track, lap 3+, 2 laps after a restart) gates it all; the testing
     // toggle stands in for the 1-second rule but not for the safety interlocks.
-    const allowed = c.drs && (ctl.drs || (drs.forced && !neutralised(ctl) && trackWetness(R.W) <= 0.2));  // DRS from 2011
+    const allowed = (c.drs || c.overtake) && (ctl.drs || (drs.forced && !neutralised(ctl) && trackWetness(R.W) <= 0.2));
     T.zones.forEach((z, i) => {
       if (cross(z.detect)) { drs.armed = allowed && (car.gapSec <= 1 || drs.forced) && !pit; drs.zone = i; }
     });
@@ -339,6 +312,7 @@ export function createRace({year, mapPts, mpu, width, drivers, laps, compounds, 
 
     // --- tyres, per corner: load share, sliding heat, airflow cooling, wear ---
     const gLong = a / G, gLat = aLat / G, util = clamp(Math.hypot(a, aLat) / Math.max(aGrip, 1), 0, 1.2);
+    const size = c.minMass / 800;  // tyres are sized to the car they carry: cooling area and heat capacity scale with it
     CORNERS.forEach((name, i) => {
       const front = name[0] === 'F', left = name[1] === 'L';
       // weight transfer: a right-hander (gLat > 0) loads the left tyres, braking (gLong < 0) the fronts
@@ -348,23 +322,21 @@ export function createRace({year, mapPts, mpu, width, drivers, laps, compounds, 
       // + rolling resistance: its power, crr x load x speed, is dissipated in the tyre as heat (carcass flexing)
       const heat = (0.45 * slide + c.crr * share * N * v) * Math.sqrt(comp.warm) * surf.heat;  // dry-running wets overheat
       // airflow cooling, W per K above the 26 C air; a water film on the track draws heat out up to 4x faster
-      const conv = (20 + 1.5 * v) * (1 + 3 * w) * (tyre.ts[i] - 26);
-      const cond = 90 * (tyre.ts[i] - tyre.tc[i]);      // surface -> carcass
+      const conv = (20 + 1.5 * v) * (1 + 3 * w) * (tyre.ts[i] - 26) * size;
+      const cond = 90 * size * (tyre.ts[i] - tyre.tc[i]);      // surface -> carcass
       // thin surface layer, heats and cools in seconds; softer compounds respond faster (less effective heat capacity)
-      tyre.ts[i] += (heat + (car.locked && front ? 40000 : 0) - conv - cond) / (9000 / comp.warm) * h;
-      tyre.tc[i] += (cond - 15 * (tyre.tc[i] - 26)) / 60000 * h;  // carcass: tens of seconds
+      tyre.ts[i] += (heat + (car.locked && front ? 40000 : 0) * size - conv - cond) / (9000 * size / comp.warm) * h;
+      tyre.tc[i] += (cond - 15 * size * (tyre.tc[i] - 26)) / (60000 * size) * h;  // carcass: tens of seconds
       const wear = comp.wear * surf.wear * pace.wear * (car.v * h / T.len) * (0.5 + 0.8 * util) * share * 4
-                 * (tyre.ts[i] > comp.window[1] + 10 ? 2 : 1)  // blistering above the window: twice the wear
+                 * (tyre.ts[i] > win[1] + 10 ? 2 : 1)  // blistering above the window: twice the wear
                  * (car.locked && front ? 3 : 1);  // a locked wheel grinds a flat spot
       tyre.health[i] = Math.max(0, tyre.health[i] - wear);
     });
     // a lock-up: braking at the limit on tyres that have lost their grip smokes the fronts
-    car.smoke = (car.locked || (brake > 0.95 && (wearGrip(health) < 0.8 || thermalGrip(temp, comp.window) < 0.7))) && w < 0.2 ? 1 : 0;
+    car.smoke = (car.locked || (car.err > 0 && brake > 0.5) || (brake > 0.95 &&(wearGrip(health) < 0.8 || thermalGrip(temp, win) < 0.7))) && w < 0.2 ? 1 : 0;
     car.spray = w * smooth(v, 15, 60);  // rooster tail: the diffuser and tyres throw up water in proportion to both
 
     Object.assign(car, {a, gLat, gLong, throttle, brake, onKerb: kerb > 0, util});  // onKerb / util: for the audio
-    if (manual) car.rpm *= c.rpmMax / 15000;  // the player's gearbox works on a 15,000 rpm scale: same share of this limiter
-    else ({gear: car.gear, rpm: car.rpm} = gearbox(car.v * 3.6, c.rpmMax));
   }
 
   // lap and sector times, plus the leader's passage time at every 20 m of race distance (for time gaps)
@@ -379,19 +351,29 @@ export function createRace({year, mapPts, mpu, width, drivers, laps, compounds, 
       if (car.lapsDone >= 0 && car.secs.length >= 2) {
         car.secs.push(R.t - car.secStart);
         R.laps[car.id].push([car.lapStart, car.lapsDone + 1, R.t - car.lapStart, ...car.secs.slice(0, 3)]);
+        if (R.t - car.lapStart < car.best) {
+          car.best = R.t - car.lapStart;
+          [car.bestTrace, car.lapTrace] = [car.lapTrace, car.bestTrace ?? new Float32Array(T.n)];
+        }
       }
       car.lapsDone = lapsDone;
       car.attackLaps = car.gapSec < 1.2 ? car.attackLaps + 1 : 0;  // laps spent stuck behind a car (undercut trigger)
       car.lapStart = car.secStart = R.t;
       car.secs = [];
-      if (lapsDone >= total && !car.finished) {
+      // the chequered flag: the winner after `total` laps, then every car the next time it crosses the line, lapped or not
+      if ((lapsDone >= total || R.winner) && !car.finished) {
         car.finished = true;
         R.winner ??= car.id;
         car.finishT = R.t;
+        car.finishLaps = lapsDone;
         R.status = 'CHEQUERED';
       }
       car.ers.harvested = car.ers.deployed = 0;  // per-lap energy limits reset at the line
     }
+    // live delta: this lap's time here against the best lap's at the same point
+    const i = idx(T, car.s);
+    car.lapTrace[i] = R.t - car.lapStart;
+    car.lapDelta = car.bestTrace ? car.lapTrace[i] - car.bestTrace[i] : null;
   }
 
   // advance by dt seconds of race time in equal substeps (<= 1/120 s, more when the replay runs fast); they end exactly on
@@ -399,15 +381,19 @@ export function createRace({year, mapPts, mpu, width, drivers, laps, compounds, 
   R.advance = dt => {
     const n = clamp(Math.ceil(dt * 120), 1, 40), h = dt / n;
     for (let i = 0; i < n; i++) { step(h); R.onStep?.(); }  // onStep: the telemetry recorder (tracemodal.js)
-    if (R.winner && cars.every(x => x.finished || R.t - (cars.find(y => y.id === R.winner).finishT) > 90)) R.done = true;
+    // every car has taken the flag, or a lap and a half (at the winner's average) has passed: one stopped out on track
+    const win = R.winner && cars.find(y => y.id === R.winner);
+    if (win && cars.every(x => x.finished || R.t - win.finishT > 1.5 * win.finishT / total)) R.done = true;
   };
 
-  // race order and time gaps to the leader (leader's passage time at this car's distance)
+  // race order (at the flag: laps completed, then crossing time) and time gaps to the leader (leader's passage time
+  // at this car's distance)
   R.board = () => {
-    const order = cars.slice().sort((x, y) => (y.finished && x.finished ? x.finishT - y.finishT : y.s - x.s));
+    const order = cars.slice().sort((x, y) => (y.finished && x.finished ? y.finishLaps - x.finishLaps || x.finishT - y.finishT : y.s - x.s));
     return order.map((car, i) => {
-      const lapsDown = Math.floor((order[0].s - car.s) / T.len), pass = R.leaderPass[Math.floor(car.s / 20)];
-      const gap = i === 0 || car.s < 0 ? null : car.finished && order[0].finished ? car.finishT - order[0].finishT
+      const lapsDown = car.finished && order[0].finished ? order[0].finishLaps - car.finishLaps : Math.floor((order[0].s - car.s) / T.len);
+      const pass = R.leaderPass[Math.floor(car.s / 20)];
+      const gap = i === 0 || car.s < 0 ? null : car.finished && order[0].finished && !lapsDown ? car.finishT - order[0].finishT
                 : pass !== undefined ? R.t - pass : null;
       return {car, pos: i + 1, lap: clamp(car.lapsDone + 1, 1, total), gap, lapsDown};
     });
@@ -439,7 +425,7 @@ export function createRace({year, mapPts, mpu, width, drivers, laps, compounds, 
   R.ribbon = (id, n = 60) => {
     const car = byId(id);
     if (!car?.plan) return null;
-    const env = envelope(T, c, car.plan, car.s, n), out = new Array(n);
+    const env = envelope(T, car.spec, car.plan, car.s, n), out = new Array(n);
     for (let j = 1; j <= n; j++) {
       const s = car.s + j * T.ds, va = env.v[j];
       out[j - 1] = {pos: trackPos(T, s, at(T, T.line, s)), state: car.v > va + 3 ? 2 : car.v > va - 8 ? 1 : 0, corner: env.vmax[j] < 80};

@@ -11,10 +11,12 @@ const SWITCHES = [
   ['tc', 'TRACTION', [['OFF', 'OFF'], ['MED', 'MED'], ['FULL', 'FULL']]],
   ['abs', 'ABS', [[false, 'OFF'], [true, 'ON']]],
   ['gearbox', 'GEARBOX', [['AUTO', 'AUTO'], ['MANUAL', 'MANUAL']]],
+  ['clutch', 'CLUTCH', [['AUTO', 'AUTO'], ['MANUAL', 'MANUAL']]],  // H-pattern eras: clutch to shift, blip to downshift
+  ['rules', 'AIDS', [['OPEN', 'ANY'], ['ERA', 'ERA-LEGAL']]],         // TC / launch / ABS only where that season allowed them
   ['brakeAssist', 'BRAKE ASSIST', [['OFF', 'OFF'], ['LOW', 'LOW'], ['HIGH', 'HIGH']]],
   ['line', 'RACING LINE', [['ON', 'ON'], ['CORNERS', 'CORNERS'], ['OFF', 'OFF']]],
 ];
-const KEYHELP = 'W/S throttle·brake · A/D steer · E/Q gears · R/Space DRS · F overtake · P pit · C camera';
+const KEYHELP = 'W/S throttle·brake · A/D steer · E/Q gears · X clutch · R/Space DRS · F overtake · P pit · C camera';
 
 let D, getS, lastFrame = performance.now();
 
@@ -79,7 +81,7 @@ export function updateDriverDeck(S) {
   if (!car) { setRibbon(null); D.status.textContent = 'AI driving every car'; return; }
   // the player's input this frame, and its one-shot actions
   const inp = pollInput(dt);
-  Object.assign(R.input, {throttle: inp.throttle, brake: inp.brake, steer: inp.steer});
+  Object.assign(R.input, {throttle: inp.throttle, brake: inp.brake, steer: inp.steer, clutch: inp.clutch});
   if (inp.actions.has('up')) R.input.up = true;
   if (inp.actions.has('down')) R.input.down = true;
   if (inp.actions.has('drs')) R.input.drs = true;
@@ -88,9 +90,10 @@ export function updateDriverDeck(S) {
   if (inp.actions.has('camera')) nextCamera();
   D.status.replaceChildren(
     el('span', {class: car.tcCut ? 'on' : ''}, 'TC'), el('span', {class: car.absOn ? 'on' : ''}, 'ABS'),
-    el('span', {class: car.overRev > 0 ? 'warn' : ''}, car.overRev > 0 ? 'OVER-REV' : `G${car.gear}`),
+    el('span', {class: car.overRev > 0 || car.grind > 0 ? 'warn' : ''}, car.overRev > 0 ? 'OVER-REV' : car.grind > 0 ? 'CLUTCH!' : `G${car.gear}`),
     el('span', {class: car.ers.user === 'PUSH' ? 'on' : ''}, 'OVERTAKE'), el('span', {class: car.pit.box ? 'on' : ''}, 'PIT'));
   if (car.overRev > 0) car.overRev -= dt;
+  if (car.grind > 0) car.grind -= dt;
   // racing-line ribbon ahead of the player: ON everywhere, CORNERS only where it matters (corners, lift, braking)
   const rib = R.assists.line !== 'OFF' && R.ribbon(car.id);
   setRibbon(rib ? rib.map(p => (R.assists.line === 'CORNERS' && !p.corner && p.state === 0 ? null : p)) : null);

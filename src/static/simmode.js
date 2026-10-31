@@ -61,17 +61,19 @@ export function simState(race, byId) {
   for (const c of race.cars) {
     cars[c.id] = race.pos(c);
     ahead[c.id] = race.posAhead(c, 0.5);
-    // contact throws carbon-fibre sparks; the player's car also drives the cockpit camera physics
+    // contact throws carbon-fibre sparks; the player's car also drives the cockpit camera physics (and any car the
+    // game chase cam follows)
     fx[c.id] = {sparks: Math.max(c.sparks, c.contact > 0 ? 1 : 0), smoke: c.smoke, spray: c.spray, light: c.ers.harvesting || c.ers.derate,
-                cam: c.player ? {gLat: c.gLat, gLong: c.gLong, steer: c.delta, v: c.v} : null};
+                cam: c.player ? {gLat: c.gLat, gLong: c.gLong, steer: c.delta, v: c.v} : null,
+                g: {gLat: c.gLat, gLong: c.gLong, kerb: c.kerb}};
   }
   const board = race.board().map(({car, pos, lap, gap, lapsDown}) => ({
     d: byId[car.id], pos, lap, gap, tyre: car.tyre.compound, age: car.lapsDone - (car.stintLap ?? 0), out: false,
     pit: car.pit.state !== 'RACING' && car.pit.state !== 'EXIT',
     gapText: pos === 1 ? `LAP ${lap}` : lapsDown >= 1 ? `+${lapsDown} LAP${lapsDown > 1 ? 'S' : ''}` : gap !== null ? `+${gap.toFixed(3)}` : '',
   }));
-  // flag: race control's neutralisation if there is one, else green / chequered (nothing before lights out)
-  const status = race.status === 'RED' ? null : race.control.state !== 'GREEN' ? race.control.state : race.status;
+  // flag: race control's neutralisation if there is one, else green / chequered; before lights out, the start lights
+  const status = race.status === 'RED' ? `LIGHTS ${Math.min(5, Math.floor(race.t))}` :race.control.state !== 'GREEN' ? race.control.state : race.status;
   return {cars, ahead, fx, board, lap: board[0]?.lap ?? 1, status};
 }
 
@@ -79,12 +81,15 @@ export function simState(race, byId) {
 export function simFocus(race, id) {
   const c = race.cars.find(x => x.id === id);
   if (!c) return null;
-  const e = c.ers, state = e.derate ? 'DERATE' : e.harvesting ? 'HARVEST' : e.deploying ? 'DEPLOY' : 'HOLD';
+  const e = c.ers, state = e.derate ? 'DERATE' : e.clipping ? 'CLIP' : e.harvesting ? 'HARVEST' : e.deploying ? 'DEPLOY' : 'HOLD';
   return {kmh: c.v * 3.6, gear: c.gear, rpm: c.rpm, throttle: Math.round(c.throttle * 100), brake: Math.round(c.brake * 100),
           drs: c.drs.open ? 'open' : c.drs.armed ? 'detected' : 'off', drsForced: c.drs.forced,
           ers: {soc: e.soc, mode: state, user: e.user, plan: e.mode}, g: {gLat: c.gLat, gLong: c.gLong},
           tyres: {temps: c.tyre.ts, wear: c.tyre.health.map(h => 100 - h), compound: c.tyre.compound}, sim: true,
-          damage: c.damage, radar: proximity(race, c)};
+          damage: c.damage, radar: proximity(race, c),
+          lap: {time: c.s < 0 ? null : race.t - c.lapStart, delta: c.lapDelta, best: c.best < Infinity ? c.best : null},
+          // 2026 active aero: the flaps' mode in the DRS slot (the override still shows as open / detected)
+          ...(c.spec.overtake ? {drsName: c.aeroX > 0.5 ? 'X-MODE' : 'Z-MODE'} : {})};
 }
 
 // Blind-spot radar: rivals beside the car or diagonally behind it, up to 1.5 car lengths back, on each side. Red when

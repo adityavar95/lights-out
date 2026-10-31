@@ -31,6 +31,13 @@ assert.ok(vmax * 3.6 > 280 && vmax * 3.6 < 345, `top speed ${vmax * 3.6}`);
 assert.ok(gLat > 2.5, `aero grip in the 120 m hairpins: ${gLat} g`);
 assert.equal(solo.laps.A.length, 4, 'every lap timed');
 assert.ok(solo.laps.A[2].slice(3).every(s => s > 0), 'sector times');
+// the start: lights out after the five lights and a 0.2-3 s hold, the car moving only after its reaction time
+assert.ok(solo.lightsOut >= 5.2 && solo.lightsOut <= 8, `lights out at ${solo.lightsOut}`);
+const start = race(['A']);
+while (start.t < start.lightsOut + start.cars[0].react - 0.05) { start.advance(1 / 60); assert.equal(start.cars[0].v, 0, 'no jump start'); }
+// live delta to the best lap: zero-ish on a lap as fast as the best, the best lap is the fastest timed
+assert.equal(a.best, Math.min(...solo.laps.A.map(l => l[2])));
+assert.ok(Math.abs(a.lapDelta) < 1, `delta ${a.lapDelta}`);
 
 // DRS: forced open from lap 3 on, the flap is worth well over 10 km/h at the end of the straight
 const drs = race(['A']), b = drs.cars[0];

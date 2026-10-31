@@ -49,6 +49,7 @@ function photo(name, metres, tile, fallback, res = '1k') {
         t.image = img;
         if (tile) t.repeat.setScalar(tile / metres);  // tile 0: the user sets the repeat (the terrain, per circuit)
         t.needsUpdate = true;
+        t.onUpdate = () => img.close();  // decoded photos (up to 16 MB each at 2k) aren't needed once on the GPU
       }, undefined, () => {});
   }
   return set;
@@ -130,6 +131,7 @@ function foliage(S = 2048) {
   const t = new THREE.DataTexture(new Uint8Array(img.buffer), 2 * S, S);
   Object.assign(t, {colorSpace: THREE.SRGBColorSpace, generateMipmaps: true, minFilter: THREE.LinearMipmapLinearFilter,
                     magFilter: THREE.LinearFilter, anisotropy: 16, needsUpdate: true});
+  t.onUpdate = () => { t.image.data = null; };  // uploaded once: the 32 MB of pixels can go
   return t;
 }
 

@@ -1,6 +1,7 @@
 // Shared helpers: fetching, team colours, flags, formatting.
 
 const cache = new Map();
+const KEEP = [['/api/replay/', 2], ['/api/telemetry/', 4], ['/api/f1tv/telemetry/', 8]];  // [url prefix, how many kept]
 
 export async function get(url) {
   if (!cache.has(url)) {
@@ -10,8 +11,9 @@ export async function get(url) {
       return body;
     }));
     cache.get(url).catch(() => cache.delete(url));  // let failed requests be retried
-    // replays are several MB each: keep the last two, not every session opened since the page loaded
-    if (url.startsWith('/api/replay/')) for (const k of [...cache.keys()].filter(k => k.startsWith('/api/replay/')).slice(0, -2)) cache.delete(k);
+    // replays (several MB) and telemetry (0.3-3 MB a driver) keep their last few, not every one opened since the page loaded
+    const keep = KEEP.find(([prefix]) => url.startsWith(prefix));
+    if (keep) for (const k of [...cache.keys()].filter(k => k.startsWith(keep[0])).slice(0, -keep[1])) cache.delete(k);
   }
   return cache.get(url);
 }

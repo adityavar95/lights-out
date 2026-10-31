@@ -58,7 +58,7 @@ export function autoAero(pts, mpu) {
   const T = buildTrack(pts, mpu);
   let run = 0, longest = 0;
   for (let i = 0; i < 2 * T.n; i++) {
-    run = Math.abs(T.ks[i % T.n]) < 1 / 400 ? run + T.ds : 0;
+    run = Math.abs(T.ks[i % T.n]) < 1 / 200 ? run + T.ds : 0;  // radius over 200 m
     longest = Math.max(longest, Math.min(run, T.len));
   }
   const cl = Math.min(1.25, Math.max(0.78, 1.49 - 0.53 * longest / 1000));

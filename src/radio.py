@@ -30,6 +30,7 @@ _errors: dict = {}  # clip url -> why it has no text (the audio refused, a decod
 _lock = threading.Lock()
 _worker: threading.Thread | None = None
 _model = None
+IDLE = 120  # s without a clip to transcribe before the model is unloaded (reloading it takes ~1-2 s)
 
 
 def _path(url: str) -> Path:
@@ -102,8 +103,13 @@ def transcribe(audio) -> dict:
 
 def _work():
     import io
+    global _model
     while True:
-        url, token = _jobs.get()
+        try:
+            url, token = _jobs.get(timeout=IDLE)
+        except queue.Empty:  # no clips for a while: free the model (~0.5 GB of RAM, or the GPU's) until the next one
+            _model = None
+            continue
         try:
             headers = {"Authorization": f"Bearer {token}"} if token else {}
             r = requests.get(url, headers=headers, timeout=(5, 30))

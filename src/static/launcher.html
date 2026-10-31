@@ -1,0 +1,188 @@
+<!doctype html>
+<!-- The desktop launcher (src/desktop.py): a small frameless window, the app's own glass, its own title bar.
+     Open in the app (a proper window of its own), or in the browser (this window stays as the off switch). -->
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lights Out</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Titillium+Web:ital,wght@0,400;0,600;0,700;1,900&display=swap">
+<style>
+:root {
+  color-scheme: light dark;
+  --bg: light-dark(#eef0f5, #08080c); --ink: light-dark(#15151e, #f2f2f6); --muted: light-dark(#5f6172, #9d9db0);
+  --accent: #e10600; --green: light-dark(#148a45, #2fd06f);
+  --glass: light-dark(rgb(255 255 255 / .58), rgb(24 25 34 / .55));
+  --glass-hover: light-dark(rgb(255 255 255 / .82), rgb(40 41 54 / .7));
+  --blur: blur(22px) saturate(180%);
+  --edge: light-dark(rgb(255 255 255 / .9), rgb(255 255 255 / .16)); --edge-fade: light-dark(rgb(0 0 0 / .06), rgb(255 255 255 / .04));
+  --hairline: light-dark(rgb(0 0 0 / .08), rgb(255 255 255 / .09));
+  --shadow: light-dark(0 10px 30px rgb(20 20 40 / .12), 0 14px 36px rgb(0 0 0 / .45));
+  --spring: cubic-bezier(.34, 1.56, .64, 1);
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { margin: 0; overflow: hidden; background: var(--bg); color: var(--ink); user-select: none;
+  font: 15px/1.45 'Titillium Web', system-ui, sans-serif; display: flex; flex-direction: column; }
+/* ambient light behind the glass, as on the app's pages, drifting slowly; a faint racing line through it */
+.ambient { position: fixed; inset: -20%; z-index: -1; pointer-events: none;
+  background: radial-gradient(45% 40% at 20% 10%, light-dark(rgb(225 6 0 / .22), rgb(225 6 0 / .34)), transparent 70%),
+    radial-gradient(40% 35% at 90% 30%, light-dark(rgb(138 43 226 / .18), rgb(140 80 255 / .26)), transparent 70%),
+    radial-gradient(40% 40% at 40% 100%, light-dark(rgb(39 244 210 / .16), rgb(39 244 210 / .12)), transparent 70%);
+  animation: drift 18s ease-in-out infinite alternate; }
+@keyframes drift { to { transform: translate(4%, -3%) rotate(6deg) scale(1.05); } }
+.track { position: fixed; inset: 0; z-index: -1; width: 100%; height: 100%; pointer-events: none; opacity: .5; }
+.track path { fill: none; stroke: light-dark(rgb(0 0 0 / .07), rgb(255 255 255 / .07)); stroke-width: 10; stroke-linecap: round; stroke-linejoin: round; }
+.track path.run { stroke: url(#run); stroke-width: 2.5; stroke-dasharray: 60 1140; animation: lap 6s linear infinite; }
+@keyframes lap { to { stroke-dashoffset: -1200; } }
+@media (prefers-reduced-motion: reduce) { .ambient, .track path.run { animation: none; } }
+
+/* title bar: the drag region, with the window's own buttons on the left */
+.bar { height: 40px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 14px; }
+.lights { display: flex; gap: 8px; }
+.light { width: 12px; height: 12px; border-radius: 50%; border: 0; padding: 0; cursor: pointer; display: grid; place-items: center;
+  box-shadow: inset 0 0 0 .5px rgb(0 0 0 / .25); }
+.light svg { width: 8px; height: 8px; opacity: 0; stroke: rgb(0 0 0 / .55); stroke-width: 2.4; fill: none; stroke-linecap: round; }
+.lights:hover .light svg { opacity: 1; }
+.light.close { background: #ff5f57; } .light.min { background: #febc2e; } .light.off { background: light-dark(#d5d6dd, #3a3b45); cursor: default; }
+
+main { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 22px; padding: 0 28px 18px; }
+.hero { text-align: center; animation: rise .6s var(--spring) both; }
+.logo { display: inline-grid; place-items: center; width: 72px; height: 72px; border-radius: 20px; color: #fff; font-weight: 900; font-style: italic;
+  font-size: 32px; letter-spacing: -.02em; background: linear-gradient(160deg, #ff3b30, var(--accent));
+  box-shadow: 0 12px 30px rgb(225 6 0 / .4), inset 0 1px 0 rgb(255 255 255 / .4), inset 0 -2px 6px rgb(0 0 0 / .15); }
+h1 { margin: 14px 0 2px; font-size: 26px; font-weight: 700; letter-spacing: .01em; }
+.tag { margin: 0; color: var(--muted); font-size: 14px; }
+
+/* the one glass recipe: frosted tint, a 1px specular edge brightest at the top-left, a soft shadow */
+.card { position: relative; width: 100%; border-radius: 18px; background: var(--glass); backdrop-filter: var(--blur); -webkit-backdrop-filter: var(--blur);
+  border: 1px solid var(--hairline); box-shadow: inset 0 1px 0 var(--edge-fade), var(--shadow); overflow: hidden; animation: rise .6s .08s var(--spring) both; }
+.card::before { content: ''; position: absolute; inset: 0; padding: 1px; border-radius: inherit; pointer-events: none; z-index: 1;
+  background: linear-gradient(135deg, var(--edge), transparent 40%, transparent 70%, var(--edge-fade));
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); mask-composite: exclude; }
+@keyframes rise { from { opacity: 0; transform: translateY(10px) scale(.98); } }
+.row { width: 100%; display: flex; align-items: center; gap: 14px; padding: 14px 16px; border: 0; background: none; color: inherit;
+  font: inherit; text-align: left; cursor: pointer; transition: background .15s; }
+.row + .row { border-top: 1px solid var(--hairline); }
+.row:hover { background: var(--glass-hover); }
+.row:active .ico { transform: scale(.92); }
+.row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 18px; }
+.ico { flex: none; width: 40px; height: 40px; border-radius: 11px; display: grid; place-items: center; transition: transform .2s var(--spring);
+  background: light-dark(rgb(0 0 0 / .05), rgb(255 255 255 / .08)); }
+.ico svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.row.main .ico { background: linear-gradient(160deg, #ff3b30, var(--accent)); color: #fff; box-shadow: 0 6px 16px rgb(225 6 0 / .35), inset 0 1px 0 rgb(255 255 255 / .35); }
+.txt { flex: 1; min-width: 0; }
+.txt b { display: block; font-weight: 600; font-size: 15px; }
+.txt span { display: block; color: var(--muted); font-size: 13px; line-height: 1.3; }
+.chev { width: 16px; height: 16px; flex: none; fill: none; stroke: var(--muted); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; opacity: .7; }
+kbd { font: 600 11px 'Titillium Web', system-ui; color: var(--muted); border: 1px solid var(--hairline); border-radius: 5px; padding: 0 5px; }
+
+.state { width: 100%; display: flex; flex-direction: column; gap: 14px; }
+.state[hidden] { display: none; }
+.done { padding: 18px 16px 6px; text-align: center; }
+.done .check { width: 44px; height: 44px; margin: 0 auto 8px; border-radius: 50%; display: grid; place-items: center; color: #fff;
+  background: linear-gradient(160deg, #34d77b, #148a45); box-shadow: 0 8px 20px rgb(20 138 69 / .35); }
+.done .check svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; }
+.done b { display: block; font-size: 16px; } .done span { color: var(--muted); font-size: 13px; }
+.row.quit b { color: var(--accent); }
+/* running in the browser: a smaller hero, so the three actions fit the window */
+.away main { gap: 14px; padding-bottom: 6px; } .away .tag { display: none; } .away h1 { margin-top: 10px; font-size: 22px; }
+.away .logo { width: 56px; height: 56px; border-radius: 16px; font-size: 25px; }
+.away .done { padding: 12px 16px 4px; } .away .done .check { width: 40px; height: 40px; } .away .row { padding: 9px 16px; }
+
+footer { flex: none; display: flex; justify-content: center; align-items: center; gap: 8px; padding: 0 0 16px; color: var(--muted); font-size: 12px;
+  animation: rise .6s .16s var(--spring) both; }
+.led { width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 3px light-dark(rgb(20 138 69 / .15), rgb(47 208 111 / .18));
+  animation: pulse 2.4s ease-in-out infinite; }
+@keyframes pulse { 50% { box-shadow: 0 0 0 5px transparent; } }
+.dot { opacity: .5; }
+</style>
+<body>
+<div class="ambient"></div>
+<!-- a lap of light round an abstract circuit -->
+<svg class="track" viewBox="0 0 460 560" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+  <defs><linearGradient id="run" x1="0" x2="1"><stop offset="0" stop-color="#e10600" stop-opacity="0"/><stop offset="1" stop-color="#ff3b30"/></linearGradient></defs>
+  <path id="lap" d="M60 470 L300 470 C390 470 420 430 410 370 L395 290 C385 240 340 230 300 250 L210 300 C170 320 140 300 150 260 L175 150
+    C190 95 160 70 115 85 C70 100 45 140 45 200 L45 420 C45 455 50 470 60 470 Z"/>
+  <path class="run" d="M60 470 L300 470 C390 470 420 430 410 370 L395 290 C385 240 340 230 300 250 L210 300 C170 320 140 300 150 260 L175 150
+    C190 95 160 70 115 85 C70 100 45 140 45 200 L45 420 C45 455 50 470 60 470 Z" pathLength="1200"/>
+</svg>
+
+<div class="bar pywebview-drag-region">
+  <div class="lights">
+    <button class="light close" title="Quit Lights Out" aria-label="Quit Lights Out" onclick="api('quit')">
+      <svg viewBox="0 0 8 8"><path d="M1.5 1.5l5 5M6.5 1.5l-5 5"/></svg></button>
+    <button class="light min" title="Minimise" aria-label="Minimise" onclick="api('minimize')">
+      <svg viewBox="0 0 8 8"><path d="M1.5 4h5"/></svg></button>
+    <span class="light off" aria-hidden="true"></span>
+  </div>
+</div>
+
+<main>
+  <div class="hero">
+    <div class="logo">LO</div>
+    <h1>Lights Out</h1>
+    <p class="tag">Live timing, 3D replays, F1 TV and every era since 1950</p>
+  </div>
+
+  <div class="state" id="pick">
+    <div class="card">
+      <button class="row main" id="app" autofocus onclick="openApp()">
+        <span class="ico"><svg viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="14" rx="2.5"/><path d="M3 8.5h18M6.5 6.5h.01M9 6.5h.01"/></svg></span>
+        <span class="txt"><b>Open in the app</b><span>Its own window, with F1 TV sign-in built in</span></span>
+        <kbd>↵</kbd>
+      </button>
+      <button class="row" onclick="openBrowser()">
+        <span class="ico"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.6 2.8 3.8 5.8 3.8 9s-1.2 6.2-3.8 9c-2.6-2.8-3.8-5.8-3.8-9S9.4 5.8 12 3z"/></svg></span>
+        <span class="txt"><b>Open in the browser</b><span>This window stays as the off switch</span></span>
+        <kbd>B</kbd>
+      </button>
+    </div>
+  </div>
+
+  <div class="state" id="away" hidden>
+    <div class="card">
+      <div class="done">
+        <div class="check"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></div>
+        <b>Running in your browser</b>
+        <span>Keep this window open while you watch</span>
+      </div>
+      <button class="row" onclick="api('open_browser')">
+        <span class="ico"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></span>
+        <span class="txt"><b>Open another tab</b></span>
+        <svg class="chev" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>
+      </button>
+      <button class="row" onclick="openApp()">
+        <span class="ico"><svg viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="14" rx="2.5"/><path d="M3 8.5h18"/></svg></span>
+        <span class="txt"><b>Open in the app instead</b></span>
+        <svg class="chev" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>
+      </button>
+      <button class="row quit" onclick="api('quit')">
+        <span class="ico"><svg viewBox="0 0 24 24"><path d="M12 3v8M7.5 6.5a7 7 0 1 0 9 0"/></svg></span>
+        <span class="txt"><b>Quit Lights Out</b><span>Stops the server: open tabs stop updating</span></span>
+      </button>
+    </div>
+  </div>
+</main>
+
+<footer><span class="led"></span><span id="where">Ready</span><span class="dot">·</span><span>Private: nothing is kept after you quit</span></footer>
+
+<script>
+// pywebview injects window.pywebview.api a moment after the page loads
+const api = (name, ...args) => window.pywebview?.api?.[name]?.(...args);
+const openApp = () => api('open_app');
+function openBrowser() {
+  api('open_browser');
+  pick.hidden = true;
+  away.hidden = false;
+  document.body.classList.add('away');
+}
+where.textContent = `Ready on ${location.host}`;
+addEventListener('keydown', e => {
+  if (!pick.hidden && e.key === 'Enter' && document.activeElement === document.body) openApp();
+  if (!pick.hidden && (e.key === 'b' || e.key === 'B')) openBrowser();
+});
+</script>
+</body>
+</html>

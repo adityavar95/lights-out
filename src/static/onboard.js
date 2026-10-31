@@ -8,7 +8,7 @@ const FLAG = {GREEN: '#2fd06f', YELLOW: '#ffd400', SC: '#ffd400', 'SC IN': '#ffd
 let w;  // DOM handles
 
 // camera modes, as scene3d.js names them, with their deck labels
-const CAMERAS = [['tcam', 'T-Cam'], ['onboard', 'Cockpit'], ['chase', 'TV Chase'], ['heli', 'Helicopter'], ['overview', 'Free Orbit']];
+const CAMERAS = [['follow', 'Chase'], ['tcam', 'T-Cam'], ['onboard', 'Cockpit'], ['chase', 'TV Chase'], ['heli', 'Helicopter'], ['overview', 'Free Orbit']];
 
 // handlers: {mode(m), parts({halo, body, wheel})}. Returns the deck's camera control: one button naming the camera,
 // opening a menu of the cameras and, in the cockpit, the halo / car / wheel toggles. (C, or the pad's camera button

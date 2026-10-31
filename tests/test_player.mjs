@@ -1,7 +1,8 @@
 // Run: node tests/test_player.mjs  — player driving physics (steering, assists, gearbox) and AI racecraft.
 import assert from 'node:assert/strict';
 import {createRace} from '../src/static/sim.js';
-import {steer, rpmFor, RPM_LIMIT} from '../src/static/player.js';
+import {steer} from '../src/static/player.js';
+import {rpmOf} from '../src/static/vehicle.js';
 import {resolveContacts, CAR_W} from '../src/static/racecraft.js';
 
 // a "stadium": two 1.2 km straights joined by 120 m radius hairpins, in metres (mpu 1)
@@ -25,6 +26,21 @@ for (let i = 0; i < 120; i++) steer(car, {steer: 1}, 1 / 60);
 assert.ok(car.delta > 0.025 && car.delta <= 0.0329, `lock at 320 km/h: ${car.delta}`);
 for (let i = 0; i < 120; i++) steer(car, {steer: 0}, 1 / 60);
 assert.ok(Math.abs(car.delta) < 0.002, 'self-centring');
+
+// steering assist (a real car's profile): at speed full lock asks for the front tyres' peak slip, past where the front
+// axle is going; steering into a rotation the rear can't hold is backed off, counter-steer never is
+{
+  const spec = race(['A']).cars[0].spec, peak = spec.profile.tyre.slipPeak, hold = (c, s) => { for (let i = 0; i < 120; i++) steer(c, {steer: s}, 1 / 60, spec); };
+  const grip = {v: 60, delta: 0, kPath: 0, vy: 0, r: 0};
+  hold(grip, 1);
+  assert.ok(Math.abs(grip.delta - peak) < 0.002, `full lock = peak slip: ${grip.delta} vs ${peak}`);
+  const sliding = {v: 60, delta: 0, kPath: 0, vy: 0, r: 0.5, slipR: 1.2 * peak};  // turning right, rear past its peak
+  hold(sliding, 1);
+  const free = Math.atan(spec.wb * (1 - spec.fwd) * 0.5 / 60);
+  assert.ok(Math.abs(sliding.delta - free) < 0.002, `into the slide: backed off to zero front slip (${sliding.delta} vs ${free})`);
+  hold(sliding, -1);
+  assert.ok(Math.abs(sliding.delta - (free - peak)) < 0.002, `counter-steer: full window (${sliding.delta})`);
+}
 
 // handover mid-race: the car carries on (no reset), and with the throttle pinned on the straight it gains speed and
 // the automatic gearbox climbs the gears
@@ -70,16 +86,16 @@ const noTc = tractionTest('OFF'), fullTc = tractionTest('FULL');
 assert.ok(noTc.spin > 0.05, `wheelspin without TC: ${noTc.spin}`);
 assert.ok(fullTc.spin === 0 && fullTc.cut, 'TC cuts the engine instead');
 
-// manual gearbox: over-rev protection refuses a downshift that would pass the limiter
-assert.ok(rpmFor(300, 4) > RPM_LIMIT && rpmFor(300, 6) < RPM_LIMIT);
-const m = race(['A']), mc = m.cars[0];
+// manual gearbox: over-rev protection (a paddle-shift car) refuses a downshift that would pass the limiter
+const m = race(['A']), mc = m.cars[0], spec = mc.spec;
+assert.ok(rpmOf(spec, 300 / 3.6, 2) > spec.rpmMax && rpmOf(spec, 300 / 3.6, 8) < spec.rpmMax);
 takeOver(m, mc);
 m.assists.gearbox = 'MANUAL';
 m.input.throttle = 1;
-for (const end = m.t + 20; mc.v < 75 && m.t < end;) { m.advance(1 / 60); if (mc.rpm > 12500) m.input.up = true; }
+for (const end = m.t + 20; mc.v < 75 && m.t < end;) { m.advance(1 / 60); if (mc.rpm > 0.8 * spec.rpmMax) m.input.up = true; }
 const gear = mc.gear;
 for (let i = 0; i < 4; i++) { m.input.down = true; m.advance(1 / 60); }
-assert.ok(mc.gear >= gear - 2 && rpmFor(mc.v * 3.6, mc.gear) <= RPM_LIMIT, `no over-rev: gear ${gear} -> ${mc.gear}`);
+assert.ok(mc.gear >= gear - 2 && rpmOf(spec, mc.v, mc.gear) <= spec.rpmMax, `no over-rev: gear ${gear} -> ${mc.gear}`);
 
 // side by side: two AI cars put alongside on the straight keep at least a car width apart
 const sbs = race(['A', 'B']);

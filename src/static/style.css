@@ -2,30 +2,28 @@
    (html[data-theme]). The 3D stage's HUD keeps its own dark palette (.mapwrap) whatever the page scheme. */
 :root {
   color-scheme: dark;
-  --bg: light-dark(#eef0f5, #08080c); --panel: light-dark(#ffffff, #15151d); --panel-2: light-dark(#eceef4, #1f1f2a);
-  --line: light-dark(#dcdde6, #2a2a36); --ink: light-dark(#15151e, #f2f2f6); --muted: light-dark(#5f6172, #9d9db0);
+  /* dark = Stream's cinema palette (near-black page, #141419 cards ringed by a faint line), so every view looks alike */
+  --bg: light-dark(#eef0f5, #07070a); --panel: light-dark(#ffffff, #141419); --panel-2: light-dark(#eceef4, #1e1e25);
+  --line: light-dark(#dcdde6, #26262e); --ink: light-dark(#15151e, #f5f5f7); --muted: light-dark(#5f6172, #9a9aa4);
   --accent: #e10600; --purple: light-dark(#8a2be2, #c35cff); --green: light-dark(#148a45, #2fd06f); --yellow: #ffd400;
-  /* iOS-style frosted glass: a translucent tint of the panel colour, a 1px specular edge brightest at the top-left */
-  --glass: light-dark(rgb(255 255 255 / .58), rgb(24 25 34 / .55));
-  --glass-strong: light-dark(rgb(255 255 255 / .78), rgb(22 23 32 / .82));
+  /* frosted glass: a translucent tint of the panel colour, a 1px edge */
+  --glass: light-dark(rgb(255 255 255 / .58), rgb(20 20 25 / .82));
+  --glass-strong: light-dark(rgb(255 255 255 / .78), rgb(16 16 20 / .9));
   --glass-blur: blur(22px) saturate(180%);
-  --edge: light-dark(rgb(255 255 255 / .9), rgb(255 255 255 / .16));
-  --edge-fade: light-dark(rgb(0 0 0 / .06), rgb(255 255 255 / .04));
-  --hairline: light-dark(rgb(0 0 0 / .08), rgb(255 255 255 / .09));
+  --edge: light-dark(rgb(255 255 255 / .9), rgb(255 255 255 / .1));
+  --edge-fade: light-dark(rgb(0 0 0 / .06), rgb(255 255 255 / .03));
+  --hairline: light-dark(rgb(0 0 0 / .08), rgb(255 255 255 / .08));
   --shadow: light-dark(0 10px 30px rgb(20 20 40 / .12), 0 14px 36px rgb(0 0 0 / .45));
-  --radius: 18px; --radius-sm: 12px;
+  --radius: 14px; --radius-sm: 12px;
+  /* the system UI face, as on Stream and in the F1 TV viewer; Titillium stays for the LO badge */
+  --face: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI Variable Text', 'Segoe UI', Inter, system-ui, sans-serif;
   --spring: cubic-bezier(.34, 1.56, .64, 1);
 }
 :root[data-theme=light] { color-scheme: light; }
 @media (prefers-color-scheme: light) { :root:not([data-theme=dark]) { color-scheme: light; } }
 * { box-sizing: border-box; }
 html { scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
-body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.45 'Titillium Web', system-ui, sans-serif; min-height: 100vh; }
-/* ambient light behind the glass: two soft colour pools (F1 red, purple) the frosted surfaces pick up as they scroll */
-body::before { content: ''; position: fixed; inset: 0; z-index: -1; pointer-events: none;
-  background: radial-gradient(60% 50% at 8% -10%, light-dark(rgb(225 6 0 / .14), rgb(225 6 0 / .22)), transparent 70%),
-    radial-gradient(50% 40% at 100% 20%, light-dark(rgb(138 43 226 / .12), rgb(140 80 255 / .16)), transparent 70%),
-    radial-gradient(40% 40% at 50% 110%, light-dark(rgb(39 244 210 / .1), rgb(39 244 210 / .07)), transparent 70%); }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 500 15px/1.45 var(--face); -webkit-font-smoothing: antialiased; min-height: 100vh; }
 button, select, input { font: inherit; color: var(--ink); }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
 /* the one glass recipe for every floating surface on the page: frosted tint, specular edge, soft drop shadow */
@@ -53,16 +51,13 @@ button, select, input { font: inherit; color: var(--ink); }
 /* top bar + calendar */
 .topbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 16px; position: sticky; top: 0; z-index: 5;
   background: var(--glass-strong); border: 0; border-bottom: 1px solid var(--hairline); border-radius: 0; box-shadow: none; }
-/* the F1 red stripe, as a thin light bar fading out to the right */
-.topbar::after { content: ''; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; pointer-events: none;
-  background: linear-gradient(90deg, var(--accent) 35%, rgb(225 6 0 / .25) 70%, transparent); }
 /* the frosted bar lifts off the page once it scrolls (scroll-driven animation; a flat bar where unsupported) */
 @supports (animation-timeline: scroll()) {
   .topbar { animation: lift linear both; animation-timeline: scroll(); animation-range: 0 80px; }
   @keyframes lift { to { box-shadow: var(--shadow); } }
 }
 .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 18px; letter-spacing: .02em; }
-.logo { background: linear-gradient(160deg, #ff3b30, var(--accent)); color: #fff; font-weight: 900; font-style: italic; padding: 0 10px; border-radius: 7px; font-size: 20px;
+.logo { background: linear-gradient(160deg, #ff3b30, var(--accent)); color: #fff; font-family: 'Titillium Web', var(--face); font-weight: 900; font-style: italic; padding: 0 10px; border-radius: 7px; font-size: 20px;
   box-shadow: 0 4px 12px rgb(225 6 0 / .35), inset 0 1px 0 rgb(255 255 255 / .35); }
 .livebtn { border-radius: 999px; padding: 3px 12px; font-weight: 700; font-size: 13px; cursor: pointer; transition: transform .1s, border-color .15s; }
 .livebtn:hover, .racebtn:hover, .themebtn:hover { border-color: var(--muted); }
@@ -147,14 +142,11 @@ body[data-mode=sim] .rkind { display: none; }
 /* hero */
 /* one line: race, round / date / circuit, then podium (or countdown) and the F1 TV button; wraps on narrow screens */
 .hero { display: grid; grid-template-columns: 1fr auto; gap: 8px 16px; align-items: center; padding: 8px 18px; margin: 12px 16px 0;
-  border-radius: var(--radius); overflow: hidden;
-  background: radial-gradient(90% 160% at 0% 50%, rgb(225 6 0 / .22), transparent 60%), radial-gradient(60% 120% at 100% 0%, rgb(195 92 255 / .14), transparent 70%),
-    linear-gradient(110deg, transparent 55%, var(--edge-fade) 55.2%, var(--edge-fade) 57%, transparent 57.2%, transparent 59%, var(--edge-fade) 59.2%, var(--edge-fade) 61%, transparent 61.2%),
-    var(--glass); }
+  border-radius: var(--radius); overflow: hidden; }
 .eyebrow { color: var(--accent); font-weight: 700; letter-spacing: .08em; font-size: 12px; }
 .herotext { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 14px; min-width: 0; }
 .herotext .muted { font-size: 14px; }
-.hero h1 { margin: 0; font-size: clamp(18px, 2vw, 24px); font-weight: 900; font-style: italic; text-transform: uppercase; line-height: 1; letter-spacing: -.01em; }
+.hero h1 { margin: 0; font-size: clamp(18px, 2vw, 24px); font-weight: 700; line-height: 1.1; letter-spacing: -.02em; }
 .heropodium { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .pp { border-radius: 12px; padding: 4px 10px; display: flex; align-items: center; gap: 4px; box-shadow: none; }
 .pp.p1 { border-color: #d4af37; box-shadow: 0 0 14px rgb(212 175 55 / .25); }
@@ -170,7 +162,7 @@ body[data-mode=sim] .rkind { display: none; }
 /* Stream: the F1 TV browse page (stream.js). Analytics and Stream each show only their own chrome; Simulate rules still
    apply inside Analytics */
 body:not([data-section=stream]) .stream,
-body[data-section=stream] :is(.hero, .tabs, main, .racepick, .livebtn, #nextbtn, #themebtn) { display: none; }
+body[data-section=stream] :is(.hero, .tabs, main, .racepick, .livebtn, #themebtn) { display: none; }
 /* A cinema surface, like a TV app: dark whatever the app's theme (the artwork glows on black, washes out on grey), the
    system UI face as in the F1 TV viewer, one white primary button, red only for LIVE. */
 body[data-section=stream] { background: #07070a; }
@@ -179,7 +171,6 @@ body[data-section=stream] { background: #07070a; }
 body[data-section=stream] .topbar { position: fixed; left: 0; right: 0; top: 0; color-scheme: dark; box-shadow: none;
   background: rgb(9 9 12 / .8); border-bottom-color: rgb(255 255 255 / .07);
   -webkit-backdrop-filter: blur(24px) saturate(160%); backdrop-filter: blur(24px) saturate(160%); }
-body[data-section=stream] .topbar::after { opacity: 0; }
 @supports (animation-timeline: scroll()) {
   body[data-section=stream] .topbar { animation: stopbar linear both; animation-timeline: scroll(); animation-range: 0 240px; }
   @keyframes stopbar {
@@ -190,8 +181,7 @@ body[data-section=stream] .topbar::after { opacity: 0; }
 .stream { --s-ink: #f5f5f7; --s-dim: #9a9aa4; --s-faint: #6b6b75; --s-line: rgb(255 255 255 / .08); --s-card: #141419;
   --s-gutter: clamp(16px, 4vw, 64px); --s-ease: cubic-bezier(.2, .8, .2, 1);
   color-scheme: dark; color: var(--s-ink); background: #07070a; padding-bottom: 48px;
-  font: 500 14px/1.4 -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI Variable Text', 'Segoe UI', Inter, system-ui, sans-serif;
-  -webkit-font-smoothing: antialiased; }
+  font: 500 14px/1.4 var(--face); }
 .stream .ico { width: 18px; height: 18px; flex: none; display: block; }
 .sdot { display: inline-block; width: 3px; height: 3px; margin: 0 8px; border-radius: 50%; background: currentColor; opacity: .5; vertical-align: middle; }
 
@@ -621,7 +611,7 @@ summary.mvibtn::-webkit-details-marker { display: none; }
 .k-highlights { background: rgb(195 92 255 / .16); color: var(--purple); }
 .tvkind:is(.k-interview, .k-analysis) { background: rgb(255 212 0 / .14); color: #b8960a; }
 
-/* tabs: a row of glass pills, the chosen one raised with a specular edge and a red underline that grows from its middle */
+/* tabs: a row of pills like Stream's session chips, the chosen one solid (ink on page colour) */
 .tabs { display: flex; gap: 4px; padding: 12px 16px 4px; overflow-x: auto; scrollbar-width: none; }
 /* more tabs past an edge (phones): that edge fades out, following the scroll; a bar that fits has no scroll timeline,
    so no fade. Unsupported (Firefox): no hint, as before */
@@ -636,18 +626,15 @@ summary.mvibtn::-webkit-details-marker { display: none; }
 }
 [role=tab] { position: relative; background: none; border: 1px solid transparent; border-radius: 999px; padding: 6px 14px; cursor: pointer; font-weight: 600;
   color: var(--muted); white-space: nowrap; transition: color .2s, background .2s, border-color .2s, transform .1s; }
-[role=tab]::after { content: ''; position: absolute; left: 14px; right: 14px; bottom: 2px; height: 2px; border-radius: 2px; background: var(--accent);
-  scale: 0 1; transition: scale .35s var(--spring); }
 [role=tab]:hover { color: var(--ink); background: var(--hairline); }
-[role=tab][aria-selected=true] { color: var(--ink); background: var(--glass); border-color: var(--hairline); box-shadow: inset 0 1px 0 var(--edge-fade), var(--shadow); }
-[role=tab][aria-selected=true]::after { scale: 1 1; }
+[role=tab][aria-selected=true] { color: var(--bg); background: var(--ink); }
 /* the data explorer: for the few who want the tables, so a quiet tab at the far end */
 [role=tab].rawtab { margin-left: auto; font-size: 13px; font-weight: 400; color: var(--muted); }
 /* Results: Race / Sprint / Qualifying, one classification at a time (charts.js renderResults) */
 .resviews { display: flex; gap: 6px; margin: 0 0 12px; }
 main { padding: 12px 16px; }
 .card { border-radius: var(--radius); padding: 16px 18px; margin-bottom: 16px; }
-.card h3 { margin: 0 0 10px; font-weight: 900; text-transform: uppercase; font-size: 16px; letter-spacing: .03em; }
+.card h3 { margin: 0 0 10px; font-weight: 700; font-size: 18px; letter-spacing: -.02em; }
 .twocol { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
 
 /* replay: "tactile glass" broadcast HUD over the 3D stage. The HUD keeps its own dark palette in both colour schemes,
@@ -740,6 +727,11 @@ option { background-color: var(--panel); color: var(--ink); }
 
 .flagpill { font-weight: 900; font-size: 13px; padding: 2px 10px; border-radius: 6px; letter-spacing: .05em; }
 .flagpill:empty { display: none; }
+.startlights { position: absolute; z-index: 3; top: 22%; left: 50%; transform: translateX(-50%); display: flex; gap: 10px; padding: 12px 16px;
+  background: #0b0c10e6; border-radius: 14px; pointer-events: none; }
+.startlights[hidden] { display: none; }
+.startlights i { width: 34px; height: 34px; border-radius: 50%; background: #2a0d10; box-shadow: inset 0 0 0 2px #000; }
+.startlights i.on { background: radial-gradient(circle at 40% 35%, #ff8a8a, #ff1a2a 55%, #a0000c); box-shadow: 0 0 18px #ff1a2acc; }
 .flagpill.green { background: var(--f1-green); color: #04130a; }
 .flagpill.yellow { background: var(--f1-yellow); color: #1a1600; }
 .flagpill.red { background: var(--accent); color: #fff; }
@@ -840,6 +832,13 @@ option { background-color: var(--panel); color: var(--ink); }
 .gearbox { display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: 58px; border-radius: 10px; box-shadow: var(--neu-press); }
 .gearbig { font-size: 34px; font-weight: 900; line-height: 1; color: #fff; }
 .cfoot { display: flex; align-items: center; gap: 10px; margin: 8px 0 4px; }
+.laptime { display: flex; align-items: baseline; gap: 10px; margin-top: 8px; font-variant-numeric: tabular-nums; font-size: 13px; }
+.laptime[hidden] { display: none; }
+.laptime b { font-size: 18px; font-weight: 900; }
+.laptime .dt { font-weight: 900; padding: 1px 6px; border-radius: 5px; }
+.laptime .dt[data-s='-'] { background: var(--f1-green); color: #03140a; }
+.laptime .dt[data-s='+'] { background: #ff3346; color: #fff; }
+.laptime .dt:empty { display: none; }
 .drsmod { font-weight: 900; font-size: 12px; letter-spacing: .06em; padding: 4px 8px; border-radius: 6px; box-shadow: var(--neu-press); color: #555a66; }
 .drsmod[data-state=detected] { color: #e8eaf0; box-shadow: var(--neu-press), inset 0 0 0 1px #e8eaf0; }
 .drsmod[data-state=open] { background: var(--f1-green); color: #03140a; box-shadow: 0 0 12px rgb(47 208 111 / .6); }
@@ -1143,7 +1142,7 @@ table.data tbody tr:last-child td { border-bottom: 0; }
   .heroside { justify-content: flex-start; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .trow, .car circle, .racecard, [role=tab]::after, table.data tbody tr { transition: none; }
+  .trow, .car circle, .racecard, table.data tbody tr { transition: none; }
   .spinner { animation-duration: 3s; }
   .skeleton i { animation: none; }
 }
@@ -1167,7 +1166,7 @@ table.data tbody tr:last-child td { border-bottom: 0; }
 .dpos.champ { background: #d4af37; color: #111; }
 .dname { display: grid; line-height: 1.1; margin-top: 6px; }
 .dname small { color: var(--muted); }
-.dname b { font-size: 20px; font-weight: 900; font-style: italic; text-transform: uppercase; }
+.dname b { font-size: 20px; font-weight: 700; letter-spacing: -.02em; }
 .dmeta, .dteam { font-size: 12px; color: var(--muted); }
 .dstats { display: grid; grid-template-columns: repeat(auto-fill, minmax(52px, 1fr)); gap: 6px 4px; margin-top: 6px; }
 .dstats div { display: grid; text-align: center; line-height: 1.15; }
@@ -1180,7 +1179,7 @@ table.data tbody tr:last-child td { border-bottom: 0; }
 .dcareer::backdrop { background: rgb(0 0 0 / .55); }
 .dclose { position: absolute; top: 12px; right: 12px; border: 0; background: var(--panel-2); border-radius: 999px; width: 32px; height: 32px; cursor: pointer; }
 .chead { display: grid; grid-template-columns: minmax(140px, 220px) 1fr; gap: 18px; align-items: start; }
-.chead h2 { margin: 2px 0; font-size: clamp(24px, 3.4vw, 38px); font-weight: 900; font-style: italic; text-transform: uppercase; line-height: 1; }
+.chead h2 { margin: 2px 0; font-size: clamp(24px, 3.4vw, 38px); font-weight: 700; letter-spacing: -.03em; line-height: 1; }
 .chead p { margin: 4px 0; }
 .chead a { color: var(--accent); font-weight: 700; text-decoration: none; }
 .dphoto.big { border-radius: var(--radius-sm); aspect-ratio: 3 / 4; }
@@ -1200,7 +1199,7 @@ body.intro .introcard { display: grid; gap: 12px; position: fixed; z-index: 6; l
   max-width: 540px; padding: 24px 26px; border-radius: var(--radius); color: #fff; background: rgb(10 11 16 / .64);
   backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur); border: 1px solid rgb(255 255 255 / .14);
   box-shadow: 0 24px 64px rgb(0 0 0 / .5); animation: introin .9s var(--spring) .5s both; }
-.introcard h1 { margin: 0; font-size: clamp(30px, 4.6vw, 56px); font-weight: 900; font-style: italic; text-transform: uppercase; line-height: .95; }
+.introcard h1 { margin: 0; font-size: clamp(30px, 4.6vw, 56px); font-weight: 700; letter-spacing: -.04em; line-height: .95; }
 .introcard p { margin: 0; color: rgb(255 255 255 / .8); font-size: 16px; }
 .introbtns { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 4px; }
 .introbtns .tvbtn { padding: 10px 26px; font-size: 16px; }

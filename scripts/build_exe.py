@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parent.parent
 PyInstaller.__main__.run([
     str(ROOT / "src" / "desktop.py"),
     "--name", "LightsOut", "--windowed", "--noconfirm",
+    "--icon", str(ROOT / "scripts" / "lightsout.ico"),  # the LO badge, 16-256 px; the windows and taskbar take it from the exe
     "--paths", str(ROOT / "src"),
     "--add-data", f"{ROOT / 'src' / 'static'}:static",
     "--collect-all", "faster_whisper",  # imported only at the first radio clip, so the analysis misses it

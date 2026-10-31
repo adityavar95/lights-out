@@ -224,6 +224,8 @@ function dryChoice(car, lapsLeft, w) {
 //  2. the cliff: tyre health under 38 %
 //  3. a cheap stop: under a VSC or Safety Car with tyres past 35 % worn, the stop costs ~40 % less time
 //  4. the undercut: stuck within 1.2 s of the same car for 3 laps on tyres past 45 % worn, pit to jump it on fresh rubber
+//  5. the two-compound rule (full-distance races; sprints are exempt): a dry race on one compound so far stops once a
+//     fresh set of another can reach the flag
 export function aiStrategy(R, car) {
   const P = car.pit, len = R.T.len, lapS = ((car.s % len) + len) % len, toGo = ((R.pit.AT - lapS) % len + len) % len;
   if (P.state !== 'RACING' || P.box || toGo < 20 || toGo > len * 0.5 || car.finished || car.player) return;  // the half lap before the commit point
@@ -240,6 +242,10 @@ export function aiStrategy(R, car) {
   else if (neutralised(R.control) && R.control.state !== 'VSC ENDING' && health < 65 && lapsLeft > 8)
     want = isWetTyre(comp) ? comp : dryChoice(car, lapsLeft, w);
   else if (car.attackLaps >= 3 && health < 55 && lapsLeft > 10 && !isWetTyre(comp)) want = dryChoice(car, lapsLeft, w);
+  else if (P.used.size < 2 && ![...P.used].some(isWetTyre) && car.lapsDone >= 1 && R.total * len >= 250e3) {  // sprints are exempt
+    const next = dryChoice(car, lapsLeft, w);
+    if (lapsLeft <= stintLife(next, w)) want = next;
+  }
   if (want) P.box = {compound: want, user: false};
 }
 

@@ -4,10 +4,12 @@
 // grip: multiplier on the car's base friction; warm: heat input multiplier (fast / slow warm-up); wear: % of tyre
 // health per average lap; window: surface temperature (C) of peak grip; wet: track wetness range the tread is made for;
 // evac: water a tread can clear, as the speed (m/s) at which it aquaplanes on a fully flooded track.
+// Dry steps are Pirelli's typical gaps, ~0.6-0.8 s a lap soft to medium and medium to hard: lap time moves ~0.47 % per
+// 1 % of grip in the simulation, so each step is ~1.5 % of grip.
 export const COMPOUNDS = {
-  SOFT: {grip: 1.12, warm: 1.25, wear: 3.2, window: [90, 110], evac: 32},
+  SOFT: {grip: 1.016, warm: 1.25, wear: 3.2, window: [90, 110], evac: 32},
   MEDIUM: {grip: 1.0, warm: 1.0, wear: 1.9, window: [90, 110], evac: 32},
-  HARD: {grip: 0.92, warm: 0.8, wear: 1.2, window: [90, 110], evac: 32},
+  HARD: {grip: 0.986, warm: 0.8, wear: 1.45, window: [90, 110], evac: 32},
   INTERMEDIATE: {grip: 0.9, warm: 1.0, wear: 1.6, window: [55, 75], wet: [0.15, 0.55], evac: 60},
   WET: {grip: 0.8, warm: 0.9, wear: 1.3, window: [45, 65], wet: [0.55, 1], evac: 88},
 };
