@@ -3,3 +3,18 @@
 __pycache__/
 dist/
 build/
+
+# local tools and editor settings: kept on disk, not in the repo
+.idea/
+.claude/
+.trail/
+graphify-out/
+
+# internal working notes (docs/screenshots stays)
+docs/ux-audit.md
+docs/graphics-realism-plan.md
+
+# logs and OS files
+*.log
+.DS_Store
+Thumbs.db

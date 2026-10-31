@@ -502,7 +502,7 @@ F1/
 │       └── models/           # rb22.glb and its credits
 ├── scripts/build_exe.py # PyInstaller build of LightsOut.exe
 ├── tests/               # test_server.py and the Node .mjs tests
-├── docs/                # design notes and the README's screenshots
+├── docs/screenshots/    # the screenshots in this README
 └── pyproject.toml
 ```
 
