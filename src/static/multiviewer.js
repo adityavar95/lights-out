@@ -647,10 +647,15 @@ function lockTop(t) {
     applyQuality(t);
   }
   if (M.uhd && top && top.height < 2160 && !t.hls && uhdFeed) {
-    // it plays in HD: say why beside the quality, not over the picture. A live stream F1 TV sent in HD has no 4K to play
-    // (Mexico FP1 2026: F1 TV answered every 4K request with SDR_HD_DASHWV); one it sent in 4K but that has no 2160p here
-    // lost it to the DRM: the browser's Widevine generally won't decrypt 4K HEVC (needs hardware DRM)
-    t.no4k = !t.drm ? 'no 4K for this video' : /UHD/.test(t.kind) ? 'this browser’s DRM can’t play live 4K' : 'F1 TV sends this live stream in HD';
+    // it plays in HD: say why beside the quality, not over the picture. F1 TV answers every 4K request for a live session
+    // in HD (SDR_HD_DASHWV), and keeps serving a finished one as that DRM recording until it re-publishes it as a 4K replay
+    // without DRM: Mexico 2026's practices and pre-qualifying show were still HD a day later, the previous weekend's every
+    // session 2160p. One it sent in 4K but that has no 2160p here lost it to the DRM: the browser's Widevine generally won't
+    // decrypt 4K HEVC (needs hardware DRM)
+    t.no4k = !t.drm ? 'no 4K for this video'
+      : /UHD/.test(t.kind) ? 'this browser’s DRM can’t play live 4K'
+      : t.player.isLive() ? 'F1 TV sends live sessions in HD'
+      : 'F1 TV still serves its live recording; the 4K replay comes later';
     showNow(t);
   }
 }
