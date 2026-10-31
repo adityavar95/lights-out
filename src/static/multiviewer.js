@@ -92,20 +92,35 @@ const streamName = s => s.type === 'obc' ? `${s.number ?? ''} ${s.title} · ${s.
 // The Connect F1 TV popover (the viewer's and the Stream page's own: a popover inside a closed dialog can't show).
 // MultiViewer's sign-in for a web page: F1's site keeps the subscription token in its login-session cookie
 // (.formula1.com, readable by scripts there), so a bookmarklet clicked on formula1.com brings it back in our URL fragment.
-// onChange: after Disconnect
+// In the desktop app (src/desktop.py) it's a Sign in button instead: F1's site opens in a window of the app's own, which reads the cookie.
+// onChange: after connecting or Disconnect
 export function connectPanel(id, onChange) {
   const back = JSON.stringify(`${location.origin}${location.pathname}#f1tv=`);
   const mark = `javascript:(()=>{const m=document.cookie.match(/login-session=([^;]+)/),t=m&&JSON.parse(decodeURIComponent(m[1])).data?.subscriptionToken;if(t)location.href=${back}+t;else alert('Sign in on formula1.com with an F1 TV subscription first, then click this bookmark again.')})()`;
   const stash = () => { try { sessionStorage.setItem('f1tv-back', location.hash); } catch (e) {} };
-  return el('div', {class: 'mvconnect', popover: '', id, 'aria-label': 'Connect F1 TV',
+  const steps = el('ol', {},
+    el('li', {}, 'Drag this to your bookmarks bar: ', el('a', {class: 'mvmark', href: mark, onclick: e => e.preventDefault()}, 'F1 TV → this app')),
+    el('li', {}, el('a', {href: 'https://account.formula1.com/#/en/login', onclick: stash}, 'Sign in at formula1.com'), " (skip if you're signed in there)."),
+    el('li', {}, 'On formula1.com, click the bookmark: it brings you back here, connected.'));
+  const signin = el('button', {class: 'mvbtn', hidden: true, onclick: async () => {
+    signin.disabled = true;
+    const t = await window.pywebview.api.f1tv_login().catch(() => null);
+    signin.disabled = false;
+    if (!t) return;
+    count('f1tv_connected');
+    try { sessionStorage.setItem('f1tv', t); } catch (e) {}
+    panel.hidePopover();
+    onChange();
+  }}, 'Sign in to F1 TV');
+  const desktop = () => { steps.hidden = true; signin.hidden = false; };
+  if (window.pywebview?.api?.f1tv_login) desktop(); else window.addEventListener('pywebviewready', desktop, {once: true});
+  const panel = el('div', {class: 'mvconnect', popover: '', id, 'aria-label': 'Connect F1 TV',
     ontoggle: e => e.newState === 'open' && count('connect_open')},
     el('h3', {}, 'Connect F1 TV'),
     el('p', {}, "Sign in on F1's own site, like MultiViewer: your password never reaches this app, nothing is saved on the server, and the connection lasts until you close this tab."),
-    el('ol', {},
-      el('li', {}, 'Drag this to your bookmarks bar: ', el('a', {class: 'mvmark', href: mark, onclick: e => e.preventDefault()}, 'F1 TV → this app')),
-      el('li', {}, el('a', {href: 'https://account.formula1.com/#/en/login', onclick: stash}, 'Sign in at formula1.com'), " (skip if you're signed in there)."),
-      el('li', {}, 'On formula1.com, click the bookmark: it brings you back here, connected.')),
+    steps, signin,
     el('button', {class: 'mvbtn', onclick: () => { try { sessionStorage.removeItem('f1tv'); } catch (e) {} onChange(); }}, 'Disconnect'));
+  return panel;
 }
 
 function setup() {

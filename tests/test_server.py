@@ -1,5 +1,6 @@
 """Run: .venv/Scripts/python tests/test_server.py"""
 import sys
+import json
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
@@ -355,3 +356,10 @@ assert pub - radio.started(pub, "https://livetiming.formula1.com/static/2026/x/T
 assert pub - radio.started(pub, "https://livetiming.formula1.com/static/2026/x/TeamRadio/HAD_6_20261031_003307.mp3") == 30  # UTC+6
 assert radio.started(pub, "https://livetiming.formula1.com/static/x/HAM.mp3") == pub  # no time in the name
 print("team radio ok")
+
+from urllib.parse import quote
+from desktop import token_of
+
+assert token_of(quote(json.dumps({"data": {"subscriptionToken": "abc"}}))) == "abc"
+assert token_of(quote(json.dumps({"data": {}}))) is None  # signed in, no subscription
+assert token_of("") is None and token_of("%7Bbroken") is None
