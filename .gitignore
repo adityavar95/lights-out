@@ -18,3 +18,6 @@ docs/graphics-realism-plan.md
 *.log
 .DS_Store
 Thumbs.db
+
+# brag video working folder (the finished trailer lives in docs/media)
+brag-output/

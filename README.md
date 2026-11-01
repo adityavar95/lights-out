@@ -20,9 +20,19 @@
 ![No build step](https://img.shields.io/badge/frontend-vanilla%20JS%2C%20no%20build-f7df1e)
 ![Windows app](https://img.shields.io/badge/desktop-Windows%20exe-0078d4)
 
-[Why Lights Out](#%EF%B8%8F-why-lights-out) · [Tour](#-a-tour-of-lights-out) · [Quick start](#-quick-start) · [Desktop app](#%EF%B8%8F-desktop-app-and-executable) · [F1 TV](#-f1-tv) · [Controls](#%EF%B8%8F-controls) · [API](#-api) · [Contributing](#-contributing) · [License](#-license)
+[Trailer](#-the-trailer) · [Why Lights Out](#%EF%B8%8F-why-lights-out) · [Tour](#-a-tour-of-lights-out) · [Quick start](#-quick-start) · [Desktop app](#%EF%B8%8F-desktop-app-and-executable) · [F1 TV](#-f1-tv) · [Controls](#%EF%B8%8F-controls) · [API](#-api) · [Contributing](#-contributing) · [License](#-license)
 
 <br>
+
+### 🎬 The trailer
+
+<a href="docs/media/lights-out-trailer.mp4" title="Play the Lights Out trailer (22 s, with sound)">
+  <img src="docs/media/lights-out-trailer-play.jpg" alt="Lights Out trailer: five red start lights go out, then 3D race replay, physics simulation across eras and 4K HDR multiview. Click to play." width="100%">
+</a>
+
+<sub><b>▶ <a href="docs/media/lights-out-trailer.mp4">Play the 22-second trailer</a></b> (sound on) · <a href="docs/media/lights-out-trailer.jpg">poster</a> · Five lights, then: replay every race in 3D, simulate any era, stream 4K HDR multiview.</sub>
+
+<br><br>
 
 <img src="docs/screenshots/replay-hud.jpg" alt="Lights Out replaying the 2026 United States Grand Prix in 3D: timing tower, satellite-mapped circuit, g-force, tyre and telemetry panels" width="100%">
 
@@ -90,7 +100,7 @@ Watching a race tells you what happened. Lights Out lets you **look inside it**:
 | 🕹️ **A race simulator, 1950 to 2026** | A physics race on any circuit with any era's cars, driven by AI or by you on keyboard or gamepad |
 | 🧪 **Strategy lab** | Move a driver's pit stops and see where they would have finished; let the lab try every plan |
 | 📊 **Every number** | Results, lap charts, standings, driver careers, and every raw data table, filterable and exportable |
-| 📺 **4K HDR F1 TV multiview** | With your own subscription: the race in 2160p50 HDR, every driver's onboard side by side, live data over the picture and transcribed team radio |
+| 📺 **4K HDR F1 TV multiview** | With your own subscription: past races from 2025 on in 2160p50 HDR (live sessions in 1080p on Windows), every driver's onboard side by side, live data over the picture and transcribed team radio |
 | 🖥️ **Runs anywhere** | Browser, other devices on your network, or a Windows desktop app. No build step, no cloud |
 
 ---
@@ -209,6 +219,8 @@ Everything about the race you're looking at, one tab away.
 
 With your own F1 TV subscription, **Stream** turns into a TV-app browse page for the season and a broadcaster-grade multiview player: the race in **4K HDR**, every driver's onboard, live data over the picture and transcribed team radio, as many streams side by side as your screen and connection can take.
 
+> **📺 4K or 1080p?** Watch **past races from 2025 onwards in 4K HDR**. **Live sessions play in 1080p**: F1 TV sends its live 4K only to Apple devices, encrypted with Apple's FairPlay DRM, which browsers on Windows can't decrypt. So on Windows a live session tops out at 1080p. Once F1 TV re-publishes the session as a replay (it can take a day or more), you can watch it in 4K.
+
 > [!NOTE]
 > **About these screenshots:** F1 TV's video can't be shown in a public README, so this section shows a simulated session. The viewer's real code is running with sample channel data, Lights Out's own 3D renders stand in for each video feed, and the radio messages are sample text. Everything around the pictures is the real interface: the layouts, menus, 4K badges, data overlays and radio list.
 
@@ -224,6 +236,7 @@ With your own F1 TV subscription, **Stream** turns into a TV-app browse page for
 - **Checks your device first:** the 4K switch turns itself off where the browser can't decode HEVC Main10 at 2160p50 (Firefox, or Chrome without GPU HEVC); Microsoft Edge and Chrome on a GPU that decodes HEVC 10-bit play it
 - Built to run several at once: three 2160p50 streams plus an onboard ran with 0 to 0.1 % of frames dropped, at about 15 Mb/s of bandwidth per 4K stream
 - 4K needs an F1 TV subscription that includes it (F1 TV Premium)
+- **4K is for replays of 2025+ races.** Live sessions play in **1080p** on Windows: F1 TV's live 4K is FairPlay-encrypted for Apple devices only
 
 #### 🧩 Any number of streams, laid out for you
 
@@ -503,6 +516,7 @@ F1/
 ├── scripts/build_exe.py # PyInstaller build of LightsOut.exe
 ├── tests/               # test_server.py and the Node .mjs tests
 ├── docs/screenshots/    # the screenshots in this README
+├── docs/media/          # the trailer (mp4) and its posters
 └── pyproject.toml
 ```
 
@@ -573,6 +587,7 @@ Please respect each source's own terms and rate limits; Lights Out caches what i
 - **OpenF1's free tier allows ~30 requests a minute**, and a GPS replay costs ~30, so building several at once queues them.
 - **F1 TV blocks an IP after a few hundred catalogue searches**; Stream fetches three weekends at a time to stay under it.
 - **4K needs 2025+ races**, the main feeds, and a device that decodes HEVC Main10 2160p (not Firefox, nor Chrome without GPU HEVC).
+- **Live sessions play in 1080p on Windows.** F1 TV only sends live 4K to Apple devices, as FairPlay-encrypted HLS, which Windows browsers and the desktop app can't decrypt. For 4K, watch the replay once F1 TV re-publishes it (it can take a day or more).
 - Lap-timing replays (before 2023) are exact only at the start/finish line. Races before 1996 have no lap data and no replay, though you can still simulate them.
 - Track maps use each circuit's modern layout, so historic races on since-changed layouts show today's track. GeoJSON outlines have no known start line or direction.
 - livef1 can't build some seasons (2010 fails inside livef1); the rest of the app still works for those years.
@@ -599,6 +614,8 @@ Lights Out is an unofficial, independent fan project. It is not associated in an
 ## 🙏 Acknowledgements
 
 Huge thanks to the people behind Jolpica, OpenF1, livef1, MultiViewer, f1-circuits, Poly Haven, shaka-player, three.js and faster-whisper. Their open work is what makes a free project like this possible.
+
+Trailer music: "Happy Beats / Business Moves Vol. 11" by Sascha Ende, [ende.app](https://ende.app/en) ([CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)). Sound effects: [Kenney](https://kenney.nl/) (CC0).
 
 <div align="center">
 
