@@ -26,11 +26,9 @@
 
 ### 🎬 The trailer
 
-<a href="docs/media/lights-out-trailer.mp4" title="Play the Lights Out trailer (22 s, with sound)">
-  <img src="docs/media/lights-out-trailer-play.jpg" alt="Lights Out trailer: five red start lights go out, then 3D race replay, physics simulation across eras and 4K HDR multiview. Click to play." width="100%">
-</a>
+https://github.com/user-attachments/assets/437018d1-d11f-4200-82bf-0fa081b1e8d3
 
-<sub><b>▶ <a href="docs/media/lights-out-trailer.mp4">Play the 22-second trailer</a></b> (sound on) · <a href="docs/media/lights-out-trailer.jpg">poster</a> · Five lights, then: replay every race in 3D, simulate any era, stream 4K HDR multiview.</sub>
+<sub><b>▶ 22 seconds, sound on.</b> Five lights, then: replay every race in 3D, simulate any era, stream 4K HDR multiview. · <a href="docs/media/lights-out-trailer.mp4">Download (mp4)</a> · <a href="docs/media/lights-out-trailer.jpg">poster</a></sub>
 
 <br><br>
 
@@ -516,7 +514,7 @@ F1/
 ├── scripts/build_exe.py # PyInstaller build of LightsOut.exe
 ├── tests/               # test_server.py and the Node .mjs tests
 ├── docs/screenshots/    # the screenshots in this README
-├── docs/media/          # the trailer (mp4) and its posters
+├── docs/media/          # the trailer (mp4) and its poster
 └── pyproject.toml
 ```
 
