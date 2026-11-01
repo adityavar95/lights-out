@@ -466,6 +466,7 @@ function chassis(c, turn, moved, f) {
   c.delta = (c.delta ?? 0) + (delta - (c.delta ?? 0)) * 0.25;
   for (const w of c.wheels) if (w.front) w.pivot.rotation.y = c.delta;
   c.steeringWheel.rotation.x = -c.delta * STEERING_RATIO;
+  c.pose();  // the driver's hands go with it
   const gLat = THREE.MathUtils.clamp(c.v * c.v * k / 9.81, -6, 6);
   c.gLat = (c.gLat ?? 0) + (gLat - (c.gLat ?? 0)) * 0.1;
   c.body.rotation.x = 0.004 * c.gLat;                                    // ~0.25 deg/g, outside of the corner down
