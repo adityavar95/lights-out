@@ -11,7 +11,7 @@ import {drsZones} from './telemetry.js';
 import {fetchCircuit, annotate, f1Coords} from './circuits.js';
 import {focusFrame} from './focus.js';
 import {pitTrace} from './strategy.js';
-import {lanes, GRID, apart} from './lanes.js';
+import {lanes, GRID, apart, headings} from './lanes.js';
 
 const SPEEDS = [0.5, 1, 2, 5, 10, 20, 50, 100];
 
@@ -536,6 +536,25 @@ function carsAt(t) {
   return spread(cars, t);
 }
 
+// Under 6 m/s a GPS car's next half second says little about where it points: positions step by 0.1 m, so a parked car
+// turned to any angle, and spread's push ends as it slows, which swings the last metres sideways. It keeps the direction
+// it arrived in instead; the distance stays the real one (the scene reads speed from it), just enough for a heading.
+function holdHeadings(cars, ahead, t) {
+  if (S.data.mode !== 'gps') return ahead;
+  const {rot, mpu} = S.proj, i = Math.floor(t / S.data.step);
+  for (const id in cars) {
+    const p = gpsPos(id, t), q = gpsPos(id, Math.min(t + 0.5, S.data.duration));
+    if (!p || !q) continue;
+    const gone = Math.hypot(q[0] - p[0], q[1] - p[1]);
+    if (gone * mpu >= 3) continue;
+    const f = S.data.frames[id], yaw = (f.yaw ??= headings(f.x, f.y, 3 / mpu))[i];
+    if (Number.isNaN(yaw)) continue;  // never moved
+    const [dx, dy] = rot(Math.cos(yaw), Math.sin(yaw)), d = Math.max(gone, 0.05 / mpu);
+    ahead[id] = [cars[id][0] + dx * d, cars[id][1] + dy * d];
+  }
+  return ahead;
+}
+
 function gpsState(t) {
   const cars = {}, board = [];
   for (const d of S.drivers) {
@@ -599,7 +618,7 @@ function render(force) {
   if (S.live) S.t = (Date.now() - S.liveInfo.origin) / 1000;
   const t = S.t, st = S.live ? liveRender() : S.sim ? simState(S.sim, S.byId) : S.data.mode === 'gps' ? gpsState(t) : lapsState(t);
   if (ui.has3d) {  // the position half a second later gives each car its heading
-    S.ahead = st.ahead ?? carsAt(Math.min(t + 0.5, S.data.duration));
+    S.ahead = st.ahead ?? holdHeadings(st.cars, carsAt(Math.min(t + 0.5, S.data.duration)), t);
     const progress = S.live ? 1 : S.sim ? st.lap / S.data.total_laps : t / S.data.duration;
     const steer = updateCars(st.cars, S.ahead, S.selected, S.live ? 1 : S.playing ? S.speed : 0, progress, st.fx);
     if (S.cam === 'onboard') setWheelAngle(steer);
