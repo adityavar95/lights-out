@@ -28,6 +28,8 @@ addEventListener('keydown', e => {
 addEventListener('keyup', e => { held.delete(e.code); }, true);
 addEventListener('blur', () => held.clear());  // keys released while the tab was in the background
 
+export const capturing = () => enabled;
+
 export function enableInput(on) {
   enabled = on;
   if (!on) held.clear();

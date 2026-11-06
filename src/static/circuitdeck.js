@@ -3,13 +3,49 @@
 // change, aero trim, lap record). Choosing one dispatches `f1:circuit` {year, round} (its latest race, which app.js
 // loads as a Simulation). Previews load lazily, one circuit at a time, when the deck first opens: each can cost a few
 // OpenF1 requests on a cold cache, and OpenF1 rate-limits.
-import {get, rows, el, svg, led} from './util.js';
+import {get, rows, el, svg, led, skeleton} from './util.js';
 import {PRESETS, annotate, aeroLabel, fetchCircuit, f1Coords} from './circuits.js';
 import {drsZones} from './telemetry.js';
 import {SECTOR_COLORS} from './hud.js';
 
 let C, getS;
 
+// A big panel's keyboard behaviour: it takes focus on open and gives it back on close; while open, Esc closes it wherever
+// focus is (a click on the stage moves it out) and Tab stays inside. A trap, not `inert` on the rest: the stage still
+// orbits and the HUD still clicks, so another panel's button can swap panels (f1:panel). close: closes the panel.
+export function panelFocus(panel, btn, close) {
+  let back = null;
+  const shown = x => x.getClientRects().length > 0;
+  const keys = e => {
+    // its stage is hidden (Stream), or a dialog or menu over it takes the keys: one Esc closes one thing
+    if (!shown(panel) || document.querySelector('dialog:modal, :popover-open')) return;
+    if (e.key === 'Escape') close();
+    if (e.key !== 'Tab') return;
+    const stops = [...panel.querySelectorAll('a[href], button, select, input')].filter(x => !x.disabled && shown(x));
+    const now = document.activeElement, k = stops.indexOf(now);
+    if (e.shiftKey ? k <= 0 : k === stops.length - 1 || !panel.contains(now)) {
+      e.preventDefault();
+      stops.at(e.shiftKey ? -1 : 0).focus();
+    }
+  };
+  panel.tabIndex = -1;
+  panel.style.outline = 'none';  // the panel itself is no control: the global focus ring would box all of it
+  return {
+    opened() {
+      if (back) return;
+      back = document.activeElement;
+      document.addEventListener('keydown', keys);
+      panel.focus({preventScroll: true});
+    },
+    // restore: false when something else opened over it and is taking the focus
+    closed(restore = true) {
+      if (!back) return;
+      document.removeEventListener('keydown', keys);
+      if (restore) (back.isConnected && shown(back) ? back : btn).focus();
+      back = null;
+    },
+  };
+}
 
 // stage: the 3D stage; top: the HUD's top strip; getState: () => the replay state (for the season and current circuit)
 export function setupCircuitDeck(stage, top, getState) {
@@ -21,18 +57,19 @@ export function setupCircuitDeck(stage, top, getState) {
       el('small', {class: 'cdsub'}, 'Race a simulation on any circuit of the season'),
       el('button', {class: 'neu cdclose', 'aria-label': 'Close circuit selector', onclick: () => toggle(false)}, '✕')),
     C.grid);
-  C.panel.addEventListener('keydown', e => { if (e.key === 'Escape') { toggle(false); C.btn.focus(); } });
+  C.focus = panelFocus(C.panel, C.btn, () => toggle(false));
   // one big panel at a time: another one opening (circuits, cars, telemetry trace) closes this one
-  addEventListener('f1:panel', e => { if (e.detail !== C.panel && !C.panel.hidden) toggle(false); });
+  addEventListener('f1:panel', e => { if (e.detail !== C.panel && !C.panel.hidden) toggle(false, false); });
   top.append(C.btn);
   stage.append(C.panel);
 }
 
-function toggle(open = C.panel.hidden) {
+function toggle(open = C.panel.hidden, restore = true) {
   C.panel.hidden = !open;
   if (open) dispatchEvent(new CustomEvent('f1:panel', {detail: C.panel}));
   C.btn.setAttribute('aria-expanded', open);
-  if (!open) return;
+  if (!open) { C.focus.closed(restore); return; }
+  C.focus.opened();
   const year = getS()?.year ?? new Date().getFullYear();
   if (year !== C.year) build(year);
   for (const c of C.grid.children) c.setAttribute('aria-current', c.dataset.round === String(getS()?.round) && year === C.year);
@@ -41,7 +78,7 @@ function toggle(open = C.panel.hidden) {
 async function build(year) {
   C.year = year;
   const token = C.token = {};
-  C.grid.replaceChildren(el('p', {class: 'muted'}, 'Loading the calendar…'));
+  C.grid.replaceChildren(skeleton());
   let races;
   try {
     races = rows(await get(`/api/jolpica/${year}/races`));

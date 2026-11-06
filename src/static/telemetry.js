@@ -94,8 +94,8 @@ export function pedals(gLong, kmh) {
 export function ersStep(state, throttle, brake, kmh, dt, year) {
   const {pK: P, battery: CAP} = engine(year);  // no recovery before 2009 (and in 2010): it stays on HOLD
   let mode = 'HOLD', power = 0;
-  if (brake > 20) { mode = 'HARVEST'; power = P * brake / 100; }
-  else if (throttle > 95 && kmh > 120 && state.soc > 0.02) { mode = 'DEPLOY'; power = -P; }
+  if (P > 0 && brake > 20) { mode = 'HARVEST'; power = P * brake / 100; }
+  else if (P > 0 && throttle > 95 && kmh > 120 && state.soc > 0.02) { mode = 'DEPLOY'; power = -P; }
   state.soc = clamp(state.soc + power * dt / CAP, 0, 1);
   state.mode = mode;
   return state;

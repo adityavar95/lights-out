@@ -73,6 +73,12 @@ function envelope(T, c, plan, s0, n) {
 
 const CORNERS = ['FL', 'FR', 'RL', 'RR'];
 
+// entry list in grid order, one car per driver: a shared drive lists its driver once per car (Moss, Britain 1957)
+export function gridOrder(list) {
+  const seen = new Set();
+  return list.slice().sort((a, b) => a.grid - b.grid).filter(e => !seen.has(e.id) && seen.add(e.id));
+}
+
 // ann: circuits.js annotate() output (elevation, banking, kerbs, zones); aero: the circuit's wing trim {cl, cd, drs}
 // (multipliers on ClA / CdA, DRS drag cut); pitLoss: MultiViewer's real pit losses, which size the pit lane.
 export function createRace({year, mapPts, mpu, width, drivers, laps, compounds, ann, aero, pitLoss, pitLane}) {
@@ -379,6 +385,7 @@ export function createRace({year, mapPts, mpu, width, drivers, laps, compounds, 
   // advance by dt seconds of race time in equal substeps (<= 1/120 s, more when the replay runs fast); they end exactly on
   // the frame's time, so nothing needs interpolating between physics states and cars don't judder
   R.advance = dt => {
+    if (!(dt > 0)) return;  // a zero step divides by h: an AI car's lateral rate goes 0/0 and its d stays NaN for good
     const n = clamp(Math.ceil(dt * 120), 1, 40), h = dt / n;
     for (let i = 0; i < n; i++) { step(h); R.onStep?.(); }  // onStep: the telemetry recorder (tracemodal.js)
     // every car has taken the flag, or a lap and a half (at the winner's average) has passed: one stopped out on track

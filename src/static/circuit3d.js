@@ -323,7 +323,7 @@ export function buildCircuit(world, {pts, map, tex, width, startKnown, ann, corn
   trunks.count = k;
   for (const t of [trunks, cones, leaves]) add(t).castShadow = true;
 
-  if (startKnown && F.length > 1) add(gantry(F[0], w, m, tex, map.mps));
+  const start = startKnown && F.length > 1 ? add(gantry(F[0], w, m, tex, map.mps)) : null;
   for (const [x, y, num] of corners) {
     const div = document.createElement('div');
     div.className = 'corner3d';
@@ -378,6 +378,7 @@ export function buildCircuit(world, {pts, map, tex, width, startKnown, ann, corn
 
   return {
     trackMat, wettable, surface, groundAt, pts, half,
+    lights: n => start?.userData.lights(n),  // the start gantry's red lamps lit, 0-5
     // Pit lane (map points of its centre line, entry road to exit road): a strip on the ground beside the track,
     // replacing any earlier one, with a line along each edge. The barrier on its side moves in to become the pit wall
     // 1 m off the lane's edge, or opens where that would leave no room beside the track (the entry and exit roads).
@@ -435,6 +436,7 @@ export function buildCircuit(world, {pts, map, tex, width, startKnown, ann, corn
     // satellite ground: texture, uv = M (scene x, z, 1) over the terrain, keep(x, z): whether a tree there stands on
     // vegetation in the image (the others go), mean: the image's mean colour, for the land beyond it
     satellite(texture, M, keep, mean) {
+      grass.userData.sat.value?.dispose();  // the coarse first image, when the sharp one replaces it
       grass.userData.sat.value = texture;
       grass.userData.satMean.value.copy(mean);
       grass.userData.satM.value.copy(M);
@@ -446,6 +448,7 @@ export function buildCircuit(world, {pts, map, tex, width, startKnown, ann, corn
     // free every geometry and material this circuit created (textures are shared and kept)
     dispose() {
       grass.userData.sat.value?.dispose();  // the satellite image is this circuit's own
+      for (const mt of start?.userData.mats ?? []) mt.dispose();
       for (const o of owned) {
         world.remove(o);
         o.traverse?.(x => {
@@ -539,7 +542,11 @@ function gantry(f, w, m, tex, mps) {
   line.rotation.x = -Math.PI / 2;
   for (const s of [-1, 1]) add(new THREE.BoxGeometry(m(0.5), m(8), m(0.5)), steel, -m(4), m(4), s * (w / 2 + m(3)));
   add(new THREE.BoxGeometry(m(0.8), m(1.2), w + m(6)), steel, -m(4), m(7.6), 0);
-  const red = new THREE.MeshStandardMaterial({color: 0x330000, emissive: 0xff1a1a, emissiveIntensity: 1.5});
-  for (let i = -2; i <= 2; i++) add(new THREE.SphereGeometry(m(0.32), 12, 8), red, -m(3.55), m(7.6), i * m(1.4));
+  // five red lamps, dark until the start sequence lights them (lights(n), from the replay's or simulation's status)
+  const on = new THREE.MeshStandardMaterial({color: 0x330000, emissive: 0xff1a1a, emissiveIntensity: 4});
+  const off = new THREE.MeshStandardMaterial({color: 0x1a0606, roughness: 0.3});
+  const lamps = [-2, -1, 0, 1, 2].map(i => add(new THREE.SphereGeometry(m(0.32), 16, 12), off, -m(3.55), m(7.6), i * m(1.4)));
+  g.userData.lights = n => lamps.forEach((l, i) => { l.material = i < n ? on : off; });
+  g.userData.mats = [on, off];  // dispose() frees both: the traversal only sees the ones in use
   return g;
 }

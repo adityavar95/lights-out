@@ -1,6 +1,6 @@
 // Run: node tests/test_sim.mjs  — checks the race simulation's physics on a synthetic circuit.
 import assert from 'node:assert/strict';
-import {createRace, thermalGrip, wearGrip, COMPOUNDS} from '../src/static/sim.js';
+import {createRace, gridOrder, thermalGrip, wearGrip, COMPOUNDS} from '../src/static/sim.js';
 import {surfaceGrip, isWetTyre} from '../src/static/tyres.js';
 import {trackWetness} from '../src/static/weather.js';
 import {pitTrace} from '../src/static/strategy.js';
@@ -189,5 +189,33 @@ assert.ok(v10.laps.A[1][2] < solo.laps.A[1][2], `lighter and more powerful than 
   assert.equal(got.filter(p => p[0] === 500).length, 1, 'the stop adds one point');
   assert.equal(pitTrace(pts.slice(0, 30).map(([x, y]) => [x, y + 3]), pts, 10, 2), null, 'never left the track');
   assert.equal(pitTrace([[100, 0], [120, -25], null], pts, 10, 2), null, 'GPS dropped out in the lane');
+}
+
+// the pit-loss estimate stays a loss after a stop: the run through the lane isn't timed as racing pace
+{
+  const r = race(['A'], {laps: 8}), car = r.cars[0];
+  while (car.lapsDone < 2) r.advance(1 / 60);
+  const racing = car.segT;
+  assert.ok(racing > 0, 'a green-flag run was timed');
+  r.box('A', 'MEDIUM');
+  while (car.lapsDone < 4) r.advance(1 / 60);
+  assert.equal(car.pit.stops, 1);
+  assert.ok(Math.abs(car.segT - racing) < 3, `segment after the stop ${car.segT} s, racing ${racing} s`);
+  assert.ok(r.predict('A').loss > 15, `pit loss after the stop ${r.predict('A').loss} s`);
+}
+
+// a shared drive (Moss in two cars, Britain 1957): one car per driver, on the better grid slot
+assert.deepEqual(gridOrder([{id: 'brooks', grid: 3}, {id: 'moss', grid: 3}, {id: 'moss', grid: 1}, {id: 'fangio', grid: 4}]).map(e => [e.id, e.grid]),
+                 [['moss', 1], ['brooks', 3], ['fangio', 4]]);
+
+// a zero time step does nothing: it used to leave every AI car's lateral position NaN for good
+{
+  const r = race(['A', 'B']);
+  r.advance(1 / 60);
+  const t = r.t;
+  r.advance(0);
+  assert.equal(r.t, t);
+  r.advance(1 / 60);
+  assert.ok(r.cars.every(c => Number.isFinite(c.d)), 'd stays a number');
 }
 console.log('ok');

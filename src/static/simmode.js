@@ -1,7 +1,7 @@
 // "Simulation" session: the race weekend's drivers, gridded in qualifying order, racing under sim.js on the circuit's
 // real outline. Turns the simulation into what the replay draws: positions, tower rows, effects, HUD readings.
 import {get, rows, teamColor} from './util.js';
-import {createRace} from './sim.js';
+import {createRace, gridOrder} from './sim.js';
 import {radar, CAR_L} from './racecraft.js';
 import {setPitLane} from './scene3d.js';
 import {pitTrace} from './strategy.js';
@@ -22,7 +22,7 @@ async function entries(year, round) {
   let list = (await jol('results')).map(r => ({...entry(r), grid: +r.grid || 99, laps: +r.laps || 0}));  // grid 0 = pit-lane start
   if (!list.length) list = (await jol('qualifying')).map(r => ({...entry(r), grid: +r.position}));
   if (!list.length) list = (await jol('driverstandings', '')).map(r => ({...entry(r), grid: +r.position}));
-  return list.sort((a, b) => a.grid - b.grid);
+  return gridOrder(list);
 }
 
 // The circuit's real pit lane (map points, entry road to exit road): one pit stop's GPS from OpenF1 (2023+ races

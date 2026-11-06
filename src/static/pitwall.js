@@ -123,7 +123,7 @@ export function updatePitwall(S) {
     const pr = R.predict(id);
     if (pr?.pos && pit.state === 'RACING') {
       const name = o => (o ? `${S.byId[o.id]?.code} ${o.gap.toFixed(1)}s` : '—');
-      P.rejoin.textContent = `Box now: +${pr.loss.toFixed(1)}s → P${pr.pos} · behind ${name(pr.ahead)} · ahead of ${name(pr.behind)}`;
+      P.rejoin.textContent = `Box now: ${pr.loss < 0 ? '' : '+'}${pr.loss.toFixed(1)}s → P${pr.pos} · behind ${name(pr.ahead)} · ahead of ${name(pr.behind)}`;
       setGhost(trackPos(R.T, pr.s, R.T.line[Math.floor(((pr.s % R.T.len) + R.T.len) % R.T.len / R.T.ds) % R.T.n]));
     } else {
       P.rejoin.textContent = pit.state === 'RACING' ? 'Rejoin prediction after the first lap' : '';

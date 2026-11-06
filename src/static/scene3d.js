@@ -19,7 +19,8 @@ const SIZE = 1000;                  // the circuit is scaled to this many scene 
 const UP = new THREE.Vector3(0, 1, 0);
 const SUN = new THREE.Vector3(0.45, 0.62, 0.3).normalize();  // direction towards the sun; re-aimed at the HDRI's sun
 // photographed HDR sky (CC0, Poly Haven); the procedural sky stays if it can't be fetched
-const HDRI = 'https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/2k/kloofendal_48d_partly_cloudy_puresky_2k.hdr';
+// 4k on every tier (21 MB, cached by the browser after the first visit): it's one download and decode, not a per-frame cost
+const HDRI = 'https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/4k/kloofendal_48d_partly_cloudy_puresky_4k.hdr';
 
 let container, renderer, labels, scene, camera, controls, world, csm, post, vfx, hemi, cars = {}, map = null, tex = null;
 let carsToken = 0, mode = 'overview', chased = null, glide = 1, trackMat = null, simRate = 0, lastUpdate = 0, wettable = [], circuit = null, fly = null;
@@ -52,11 +53,12 @@ export function init3d(el) {
   // no canvas MSAA: the post-processing target is multisampled instead; high-performance asks for the discrete GPU on
   // dual-GPU laptops (Windows can still override it per browser in Settings > Display > Graphics)
   renderer = new THREE.WebGLRenderer({antialias: false, logarithmicDepthBuffer: true, powerPreference: 'high-performance', stencil: false});  // throws without WebGL
-  // A real GPU (not SwiftShader / llvmpipe / Microsoft Basic Render, i.e. hardware acceleration off) with 8x MSAA gets the
-  // high tier: the frame supersampled to 2x, 8x MSAA and 4096² shadow cascades
+  // A real GPU (not SwiftShader / llvmpipe / Microsoft Basic Render, i.e. hardware acceleration off) gets the high tier:
+  // the frame supersampled to 2x, 4096² shadow cascades, the sharper satellite ground. It used to also need 8x MSAA, which
+  // nothing uses any more (4x on every tier, below): GPUs reporting 4 samples silently lost all of it.
   const gl = renderer.getContext(), info = gl.getExtension('WEBGL_debug_renderer_info');
   const gpu = info ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL) : '';
-  high = !/swiftshader|llvmpipe|software|basic render/i.test(gpu) && renderer.capabilities.maxSamples >= 8;
+  high = !/swiftshader|llvmpipe|software|basic render/i.test(gpu);
   renderer.setPixelRatio(pixelRatio());
   // Khronos PBR Neutral: keeps livery hues and saturation (ACES pushed kerb red to neon, blues to purple); x - 0.04 at mid-grey
   renderer.toneMapping = THREE.NeutralToneMapping;
@@ -66,10 +68,12 @@ export function init3d(el) {
   labels = new CSS2DRenderer();
   labels.domElement.className = 'labels3d';
   container.append(renderer.domElement, labels.domElement);
+  // three brings the context back with a black ground and sky, so start afresh; not under the F1 TV viewer, whose video would stop: the loop waits for it to close
+  renderer.domElement.addEventListener('webglcontextrestored', () => { contextRestored = true; });
   scene = new THREE.Scene();
   // every render() and the label pass would walk all ~2,000 objects again: the loop updates the matrices once per frame
   scene.matrixWorldAutoUpdate = false;
-  tex = textures();
+  tex = textures(high);
   scene.fog = new THREE.Fog(0xc4d3e2, SIZE * 1.3, SIZE * 4);
   const sky = new Sky(), u = sky.material.uniforms, envScene = new THREE.Scene(), pmrem = new THREE.PMREMGenerator(renderer);
   u.turbidity.value = 4;
@@ -127,6 +131,7 @@ export function init3d(el) {
   const clock = new THREE.Clock();
   renderer.setAnimationLoop(() => {
     const dt = Math.min(clock.getDelta(), 0.1);
+    if (contextRestored && !covered()) { contextRestored = false; location.reload(); }
     // tab hidden, no size yet, or under the F1 TV viewer (it drew ~1,800 calls a frame there, beside 4K video decoding)
     if (!container.offsetParent || !container.clientWidth || !container.clientHeight || covered()) return;
     // dynamic resolution: averaging under ~40 fps (a weaker GPU, a laptop on battery) drops the supersampling, once.
@@ -192,7 +197,7 @@ function keepInBounds() {
 // diffuse ambient and reflections. The sun light is aimed at its brightest texel so shadows agree with the sky: texel
 // (x, y) with row 0 at the top is longitude 2 pi (u - 0.5), latitude pi (0.5 - v), as three samples equirect maps.
 function loadSky(pmrem, sky) {
-  new RGBELoader().load(high ? HDRI.replaceAll('2k', '4k') : HDRI, hdr => {  // 4k: 21 MB, a sharper sky behind a 2x frame
+  new RGBELoader().load(HDRI, hdr => {
     const {data, width: w, height: h} = hdr.image, half = THREE.DataUtils.fromHalfFloat;
     let best = 0, at = 0;
     for (let i = 0; i < w * h / 2; i += 2) {  // upper half: the sun is above the horizon
@@ -217,7 +222,7 @@ function loadSky(pmrem, sky) {
     hdr.dispose();
     scene.remove(sky);
     hemi.intensity = sky0.hemi = 0.15;  // the HDRI now supplies the ambient light
-  }, undefined, () => {});
+  }, undefined, e => console.warn('3D: the 4K sky could not be loaded, so the procedural sky stays', e));
 }
 
 // Every lit material needs CSM's shader patch: unpatched, the cascade lights don't light it at all. A material's own
@@ -254,7 +259,9 @@ const m = metres => metres / map.mps;  // metres -> scene units
 // pts: 2D map outline; corners: [[x, y, number]]; startKnown: pts[0] is the line; mpu: metres per map unit; width: metres;
 // ann: circuits.js annotate() (heights, banking, kerbs, tunnel, barriers), flat without it. Frees the previous circuit
 // and cars, and flies the camera to the new overview instead of cutting.
+let contextRestored = false, groundWorker = null;
 export function setTrack(pts, span, corners, startKnown, mpu, width = 13, ann = null) {
+  groundWorker?.terminate();  // its imagery is for the circuit going away (up to 256 MB)
   stale?.dispose();  // a second switch before a frame was drawn
   stale = circuit;
   circuit = null;
@@ -330,6 +337,7 @@ function disposeCars() {
 export function setView(m) {
   mode = m;
   chased = null;
+  fly = null;  // still easing to the overview, it'd pull a chase camera back out there for good: chase keeps its offset
   controls.enabled = !RIGGED.has(m);
   camera.fov = {overview: 42, chase: 50, onboard: 72, tcam: 64, heli: 30, follow: 62}[m];
   camera.updateProjectionMatrix();
@@ -339,6 +347,9 @@ export function setView(m) {
 }
 
 export const setParts = p => Object.assign(parts, p);
+
+// the start gantry's red lamps: n of 5 lit (0: dark)
+export const setStartLights = n => circuit?.lights(n);
 
 // colour band on the tyre sidewalls for the current compound
 // Weather look, from the simulation's weather (or a replay's rain flag). cloud / rain 0..1; wetLine / wetOff: water
@@ -367,17 +378,19 @@ export function setWeather({cloud, rain, wetLine, wetOff}) {
 // the imagery 500 m round the track is fetched, and the terrain shader drapes it through an affine scene (x, z) -> uv
 // (Mercator is conformal, so over a few km the map is affine to well under a metre). Trees stay only where the image
 // shows vegetation. Anything failing (no real outline, a poor fit, tiles unreachable) leaves the procedural grass.
-export async function setGround(year, round) {
-  const c = circuit;
+// Twice: ~36 tiles first, then the sharp image. On a cold browser cache its ~480 tiles take ~12 s, past the intro's lights out.
+export async function setGround(year, round, maxPx = 2048) {
+  groundWorker?.terminate();
+  const c = circuit, full = Math.min(high ? 8192 : 4096, renderer.capabilities.maxTextureSize);  // high tier: one zoom level sharper (~0.5 m a pixel)
   if (!c) return;
   const xs = c.pts.map(p => (p[0] - map.cx) * map.k), zs = c.pts.map(p => (p[1] - map.cy) * map.k), pad = m(500);
   const g = await new Promise(done => {  // the fit, the imagery and its vegetation: groundwork.js, on a worker thread
-    const w = new Worker(new URL('./groundwork.js', import.meta.url), {type: 'module'});
+    const w = groundWorker = new Worker(new URL('./groundwork.js', import.meta.url), {type: 'module'});
     w.onmessage = e => { w.terminate(); done(e.data); };
     w.onerror = e => { w.terminate(); done({error: e.message || 'worker failed'}); };
     w.postMessage({url: `/api/geo/${year}/${round}`, pts: c.pts, map: {k: map.k, cx: map.cx, cy: map.cy}, L: SIZE / 2,
       box: [Math.min(...xs) - pad, Math.max(...xs) + pad, Math.min(...zs) - pad, Math.max(...zs) + pad],
-      maxPx: Math.min(high ? 8192 : 4096, renderer.capabilities.maxTextureSize)});  // high tier: one zoom level sharper (~0.5 m a pixel)
+      maxPx: Math.min(maxPx, full)});
   });
   if (circuit !== c || !g?.image) {  // another circuit since, or no ground to show
     g?.image?.close();
@@ -396,6 +409,7 @@ export async function setGround(year, round) {
     return u < 0 || u >= 1 || v < 0 || v >= 1 || data[Math.floor(v * h) * w + Math.floor(u * w)] === 1;
   };
   c.satellite(texture, new THREE.Matrix3().set(...g.m, 0, 0, 1), green, new THREE.Color().setRGB(...g.mean, THREE.SRGBColorSpace));
+  if (maxPx < full) setGround(year, round, full);
 }
 
 // Pit lane (map points of its centre line): the simulation's, entry road to exit road, or a replay's real one from GPS.

@@ -8,9 +8,10 @@ import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import livef1
 import pandas as pd
@@ -23,9 +24,10 @@ from fastapi.staticfiles import StaticFiles
 
 import f1auth
 import f1tv
+import ledgers
 import radio
 from jolpica import JOLPICA, driver_career, jolpica_fetch, races
-from replay import CACHE, OpenF1Locked, ReplayUnavailable, elevation, find_session, laps_replay, pitlane, replay, save, season_session_rows, session_telemetry, telemetry
+from replay import CACHE, OpenF1Locked, ReplayUnavailable, elevation, find_session, laps_replay, pitlane, replay, save, scheduled_session, season_session_rows, session_telemetry, telemetry
 import live
 from tracks import _geo_track, mv_track, track
 
@@ -42,6 +44,14 @@ def raw_json(data) -> Response:
 def table(df: pd.DataFrame) -> dict:
     out = json.loads(df.head(MAX_ROWS).to_json(orient="split", index=False, date_format="iso", default_handler=str))
     return {"columns": out["columns"], "data": out["data"], "total": len(df)}
+
+
+def check_season(year: int, round: int | None = None):
+    """Years and rounds come from the url: anything else would spend Jolpica's ~500 requests an hour, and fill its caches."""
+    if not 1950 <= year <= date.today().year + 1:
+        raise HTTPException(404, f"No {year} season")
+    if round is not None and not 1 <= round <= 30:
+        raise HTTPException(404, f"No round {round} in {year}")
 
 
 @lru_cache(maxsize=None)
@@ -82,6 +92,7 @@ def seasons():
 
 @app.get("/api/season/{year}")
 def season_sessions(year: int):
+    check_season(year)
     if year >= 2023:
         try:
             rows = season_session_rows(year)
@@ -95,6 +106,7 @@ def season_sessions(year: int):
 
 @app.get("/api/season/{year}/f1schedule")
 def f1_schedule(year: int):
+    check_season(year)
     try:
         return table(season(year).get_schedule())
     except Exception as e:
@@ -105,6 +117,7 @@ def f1_schedule(year: int):
 def jolpica(year: int, kind: str, round: int | None = None):
     if kind not in JOLPICA:
         raise HTTPException(404, f"Unknown kind '{kind}'. Use one of: {', '.join(JOLPICA)}")
+    check_season(year, round)
     fetch = lambda: jolpica_fetch(year, kind, round)
     try:
         rows = last_or_fetch(f"{year}_{kind}_{round}", fetch) if year >= date.today().year else fetch()
@@ -126,10 +139,7 @@ def last_or_fetch(key: str, fetch, max_age: float = 300):
         age, data = time.time() - path.stat().st_mtime, json.loads(path.read_text())
     except (OSError, ValueError):
         data = fetch()
-        try:
-            save(path, data)
-        except OSError:
-            pass  # two first requests at once share save's temp file: one keeps it, both answer
+        save(path, data)
         return data
     if age > max_age and key not in _refreshing:
         _refreshing.add(key)
@@ -156,8 +166,16 @@ def driver(driver_id: str):
         raise HTTPException(502, f"Jolpica request failed: {e}")
 
 
+def season_races(year: int) -> tuple:
+    try:
+        return races(year)
+    except Exception as e:  # a Jolpica timeout isn't a server bug
+        raise HTTPException(502, f"Jolpica request failed: {e}")
+
+
 def race_info(year: int, round: int) -> dict:
-    race = next((r for r in races(year) if r["round"] == str(round)), None)
+    check_season(year, round)
+    race = next((r for r in season_races(year) if r["round"] == str(round)), None)
     if race is None:
         raise HTTPException(404, f"No round {round} in {year}")
     return race
@@ -215,7 +233,7 @@ def _elevation_at(circuit_id: str, newest: int):
 def race_elevation(year: int, round: int):
     c = race_info(year, round)["Circuit"]["circuitId"]
     try:
-        data = _elevation_at(c, year)
+        data = _elevation_at(c, max(year, date.today().year))
     except Exception as e:
         raise HTTPException(502, f"Elevation request failed: {e}")
     if data is None:
@@ -241,7 +259,7 @@ def circuit(circuit_id: str):
     """The most recent race held at a circuit (for the circuit selector): year, round and name."""
     today = str(date.today())
     for y in range(date.today().year, 2017, -1):  # back to 2018, where MultiViewer's outlines begin
-        for r in reversed(races(y)):
+        for r in reversed(season_races(y)):
             if r["Circuit"]["circuitId"] == circuit_id and r["date"] <= today:
                 return {"year": y, "round": int(r["round"]), "raceName": r["raceName"]}
     raise HTTPException(404, f"No race at {circuit_id} since 2018")
@@ -252,9 +270,15 @@ LIVE_NOW = "This session is live now: opening live timing."  # replay.js switche
 
 def _is_live(race: dict, session: str) -> bool:
     """Whether F1's live feed is running this session now (OpenF1 keeps it locked until it ends)."""
-    info = live.snapshot()["topics"].get("SessionInfo") or {}
+    # The feed has to be open to know, and nothing else need have opened it when ▶ is the first thing clicked on a live
+    # session: so it's opened, but only for a race weekend happening now.
+    if abs((date.today() - date.fromisoformat(race["date"])).days) > 3:
+        return False
+    topics = live.snapshot()["topics"]
+    info = topics.get("SessionInfo") or {}
     start = (info.get("StartDate") or "")[:10]
-    return bool(start) and (info.get("Name") or "").lower() == session.lower() \
+    return bool(start) and (topics.get("SessionStatus") or {}).get("Status") in live.RUNNING \
+        and (info.get("Name") or "").lower() == session.lower() \
         and abs((date.fromisoformat(start) - date.fromisoformat(race["date"])).days) <= 3
 
 
@@ -268,6 +292,34 @@ def race_replay(year: int, round: int, session: str = "Race", laps: bool = False
         raise HTTPException(409, LIVE_NOW) if _is_live(race, session) else HTTPException(404, str(e))
     except Exception as e:
         raise HTTPException(502, f"Replay data request failed: {e}")
+
+
+def _openf1_ledger(year: int, round: int, fetch):
+    """A Results-tab table from OpenF1's race feeds, in plain words when it can't be had."""
+    race = race_info(year, round)
+    if year < 2023:  # no request: OpenF1 has nothing older
+        raise HTTPException(404, "OpenF1's records start in 2023.")
+    try:
+        session = find_session(year, race["date"], "Race")
+        if not session:
+            raise ReplayUnavailable("OpenF1 has no race session for this event.")
+        return raw_json(fetch(year, round, session))
+    except OpenF1Locked:
+        raise HTTPException(503, "OpenF1 locks its data while a session is live: this table comes back when the session ends.")
+    except ReplayUnavailable as e:
+        raise HTTPException(404, str(e))
+    except Exception:  # requests' text carries the url and a Python repr
+        raise HTTPException(502, "OpenF1 didn't answer. Try again in a minute.")
+
+
+@app.get("/api/overtakes/{year}/{round}")
+def race_overtakes(year: int, round: int):
+    return _openf1_ledger(year, round, ledgers.overtakes)
+
+
+@app.get("/api/stationary/{year}/{round}")
+def race_stationary(year: int, round: int):
+    return _openf1_ledger(year, round, ledgers.stationary)
 
 
 @app.get("/api/f1tv/account")
@@ -300,15 +352,23 @@ def f1tv_play(content_id: int, channel: int | None = None, uhd: bool = False, x_
         raise HTTPException(502, f"F1 TV play request failed: {e}")
 
 
+MAX_LICENCE = 65536  # a Widevine challenge is a few kB
+
+
 @app.post("/api/f1tv/license")
 async def f1tv_license(request: Request, u: str, x_f1_token: str | None = Header(None), x_f1_entitlement: str | None = Header(None)):
     """A live stream's Widevine licence (f1tv.license): the page's licence request, passed on with the account's tokens."""
     t = f1auth.valid(x_f1_token)
     if not t:
         raise HTTPException(401, "Connect your F1 TV account to play videos")
-    challenge = await request.body()
-    if len(challenge) > 65536:  # a Widevine challenge is a few kB
+    length = request.headers.get("content-length", "")
+    if length.isdigit() and int(length) > MAX_LICENCE:
         raise HTTPException(413, "Licence request too large")
+    challenge = b""
+    async for chunk in request.stream():  # a chunked body gives no length to check
+        challenge += chunk
+        if len(challenge) > MAX_LICENCE:
+            raise HTTPException(413, "Licence request too large")
     try:
         status, body, kind = await run_in_threadpool(f1tv.license, u, challenge, t, x_f1_entitlement)
     except f1tv.F1TVError as e:
@@ -341,8 +401,8 @@ def f1tv_radio(year: int, round: int, driver: int, session: str = "Race", x_f1_t
     once transcribed. The caller's F1 TV token fetches the audio, which F1 refuses without one."""
     if year < 2023:
         return {"clips": [], "pending": 0, "error": None}  # OpenF1 has team radio from 2023
+    race = race_info(year, round)
     try:
-        race = race_info(year, round)
         names = [session, "Sprint Shootout"] if session == "Sprint Qualifying" else [session]
         s = next((x for n in names if (x := find_session(year, race["date"], n))), None)
         return radio.radio(s, session, year, driver, f1auth.valid(x_f1_token))
@@ -380,6 +440,22 @@ def f1tv_videos(year: int, round: int):
 def live_state(x_f1_token: str | None = Header(None)):
     """Current state of the live (or most recent) session from F1's free live timing feed."""
     return raw_json(live.snapshot(f1auth.valid(x_f1_token)))  # polled every second
+
+
+@app.get("/api/live/status")
+def live_status():
+    """{live, title}: is a session on, for a tab's periodic check. Unlike /api/live it never opens F1's feed or holds it
+    open: the feed's word while it's running, else the schedule's, so no websocket stays up between weekends."""
+    feed = live.status()
+    if feed:
+        return feed
+    try:
+        title = scheduled_session(datetime.now(timezone.utc))
+    except OpenF1Locked:  # no saved season list yet, and OpenF1 only locks while a session is live
+        title = "Live session"
+    except Exception:
+        title = None  # OpenF1 unreachable: no way to tell, so no LIVE button
+    return {"live": bool(title), "title": title}
 
 
 @app.get("/api/live/track")
@@ -429,7 +505,7 @@ async def revalidate_static(request, call_next):
     # Without it browsers cache old modules heuristically and mix them with new ones after an edit, and one missing
     # export blanks the whole app. no-cache still serves 304s for unchanged files.
     response = await call_next(request)
-    if request.url.path.startswith("/static/"):
+    if request.url.path == "/" or request.url.path.startswith("/static/"):
         response.headers["Cache-Control"] = "no-cache"
     return response
 
@@ -440,10 +516,10 @@ app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), na
 
 # Anonymous usage counts (docs/ux-audit.md item 11): per day, how often each of these happened. The page sends only the
 # event's name (util.js count): no id, cookie, IP or page address is kept, and nothing goes to a third party.
-EVENTS = {"visit", "return_7d", "intro_shown", "intro_explore", "intro_simulate", "intro_stream", "watched_60s",
-          "new_race_watch", "stream_open", "video_here", "video_f1tv", "connect_open", "f1tv_connected"}
+EVENTS = {"visit", "return_7d", "intro_shown", "intro_explore", "intro_simulate", "intro_stream", "first_play", "watched_60s",
+          "new_race_watch", "stream_open", "video_here", "video_f1tv", "connect_open", "f1tv_connected", "palette_open", "shortcuts_open"}
 COUNTS = CACHE.parent / "counts.json"  # shortcut: lives in .cache, so deleting the cache resets it; move it if it matters
-_counts_lock = threading.Lock()  # one read-add-write at a time (save's temp file is per process, not per thread)
+_counts_lock = threading.Lock()  # one read-add-write at a time
 
 
 def count_event(event: str, day: str, path: Path = COUNTS) -> dict:
@@ -456,7 +532,10 @@ def count_event(event: str, day: str, path: Path = COUNTS) -> dict:
 
 
 @app.post("/api/count/{event}", status_code=204)
-def count(event: str):
+def count(event: str, request: Request):
+    origin = request.headers.get("origin")
+    if origin and urlsplit(origin).netloc != request.headers.get("host"):  # another site's page can't add to the counts
+        raise HTTPException(403, "Cross-origin count")
     if event not in EVENTS:  # a fixed list, so the file can't be filled with whatever a caller sends
         raise HTTPException(404, "Unknown event")
     count_event(event, date.today().isoformat())

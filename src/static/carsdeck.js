@@ -7,7 +7,8 @@
 import * as THREE from 'three';
 import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
 import {RoomEnvironment} from 'three/addons/environments/RoomEnvironment.js';
-import {get, rows, el, teamColor, led} from './util.js';
+import {get, rows, el, teamColor, led, skeleton} from './util.js';
+import {panelFocus} from './circuitdeck.js';
 import {engine} from './telemetry.js';
 import {buildCar, spec} from './cars3d.js';
 import {loadRB22} from './rb22.js';
@@ -50,19 +51,20 @@ export function setupCarsDeck(stage, top) {
     D.chips,
     el('div', {class: 'csbody'}, D.grid,
       el('aside', {class: 'csdetail'}, D.title, D.canvas, el('label', {class: 'csteam'}, el('small', {}, 'LIVERY'), D.team), D.spec, D.stats, D.race)));
-  D.panel.addEventListener('keydown', e => { if (e.key === 'Escape') { toggle(false); D.btn.focus(); } });
+  D.focus = panelFocus(D.panel, D.btn, () => toggle(false));
   // one big panel at a time: another one opening (circuits, cars, telemetry trace) closes this one
-  addEventListener('f1:panel', e => { if (e.detail !== D.panel && !D.panel.hidden) toggle(false); });
+  addEventListener('f1:panel', e => { if (e.detail !== D.panel && !D.panel.hidden) toggle(false, false); });
   D.chips.append(...ERAS.map(([name, from, to]) => el('button', {class: 'neu', 'aria-pressed': false, onclick: () => era(from)}, `${name} ${from}${to > from ? `–${String(to).slice(2)}` : ''}`)));
   top.append(D.btn);
   stage.append(D.panel);
 }
 
-function toggle(open = D.panel.hidden) {
+function toggle(open = D.panel.hidden, restore = true) {
   D.panel.hidden = !open;
   if (open) dispatchEvent(new CustomEvent('f1:panel', {detail: D.panel}));
   D.btn.setAttribute('aria-expanded', open);
-  if (!open) return;
+  if (!open) { D.focus.closed(restore); return; }
+  D.focus.opened();
   preview();
   if (D.year === null) era(2026);
   else loop();
@@ -95,7 +97,7 @@ async function pick(year) {
     badge('TYRES', s.grooves ? 'grooved' : 'slick'), badge('ERS', e.pK ? `${e.pK / 1e3} kW` : 'none'), year >= 2026 ? badge('OVERTAKE', 'active aero') : badge('DRS', e.drs ? 'yes' : 'no'),
     note && badge('INNOVATION', note)].filter(Boolean));
   D.team.replaceChildren(new Option(team, team));
-  D.stats.replaceChildren(el('small', {class: 'muted'}, 'Loading season results…'));
+  D.stats.replaceChildren(skeleton(3));
   try {
     const [cons, drivers] = await Promise.all(['constructorstandings', 'driverstandings'].map(k => get(`/api/jolpica/${year}/${k}`).then(rows)));
     if (D.year !== year) return;
@@ -104,6 +106,7 @@ async function pick(year) {
     D.team.replaceChildren(...cons.map(c => new Option(`P${c.position} ${c['Constructor.name']}`, c['Constructor.constructorId'])));
     D.team.value = cons.some(c => c['Constructor.constructorId'] === team) ? team : cons[0]?.['Constructor.constructorId'];
   } catch (err) {
+    if (D.year !== year) return;
     D.cons = D.drivers = [];
     D.stats.replaceChildren(el('small', {class: 'muted'}, `No season results: ${err.message}`));
   }

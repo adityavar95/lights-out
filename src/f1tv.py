@@ -31,16 +31,29 @@ def _stem(name: str) -> str:
     return unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode().lower().replace(" ", "")[:6]
 
 
+def _fresh(hit, year: int) -> bool:
+    return bool(hit) and time.time() - hit[0] < (TTL if year >= date.today().year else 86400)  # a past season's catalogue is settled
+
+
+def _meeting_names(year: int) -> set:
+    """Every meeting name in a season's catalogue, one search per TTL: each weekend F1 TV names differently asks for it."""
+    hit = _cache.get(("meetings", year))
+    if _fresh(hit, year):
+        return hit[1]
+    names = {(c["metadata"].get("emfAttributes") or {}).get("Meeting_Name") for c in _search(filter_season=year)}
+    _cache[("meetings", year)] = (time.time(), names)
+    return names
+
+
 def videos(year: int, race_name: str) -> list:
     """The race weekend's F1 TV videos: {id, title, kind, tier, start, end (ms, 0 for archive content), url,
     img (F1 TV's image resizer: add ?w=&h=), duration (s)}."""
     hit = _cache.get((year, race_name))
-    if hit and time.time() - hit[0] < (TTL if year >= date.today().year else 86400):  # a past season's catalogue is settled
+    if _fresh(hit, year):
         return hit[1]
     items = _search(filter_season=year, filter_Meeting_Name=race_name)
     if not items:  # F1 TV names the meeting differently: find its name in the season's catalogue
-        names = {(c["metadata"].get("emfAttributes") or {}).get("Meeting_Name") for c in _search(filter_season=year)}
-        match = next((n for n in names if n and _stem(n) == _stem(race_name)), None)
+        match = next((n for n in _meeting_names(year) if n and _stem(n) == _stem(race_name)), None)
         items = _search(filter_season=year, filter_Meeting_Name=match) if match else []
     out = []
     for c in items:
