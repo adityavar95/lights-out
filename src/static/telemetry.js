@@ -24,10 +24,11 @@ export function kinematics(p0, p1, p2, h) {
 // teams never published exact power). cyl: cylinders (the audio's firing frequency); rpmMax: rev limit (regulated from
 // 2007); turbo: turbocharged (whistle and hiss in the audio); pIce: engine peak power, W; minMass: minimum mass with
 // driver, kg; pK: KERS / MGU-K power, W, with the store (battery) and per-lap harvest / deploy limits, J (KERS: 60 kW and
-// 400 kJ a lap, unused in 2010; MGU-K: 120 kW, 2 MJ harvest, 4 MJ deploy; 2026: 350 kW, ~8.5 MJ); drs: from 2011.
+// 400 kJ a lap, unused in 2010; MGU-K: 120 kW, 2 MJ harvest, 4 MJ deploy; 2026: 350 kW, ~8.5 MJ); pH: typical MGU-H recovery at
+// full throttle (2014-25: no lap limit, and it feeds the MGU-K directly); taper: 2026's speed taper; drs: from 2011.
 // Before 1995 there was mostly no minimum mass worth the name: minMass is then a typical car with its driver.
 const ENGINES = [
-  [0, {name: '1.5L supercharged straight-8', cyl: 8, rpmMax: 9000, turbo: false, pIce: 310e3, minMass: 780, pK: 0, battery: 4e6,
+  [0, {name: '1.5L supercharged straight-8', cyl: 8, rpmMax: 9000, turbo: false, pIce: 310e3, minMass: 780, pK: 0, pH: 0, battery: 4e6,
        harvestLap: 0, deployLap: 0, drs: false}],
   [1952, {name: '2.0L straight-4', cyl: 4, rpmMax: 7500, pIce: 140e3, minMass: 640}],    // run to Formula 2 rules
   [1954, {name: '2.5L straight-6', cyl: 6, rpmMax: 8000, pIce: 200e3, minMass: 700}],
@@ -53,7 +54,7 @@ const ENGINES = [
   [2010, {name: '2.4L V8', minMass: 620, pK: 0, harvestLap: 0, deployLap: 0}],
   [2011, {name: '2.4L V8 + KERS', minMass: 640, pK: 60e3, harvestLap: 0.5e6, deployLap: 0.4e6, drs: true}],
   [2013, {minMass: 642}],
-  [2014, {name: '1.6L V6 turbo hybrid', cyl: 6, rpmMax: 15000, turbo: true, pIce: 450e3, minMass: 691, pK: 120e3, battery: 4e6,
+  [2014, {name: '1.6L V6 turbo hybrid', cyl: 6, rpmMax: 15000, turbo: true, pIce: 450e3, minMass: 691, pK: 120e3, pH: 80e3, battery: 4e6,
           harvestLap: 2e6, deployLap: 4e6}],
   [2015, {minMass: 702}],
   [2017, {minMass: 728, pIce: 560e3}],
@@ -63,13 +64,17 @@ const ENGINES = [
   [2021, {minMass: 752}],
   [2022, {minMass: 798}],
   [2025, {minMass: 800}],
-  [2026, {minMass: 768, pIce: 400e3, pK: 350e3, harvestLap: 8.5e6, deployLap: 8.5e6}],
+  [2026, {minMass: 768, pIce: 400e3, pK: 350e3, pH: 0, taper: true, harvestLap: 8.5e6, deployLap: 8.5e6}],
 ];
 export function engine(year) {
   let e = {};
   for (const [from, c] of ENGINES) if (year >= from) e = {...e, ...c};
   return e;
 }
+
+// 2026 MGU-K power limit (W) at a speed in km/h: 350 kW to 290, 1800 - 5v kW to 340, 6900 - 20v kW to nil at 345. The
+// overtake override holds 350 kW to 337.5 and fades 7100 - 20v kW to nil at 355.
+export const mgukTaper = (kmh, boost) => clamp((boost ? 7100 - 20 * kmh : Math.min(1800 - 5 * kmh, 6900 - 20 * kmh)) * 1e3, 0, 350e3);
 
 // Gear and RPM without car data: an 8-speed box shifts near the top of each gear's band (km/h at the limiter for a
 // modern car), and within a gear engine speed is proportional to road speed: rpm = RPM_MAX * v / vTop(gear). RPM_MAX is
@@ -92,14 +97,24 @@ export function pedals(gLong, kmh) {
 // Energy store: the MGU-K deploys at full throttle and harvests under braking. Rules: 120 kW and a 4 MJ usable
 // window up to 2025, 350 kW from 2026. State of charge integrates power over time: dSOC/dt = P / capacity.
 export function ersStep(state, throttle, brake, kmh, dt, year) {
-  const {pK: P, battery: CAP} = engine(year);  // no recovery before 2009 (and in 2010): it stays on HOLD
+  const {pK: P, pH, battery: CAP, taper} = engine(year);  // no recovery before 2009 (and in 2010): it stays on HOLD
   let mode = 'HOLD', power = 0;
-  if (P > 0 && brake > 20) { mode = 'HARVEST'; power = P * brake / 100; }
-  else if (P > 0 && throttle > 95 && kmh > 120 && state.soc > 0.02) { mode = 'DEPLOY'; power = -P; }
+  if (P > 0 && brake > 20 && kmh > 40) { mode = 'HARVEST'; power = P * brake / 100; }
+  else if (P > 0 && throttle > 95 && kmh > 120 && state.soc > 0.02) { mode = 'DEPLOY'; power = pH - (taper ? Math.min(P, mgukTaper(kmh, false)) : P); }
   state.soc = clamp(state.soc + power * dt / CAP, 0, 1);
   state.mode = mode;
   return state;
 }
+
+// A front carbon disc's temperature (C) from the kinetic energy it takes: each gets ~30 % of the braking power, what's
+// left of the deceleration m a v after aero drag (~1.1e-3 v^2 m/s^2). C dT/dt = P - C k(v) (T - 40), C: ~1.1 kg at
+// ~1100 J/kg K; cooling rises with airflow (a time constant of ~9 s at 300 km/h). decel in m/s^2, + slowing.
+export function brakeStep(T, decel, v, dt, mass = 800) {
+  const power = 0.3 * mass * Math.max(0, decel - 1.1e-3 * v * v) * v;
+  return T + (power / 1210 - (0.01 + 0.0012 * v) * (T - 40)) * dt;
+}
+// visible glow 0..1: carbon starts to show red past ~600 C and is at its brightest by ~1050 C
+export const brakeGlow = T => { const f = clamp((T - 600) / 450, 0, 1); return f * f * (3 - 2 * f); };
 
 // Tyres, first-order thermal model per corner (FL, FR, RL, RR) for the surface temperature T:
 //   C dT/dt = v (0.12 + 0.08 * 4 share * |g|) - k (6 + sqrt v) (T - T_track)

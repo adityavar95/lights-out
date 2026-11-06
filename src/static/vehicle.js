@@ -6,7 +6,7 @@
 //   throttle, brake, clutch 0..1 · steer -1..1 (share of the mechanical lock) · gearShift -1 | 0 | 1
 //   aeroMode FIXED | DRS_OPEN | Z_MODE_CORNER | X_MODE_STRAIGHT · ersMode NONE | HARVEST | BALANCED | PUSH | BOOST_OVERRIDE
 //   plus the assists the driver has: abs, tc (share of the traction limit or null), autoBlip, autoClutch
-import {clamp} from './telemetry.js';
+import {clamp, mgukTaper} from './telemetry.js';
 import {profile} from './eras.js';
 
 const G = 9.81, RHO = 1.225;
@@ -23,7 +23,7 @@ export function carSpec(year) {
     ClA: aero.ClA, CdA: aero.CdA, bal: chassis.fwd, ge: aero.ge, skirts: aero.skirts, skirtShare: aero.skirtShare, active: aero.active,
     drs: aero.drs, overtake: !!aero.active, crr: 0.015,
     mu: tyre.mu, muLong: tyre.muLong, loadSens: tyre.loadSens, warm: tyre.warm ?? 0, shape: tyre.shape, B: Math.tan(Math.PI / (2 * tyre.shape)) / tyre.slipPeak,
-    maxBrakeG: p.brakes.maxG, pIce: e.pIce, pK: e.pK, rpmMax: e.rpmMax, battery: e.battery, harvestLap: e.harvestLap, deployLap: e.deployLap,
+    maxBrakeG: p.brakes.maxG, pIce: e.pIce, pK: e.pK, pH: e.pH, rpmMax: e.rpmMax, battery: e.battery, harvestLap: e.harvestLap, deployLap: e.deployLap,
     h0: chassis.h0, k: chassis.k, zeta: chassis.zeta, activeSusp: chassis.activeSusp,
     wb: chassis.wb, fwd: chassis.fwd, kz: chassis.kz, hcg: chassis.hcg, maxLock: chassis.maxLock,
     ...p.power, box: p.gearbox, aids: p.aids, driver: p.driver, gearTop: null,
@@ -32,9 +32,9 @@ export function carSpec(year) {
 
 // ---------- powertrain ----------
 
-// MGU-K power available at speed v: 2026 cuts it from 290 km/h (P kW = 1850 - 5 kmh, nil by 370), the overtake
-// override holds 350 kW to ~337 km/h (P = 7100 - 20 kmh); before 2026 it's flat
-export const kLimit = (c, v, boost) => (c.kTaper ? clamp((boost ? 7100 - 20 * v * 3.6 : 1850 - 5 * v * 3.6) * 1e3, 0, c.pK) : c.pK);
+// MGU-K power available at speed v: 2026 fades it past 290 km/h, the overtake override later (telemetry.js mgukTaper);
+// before 2026 it's flat
+export const kLimit = (c, v, boost) => (c.kTaper ? Math.min(c.pK, mgukTaper(v * 3.6, boost)) : c.pK);
 // power over rev fraction x: about constant torque below the peak (power rising with the revs), falling away past it
 const share = (c, x) => (x < c.curve.peak ? Math.max(0.1, x / c.curve.peak) : clamp(1 - ((x - c.curve.peak) / c.curve.width) ** 2, 0.1, 1));
 
@@ -101,21 +101,27 @@ function turbo(car, c, ctl, x, h) {
 }
 
 // ERS: deploys at full throttle down to the mode's reserve and the lap's deployment limit (plus 0.5 MJ on the 2026
-// override); harvests under braking (MGU-K limit) and a third of that lifting; 2026 "super clipping": with the lap's
-// energy spent, the ECU harvests up to 250 kW at full throttle near the end of a straight. Returns MGU-K power, W (- harvest).
-function ers(car, c, ctl, h) {
-  const e = car.ers, v = car.v, boost = ctl.ersMode === 'BOOST_OVERRIDE';
+// override); harvests under braking (the MGU-K limit, and never more than the brakes are taking) and a third of that
+// lifting. The MGU-H (2014-25) recovers exhaust energy at full throttle with no lap limit: it feeds the MGU-K first, so
+// only the rest counts against the 4 MJ from the store, and it charges the store otherwise. 2026 "super clipping": with
+// the lap's energy spent or the store at its floor, the ECU harvests at the MGU-K limit (350 kW since Miami 2026) at
+// full throttle past 250 km/h, in bursts of 5 % of the store. thr: the throttle after the limiter. Returns MGU-K power, W (- harvest).
+function ers(car, c, ctl, thr, h) {
+  const e = car.ers, v = car.v, boost = ctl.ersMode === 'BOOST_OVERRIDE', was = e.clipping;
   e.deploying = e.derate = e.clipping = false;
   if (!c.pK || ctl.ersMode === 'NONE') return 0;
   const reserve = {PUSH: 0.02, BOOST_OVERRIDE: 0.02, BALANCED: 0.25, HARVEST: 1.1}[ctl.ersMode] ?? 0.25;
-  const thr = ctl.throttle, budget = c.deployLap + (boost ? 0.5e6 : 0), cap = kLimit(c, v, boost);
-  const deploy = thr > 0.95 && v > 28 && e.soc > reserve && e.deployed < budget && cap > 0;
+  const budget = c.deployLap + (boost ? 0.5e6 : 0), cap = kLimit(c, v, boost), floor = Math.min(reserve, 0.25);
+  const recharging = was && e.soc < floor + 0.05;
+  const deploy = thr > 0.95 && v > 28 && e.soc > reserve && e.deployed < budget && cap > 0 && !recharging;
   e.derate = thr > 0.95 && ctl.ersMode !== 'HARVEST' && e.soc <= 0.03;
+  const mguh = thr > 0.95 ? c.pH : 0;
   let p = 0;
-  if (deploy) { p = cap; e.soc -= p * h / c.battery; e.deployed += p * h; e.deploying = true; }
+  if (deploy) { p = cap; e.soc -= (p - mguh) * h / c.battery; e.deployed += Math.max(0, p - mguh) * h; e.deploying = true; }
+  else e.soc += mguh * h / c.battery;
   const room = e.harvested < c.harvestLap && e.soc < 1;
-  let regen = room ? (ctl.brake > 0 ? c.pK : thr < 0.05 && v > 40 ? c.pK * 0.35 : 0) : 0;
-  if (!deploy && c.superClip && room && thr > 0.95 && v * 3.6 > 250 && e.deployed >= budget) { regen = Math.min(250e3, c.pK); e.clipping = true; p = -regen; }
+  let regen = room ? (ctl.brake > 0 ? Math.min(c.pK, ctl.brake * c.mass * c.maxBrakeG * G * v) : thr < 0.05 && v > 40 ? c.pK * 0.35 : 0) : 0;
+  if (!deploy && c.superClip && room && thr > 0.95 && v * 3.6 > 250 && (e.deployed >= budget || e.soc <= floor || recharging)) { regen = c.pK; e.clipping = true; p = -regen; }
   e.harvesting = regen > 0;
   e.soc = clamp(e.soc + regen * h / c.battery, 0, 1);
   e.harvested += regen * h;
@@ -212,8 +218,8 @@ export function vehicleStep(R, car, ctl, h, env) {
   const shifting = car.shiftT > 0, wheelRpm = rpmOf(c, u0, car.gear);
   car.rpm = Math.max(wheelRpm, car.gear === 1 && u0 < 15 ? (ctl.throttle > 0.1 ? 0.6 : 0.3) * c.rpmMax : 0.3 * c.rpmMax);  // clutch slip off the line
   let thr = ctl.throttle;
-  if (car.rpm >= c.rpmMax) { car.rpm = c.rpmMax * (1 - Math.random() * 0.02); thr *= 0.3; }  // the limiter cuts ignition
-  const x = car.rpm / c.rpmMax, boostShare = turbo(car, c, ctl, x, h), pK = ers(car, c, {...ctl, throttle: thr}, h);
+  if (car.rpm >= c.rpmMax) { car.rpm = c.rpmMax * (1 - 0.02 * (R.t * 40 % 1)); thr *= 0.3; }  // the limiter cuts ignition
+  const x = car.rpm / c.rpmMax, boostShare = turbo(car, c, ctl, x, h), pK = ers(car, c, ctl, thr, h);
   const P = shifting ? 0 : thr * c.pIce * share(c, x) * boostShare + pK;  // pK: + deploying (full throttle), - clipping
   // engine braking on the overrun (and an unblipped H-pattern downshift snatching the rears)
   const overrun = !shifting && thr < 0.05 ? c.ebrake * c.pIce * x * x / Math.max(u0, 10) : 0;

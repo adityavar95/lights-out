@@ -14,6 +14,7 @@ import {textures} from './textures3d.js';
 import {buildCircuit} from './circuit3d.js';
 import {createCrews} from './pit3d.js';
 import {covered} from './util.js';
+import {brakeStep, brakeGlow} from './telemetry.js';
 
 const SIZE = 1000;                  // the circuit is scaled to this many scene units across
 const UP = new THREE.Vector3(0, 1, 0);
@@ -448,10 +449,9 @@ function effects(c, at, next, simDt, dt, fx) {
   c.v = v;
   if (Math.abs(acc) > 80) return;  // scrubbing or a data jump, not driving
   c.acc += (acc - c.acc) * Math.min(1, simDt * 4);  // ~0.25 s low-pass: GPS positions are noisy
-  // carbon brakes: past ~2.5 g of braking the discs heat towards a ~1000 °C glow in ~0.3 s, and cool over ~2 s
-  const hot = THREE.MathUtils.smoothstep(-c.acc, 25, 45);
-  c.heat = (c.heat ?? 0) + (hot - (c.heat ?? 0)) * (1 - Math.exp(-simDt * (hot > (c.heat ?? 0) ? 3 : 0.5)));
-  for (const d of c.discs) d.emissiveIntensity = 3 * c.heat * c.heat;
+  c.brakeC = brakeStep(c.brakeC ?? 150, -c.acc, v, simDt);  // carbon brakes: heated by the energy they take
+  const glow = brakeGlow(c.brakeC);
+  for (const d of c.discs) d.emissiveIntensity = 3 * glow * glow;
   const brake = fx ? Math.sqrt(fx.smoke) : THREE.MathUtils.smoothstep(-c.acc, 18, 35);
   const count = perSecond => Math.floor(perSecond * dt + Math.random());  // whole particles this frame, right on average
   const sparks = fx ? fx.sparks : THREE.MathUtils.smoothstep(v, 70, 85) * (0.2 + brake) * (Math.random() < 0.4);  // bursts, as over bumps

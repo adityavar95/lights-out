@@ -57,8 +57,8 @@ export function surfaceGrip(compound, w) {
 // speed falls as the film deepens, v_aq = evac / sqrt(w); there is no film to speak of below 8 % wetness.
 export const aquaplaneSpeed = (compound, w) => (w < 0.08 ? Infinity : COMPOUNDS[compound].evac / Math.sqrt(w));
 
-// tyre blanket temperatures for a fresh set: slicks are heated to ~70 C front / 60 C rear, wets run cooler
-export const blankets = c => (isWetTyre(c) ? [50, 50, 45, 45] : [70, 70, 60, 60]);
+// tyre blanket temperatures for a fresh set: slicks at the 70 C limit all round (since 2022), wets run cooler
+export const blankets = c => (isWetTyre(c) ? [50, 50, 45, 45] : [70, 70, 70, 70]);
 
 // laps until a fresh set reaches the 35 % cliff at this wetness and pace (wear multiplier)
 export const stintLife = (compound, w, paceWear = 1) => 65 / (COMPOUNDS[compound].wear * surfaceGrip(compound, w).wear * paceWear);

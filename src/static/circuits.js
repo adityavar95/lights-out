@@ -48,7 +48,15 @@ export const PRESETS = {
   },
   // partial presets: just what's distinctive, the rest is derived like any other circuit
   zandvoort: {bank: {3: 19, 14: 18}},  // the steeply banked Hugenholtzbocht and Arie Luyendijkbocht
+  rodriguez: {aero: {cl: 1.25, cd: 1.25, drs: 0.2}},  // Monaco's wings, for what the thin air (below) leaves of them
 };
+
+// Air density (kg/m^3) at the circuit's altitude (m): the barometric e^(-h / 8500), the ~23 % Mexico City loses
+const ALTITUDE = {rodriguez: 2240, kyalami: 1500, interlagos: 760, red_bull_ring: 680, ricard: 430, spa: 400};
+export const airDensity = id => 1.225 * Math.exp(-(ALTITUDE[id] ?? 0) / 8500);
+// pit lane limit (m/s): 80 km/h, 60 where the lane is tightest
+const SLOW_PITS = new Set(['monaco', 'zandvoort', 'marina_bay']);
+export const pitLimit = id => (SLOW_PITS.has(id) ? 60 : 80) / 3.6;
 
 // Aero trim for any circuit, from its layout. Teams pick downforce by how much lap time hangs on straights: across the
 // four presets the wing level follows the longest straight almost exactly (fit within 0.02):
@@ -125,7 +133,8 @@ export function annotate(track, pts, mpu) {
   const lap = cum[n - 1] + Math.hypot(pts[0][0] - pts[n - 1][0], pts[0][1] - pts[n - 1][1]) * mpu;
   const dist = (i, j) => { const d = Math.abs(cum[i] - cum[j]); return Math.min(d, lap - d); };
   const out = {h: track?.h?.length === n ? track.h : new Array(n).fill(0), bank: new Array(n).fill(0), kerb: new Array(n).fill(''),
-               tunnel: null, zones: null, preset, wall: preset?.wall ?? 10, aero: preset?.aero ?? autoAero(pts, mpu)};
+               tunnel: null, zones: null, preset, wall: preset?.wall ?? 10, aero: preset?.aero ?? autoAero(pts, mpu),
+               rho: airDensity(track?.circuitId), pitLimit: pitLimit(track?.circuitId)};
   if (!preset || !track.corners?.length) return out;
   // a corner's outline index: nearest point to its position (corners come in F1 coordinates, rotated like the outline)
   const rot = track.rot ?? (([x, y]) => [x, y]);

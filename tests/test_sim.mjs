@@ -4,6 +4,7 @@ import {createRace, gridOrder, thermalGrip, wearGrip, COMPOUNDS} from '../src/st
 import {surfaceGrip, isWetTyre} from '../src/static/tyres.js';
 import {trackWetness} from '../src/static/weather.js';
 import {pitTrace} from '../src/static/strategy.js';
+import {annotate} from '../src/static/circuits.js';
 
 // a "stadium": two 1.2 km straights joined by 120 m radius hairpins, in metres (mpu 1)
 const pts = [];
@@ -95,7 +96,7 @@ const timeTo = (boxLap, lapsTo) => {
     r.advance(1 / 60);
     if (boxLap !== null && car.lapsDone === boxLap && !car.pit.box && !car.pit.stops) { r.box('A', 'MEDIUM'); predicted = r.predict('A').loss; }
   }
-  return {t: r.t, car, predicted};
+  return {t: r.t - r.lightsOut - car.react, car, predicted};  // from this car's own start: the lights' hold is random
 };
 const noStop = timeTo(null, 5), stop = timeTo(3, 5);  // like-for-like set, so the difference is the stop itself
 assert.equal(stop.car.tyre.compound, 'MEDIUM');
@@ -155,7 +156,7 @@ const [green, slow] = [vsc.laps.A[2][2], vsc.laps.A[4][2]];
 assert.ok(slow / green > 1.35 && slow / green < 1.75, `VSC lap ${slow} vs ${green}`);
 assert.equal(vsc.control.drs, false, 'no DRS under the VSC');
 
-// Safety Car: the field bunches up behind the leader; after the restart DRS stays off for two laps
+// Safety Car: the field bunches up behind the leader; after the restart DRS stays off for a lap (2025)
 const sc = race(['A', 'B', 'C', 'D'], {laps: 14});
 while (sc.cars[0].lapsDone < 4) sc.advance(1 / 30);
 const spread = () => { const s = sc.cars.map(c => c.s); return Math.max(...s) - Math.min(...s); };
@@ -166,7 +167,66 @@ assert.ok(spread() < 70 && (before < 70 || spread() < before * 0.6), `bunched (~
 sc.deploy('GREEN');
 while (sc.control.state !== 'GREEN') sc.advance(1 / 30);
 const restart = sc.leader.lapsDone;
-while (sc.leader.lapsDone < restart + 1) { sc.advance(1 / 30); assert.equal(sc.control.drs, false, 'no DRS straight after a restart'); }
+while (sc.leader.lapsDone < restart + 1) { assert.equal(sc.control.drs, false, 'no DRS straight after a restart'); sc.advance(1 / 30); }
+
+// the first lap with DRS: lap 3 until 2023, lap 2 from 2024 (the same after a restart)
+for (const [year, laps] of [[2023, 2], [2024, 1]]) {
+  const r = race(['A', 'B'], {year});
+  r.advance(1 / 30);
+  while (r.leader.lapsDone < laps) { assert.equal(r.control.drs, false, `${year}: no DRS before ${laps} laps`); r.advance(1 / 30); }
+  r.advance(1 / 30);
+  assert.ok(r.control.drs, `${year}: DRS on after ${laps} laps`);
+}
+
+// the MGU-H keeps a 2024 car deploying on most of its full-throttle running lap after lap (with only the MGU-K's 2 MJ a
+// lap it managed ~20 %); 2026, without one, lives on what it harvests, and clips for it instead of emptying the store
+{
+  const ers = year => {
+    const r = race(['A'], {year}), car = r.cars[0];
+    let min = 1, clipped = false, flat = 0, on = 0;
+    while (car.lapsDone < 5) {
+      r.advance(1 / 30);
+      clipped ||= car.ers.clipping;
+      if (car.lapsDone >= 3) { min = Math.min(min, car.ers.soc); if (car.throttle > 0.95) { flat++; if (car.ers.deploying) on++; } }
+    }
+    return {min, clipped, share: on / flat};
+  };
+  const s24 = ers(2024), s26 = ers(2026);
+  assert.ok(s24.share > 0.55, `2024 deploys on ${s24.share} of full throttle`);
+  assert.ok(s26.min > 0.15 && s26.clipped, `2026 soc ${s26.min}, clipped ${s26.clipped}`);
+}
+
+// 2026 overtake: armed at the detection point within a second, it stays armed all of the next lap, shut on the brakes
+// and open again after them (35 m hairpins: the stadium's others are flat out)
+{
+  const tight = [];
+  for (let x = 0; x < 800; x += 10) tight.push([x, 0]);
+  for (let a = 0; a < Math.PI; a += 0.1) tight.push([800 + 35 * Math.sin(a), 35 - 35 * Math.cos(a)]);
+  for (let x = 800; x > 0; x -= 10) tight.push([x, 70]);
+  for (let a = 0; a < Math.PI; a += 0.1) tight.push([-35 * Math.sin(a), 35 + 35 * Math.cos(a)]);
+  const r = race(['A'], {year: 2026, mapPts: tight}), car = r.cars[0];
+  car.drs.forced = true;
+  while (car.lapsDone < 2) r.advance(1 / 30);
+  let shut = 0, open = 0;
+  while (car.lapsDone === 2 && (car.s % r.T.len) < r.T.len - 200) {
+    r.advance(1 / 30);
+    assert.ok(car.drs.armed, 'armed all lap');
+    if (car.brake > 0 && !car.drs.open) shut++;
+    if (car.brake === 0 && car.drs.open) open++;
+  }
+  assert.ok(open > 100 && shut > 10, `open on the power (${open}), shut on the brakes (${shut})`);
+}
+
+// the pit limit and the air come from the circuit (circuits.js annotate): 60 km/h lanes, thin air at altitude
+{
+  const r = race(['A'], {ann: annotate({circuitId: 'marina_bay'}, pts, 1)}), car = r.cars[0];
+  let vLane = 0;
+  r.box('A', 'HARD');
+  while (!car.pit.stops || car.pit.state === 'LANE') { r.advance(1 / 60); if (car.pit.state === 'LANE') vLane = Math.max(vLane, car.v); }
+  assert.ok(vLane * 3.6 > 55 && vLane * 3.6 < 63, `pit lane speed ${vLane * 3.6}`);  // the AI settles onto it from just above
+  const top = id => { const q = race(['A'], {ann: annotate({circuitId: id}, pts, 1)}), c = q.cars[0]; let v = 0; while (c.lapsDone < 3) { q.advance(1 / 30); v = Math.max(v, c.v); } return v; };
+  assert.ok(top('rodriguez') > top('monza') + 3, 'less drag at altitude: a higher top speed on the same power');
+}
 
 // eras: a 2004 V10 car revs past the hybrid limiter, has no energy recovery and no DRS (even forced), and is lighter
 const v10 = race(['A'], {year: 2004}), e = v10.cars[0];
@@ -178,7 +238,7 @@ while (e.lapsDone < 3) {
   assert.ok(!e.drs.open && !e.ers.deploying && !e.ers.harvesting, 'no DRS or ERS in 2004');
 }
 assert.ok(rpm > 15000 && rpm <= 19000, `V10 revs ${rpm}`);
-assert.ok(v10.laps.A[1][2] < solo.laps.A[1][2], `lighter and more powerful than 2025: ${v10.laps.A[1][2]} vs ${solo.laps.A[1][2]}`);
+assert.ok(e.spec.minMass < a.spec.minMass && Math.abs(v10.laps.A[1][2] / solo.laps.A[1][2] - 1) < 0.05, `lighter, and close to 2025 on the hybrid's power: ${v10.laps.A[1][2]} vs ${solo.laps.A[1][2]}`);
 // replay pit lane from GPS: on the straight, 25 m off it past the box (standing still for 3 s), back on; noise on track ignored
 {
   const lane = Array.from({length: 40}, (_, i) => i < 5 ? [200 + i * 20, 2] : i < 15 ? [300 + (i - 5) * 20, -25] : i < 21 ? [500, -25]
