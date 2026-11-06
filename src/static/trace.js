@@ -70,16 +70,22 @@ export function delta(A, B) {
   return out;
 }
 
+const ROW_CHANNELS = [['speedKmh', 'kmh'], ['throttlePct', 'throttle'], ['brakePct', 'brake'], ['rpm', 'rpm'], ['gear', 'gear'], ['drsActive', 'drs'],
+                      ['ersMode', 'ers'], ['lateralG', 'gLat'], ['longitudinalG', 'gLong']];
+
 // the lap as rows of named values (CSV / JSON export); pos(i) -> [x, y, z] world position of bucket i
 export function lapRows(L, len, pos) {
   const rows = [];
   for (let i = 0; i < N; i++) {
     if (Number.isNaN(L.t[i])) continue;
-    rows.push({distanceMeters: +(i * len / N).toFixed(1), splineProgress: +(i / N).toFixed(4), elapsedTime: +L.t[i].toFixed(4),
-               speedKmh: +L.kmh[i].toFixed(1), throttlePct: Math.round(L.throttle[i]), brakePct: Math.round(L.brake[i]),
-               rpm: Math.round(L.rpm[i]), gear: L.gear[i], drsActive: L.drs[i] === 1, ersMode: ERS[L.ers[i]] ?? null,
-               lateralG: +L.gLat[i].toFixed(2), longitudinalG: +L.gLong[i].toFixed(2), tireCompound: L.compound ?? null,
-               worldPos: pos(i).map(v => +v.toFixed(2))});
+    const row = {distanceMeters: +(i * len / N).toFixed(1), splineProgress: +(i / N).toFixed(4), elapsedTime: +L.t[i].toFixed(4),
+                 speedKmh: +L.kmh[i].toFixed(1), throttlePct: Math.round(L.throttle[i]), brakePct: Math.round(L.brake[i]),
+                 rpm: Math.round(L.rpm[i]), gear: L.gear[i], drsActive: L.drs[i] === 1, ersMode: ERS[L.ers[i]] ?? null,
+                 lateralG: +L.gLat[i].toFixed(2), longitudinalG: +L.gLong[i].toFixed(2), tireCompound: L.compound ?? null,
+                 worldPos: pos(i).map(v => +v.toFixed(2))};
+    // a channel this lap's source doesn't have is left out, never written as 0 or false (real laps have no g or ERS)
+    for (const [key, ch] of ROW_CHANNELS) if (Number.isNaN(L[ch][i])) delete row[key];
+    rows.push(row);
   }
   return rows;
 }
@@ -103,9 +109,11 @@ export function apexes(L) {
 }
 
 // Three or four callouts from two laps, strongest first in each category. opts: {len, a, b (names), corner(i) ->
-// label of the corner at or just after bucket i}. Thresholds: braking onset = brake crossing 20 %; apexes as above;
+// label of the corner at or just after bucket i, cuts: the real sector lines as lap fractions (default thirds, the
+// simulation's own sectors; null: unknown, so no sector is named)}. A channel a lap doesn't have (NaN) drops that part of
+// its callout. Thresholds: braking onset = brake crossing 20 %; apexes as above;
 // full throttle = both cars over 95 %.
-export function insights(A, B, {len, a, b, corner}) {
+export function insights(A, B, {len, a, b, corner, cuts: lines}) {
   const db = len / N, dt = delta(A, B), out = [];
   const both = i => ok(A.t[i]) && ok(B.t[i]);
   const gain = (i, j) => (both(i) && both(j) ? dt[j] - dt[i] : 0);  // what A gained from bucket i to j
@@ -140,7 +148,7 @@ export function insights(A, B, {len, a, b, corner}) {
   if (apx && Math.abs(apx.dv) >= 1) {
     const [who, dg] = apx.dv > 0 ? [b, apx.dg] : [a, -apx.dg];
     out.push({kind: 'APEX', text: `${who} carries +${Math.abs(apx.dv).toFixed(0)} km/h more minimum speed through ${corner(apx.i)}`
-      + ` (${dg >= 0 ? '+' : '−'}${Math.abs(dg).toFixed(1)}G lateral)`, at: apx.i});
+      + (ok(dg) ? ` (${dg >= 0 ? '+' : '−'}${Math.abs(dg).toFixed(1)}G lateral)` : ''), at: apx.i});
   }
 
   // Straight line: speed trap, time on full-throttle sections, DRS / overtake metres
@@ -163,11 +171,11 @@ export function insights(A, B, {len, a, b, corner}) {
   let last = N - 1;
   while (last > 0 && !both(last)) last--;
   if (last > 10) {
-    const cuts = [0, Math.round(N / 3), Math.round(2 * N / 3), last].map(x => Math.min(x, last));
+    const cuts = [0, Math.round((lines?.[0] ?? 1 / 3) * N), Math.round((lines?.[1] ?? 2 / 3) * N), last].map(x => Math.min(x, last));
     const secs = [0, 1, 2].map(s => gain(cuts[s], cuts[s + 1]));
     const s = secs.reduce((m, v, k) => (Math.abs(v) > Math.abs(secs[m]) ? k : m), 0);
-    out.push({kind: 'LAP', text: `Δ ${fmt(dt[last])} at ${Math.round(last * db)} m (${dt[last] >= 0 ? a : b} ahead); `
-      + `Sector ${s + 1} decides it: ${secs[s] >= 0 ? a : b} gains ${Math.abs(secs[s]).toFixed(3)}s there`, at: cuts[s]});
+    out.push({kind: 'LAP', text: `Δ ${fmt(dt[last])} at ${Math.round(last * db)} m (${dt[last] >= 0 ? a : b} ahead)`
+      + (lines === null ? '' : `; Sector ${s + 1} decides it: ${secs[s] >= 0 ? a : b} gains ${Math.abs(secs[s]).toFixed(3)}s there`), at: cuts[s]});
   }
   return out;
 }

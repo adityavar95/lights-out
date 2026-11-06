@@ -58,7 +58,13 @@ console.log('live ok');
 
 // timing tower order: two cars side by side swapping every update don't move the rows; a pass that holds for 3
 // updates does; an order that never settles still shows within 1 s; a scrub (force) takes the board's order at once
-import {stableOrder} from '../src/static/tower.js';
+import {stableOrder, rowAfter} from '../src/static/tower.js';
+assert.equal(rowAfter('ArrowDown', 3, 20), 4);
+assert.equal(rowAfter('ArrowDown', 19, 20), 19, 'stops at the last row');
+assert.equal(rowAfter('ArrowUp', 0, 20), 0, 'stops at the first row');
+assert.equal(rowAfter('End', 3, 20), 19);
+assert.equal(rowAfter('Home', 3, 20), 0);
+assert.equal(rowAfter('x', 3, 20), undefined, 'any other key is left alone');
 const B = (...ids) => ids.map((id, i) => ({d: {id}, pos: i + 1}));
 const shown = r => r.map(b => `${b.pos}${b.d.id}`).join(' ');
 const st = {};

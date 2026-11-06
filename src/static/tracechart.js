@@ -12,6 +12,14 @@ const HEAD = 26, FOOT = 18, LEFT = 46, RIGHT = 12, GAP = 8;
 const PANELS = [['Δt  s', 1.1], ['SPEED  km/h', 1.45], ['THROTTLE  %', 0.8], ['BRAKE  %', 0.8], ['RPM · GEAR', 1.1]];
 const GRID = 'rgb(255 255 255 / .07)', INK = 'rgb(238 240 246 / .85)', MUTED = 'rgb(139 144 160 / .9)', DRS = 'rgb(47 208 111 / .13)';
 
+// Δt axis labels for a scale of ±m on a plot h px tall: zero and the round step either side, at most 5, ~20 px apart
+export function dtTicks(m, h) {
+  const side = Math.max(1, Math.min(2, Math.floor((h / 20 - 1) / 2)));
+  const tick = [0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 20, 50, 100].find(t => m / t < side + 1) ?? m, n = Math.floor(m / tick), ticks = [];
+  for (let k = -n; k <= n; k++) ticks.push(k * tick);
+  return ticks;
+}
+
 // panel rectangles for a w x h canvas, and x <-> lap fraction for the zoom window [x0, x1]
 export function layout(w, h, x0, x1) {
   const total = PANELS.reduce((s, p) => s + p[1], 0), free = h - HEAD - FOOT - GAP * (PANELS.length - 1);
@@ -37,7 +45,7 @@ function trace(ctx, arr, X, Y, i0, i1, step = false) {
   ctx.stroke();
 }
 
-// v: {A, B (laps or null), colA, colB, nameA, nameB, len, x0, x1, corners [{i, label}], rpmMax, dt (Float32Array Δt)};
+// v: {A, B (laps or null), colA, colB, nameA, nameB, len, x0, x1, corners [{i, label}], rpmMax, dt (Float32Array Δt), cuts (optional)};
 // sets v.vTop (the speed axis ceiling) for drawCursor
 export function drawTrace(ctx, w, h, v) {
   const {panels, L, W, X} = layout(w, h, v.x0, v.x1);
@@ -63,8 +71,10 @@ export function drawTrace(ctx, w, h, v) {
   ctx.beginPath();
   ctx.rect(L, 0, W, h);
   ctx.clip();  // traces and labels never spill into the y-axis gutter when zoomed
-  // sector boundaries (the simulation times thirds of the lap) and corner labels along the top
-  for (const [k, f] of [[1, 1 / 3], [2, 2 / 3]]) {
+  // sector boundaries (the simulation times thirds of the lap; a real lap's come from its official splits, and null
+  // means there are none to draw) and corner labels along the top
+  const cuts = v.cuts ?? [1 / 3, 2 / 3];
+  for (const [k, f] of v.cuts === null ? [] : [[1, cuts[0]], [2, cuts[1]]]) {
     const x = X(f * N);
     ctx.fillStyle = SECTOR_COLORS[k];
     ctx.globalAlpha = 0.55;
@@ -72,8 +82,8 @@ export function drawTrace(ctx, w, h, v) {
     ctx.globalAlpha = 1;
   }
   ctx.textAlign = 'left';
-  [0, 1, 2].forEach(k => {
-    const x = Math.max(L + 2, X(k / 3 * N) + 3);
+  (v.cuts === null ? [] : [0, 1, 2]).forEach(k => {
+    const x = Math.max(L + 2, X((k ? cuts[k - 1] : 0) * N) + 3);
     ctx.fillStyle = SECTOR_COLORS[k];
     ctx.fillText(`S${k + 1}`, x, 7);
   });
@@ -132,10 +142,8 @@ export function drawTrace(ctx, w, h, v) {
   // 1. Δt: symmetric scale round zero; area above the line = A ahead (B's time at that metre is larger), below = B
   const vis = [];
   for (let i = i0; i <= i1; i++) if (!Number.isNaN(v.dt[i])) vis.push(Math.abs(v.dt[i]));
-  const m = Math.max(0.05, ...vis) * 1.15, tick = m > 2 ? 1 : m > 0.6 ? 0.25 : 0.05;
-  const ticks = [];
-  for (let t = -Math.floor(m / tick) * tick; t <= m; t += tick) ticks.push(+t.toFixed(3));
-  const Ydt = frame(pDt, -m, m, ticks, t => (t > 0 ? `+${t.toFixed(2)}` : t.toFixed(2)));
+  const m = Math.max(0.05, ...vis) * 1.15;
+  const Ydt = frame(pDt, -m, m, dtTicks(m, pDt.h), t => (t > 0 ? `+${t.toFixed(2)}` : t.toFixed(2)));
   if (v.A && v.B) {
     const zero = Ydt(0);
     const fill = (col, top) => {  // closed path of the curve down to the zero line, clipped to one side of it

@@ -2,6 +2,7 @@
 import * as THREE from 'three';
 import {mergeGeometries} from 'three/addons/utils/BufferGeometryUtils.js';
 import {buildRB22, rb22Ready, inkFor} from './rb22.js';
+import {helmetGeometry, helmetMaterial, GEAR, VISOR} from './driver.js';
 
 // Approximate dimensions per regulation era, in metres; each entry lists what changed that year.
 // len/width/wb: overall length, width, wheelbase; fo: front axle to nose tip; tf/tr: front/rear tyre [radius, width];
@@ -188,6 +189,7 @@ const MAT = {
   rim: new THREE.MeshStandardMaterial({color: 0x34363b, roughness: 0.32, metalness: 0.85}),
   dark: new THREE.MeshPhysicalMaterial({color: 0x050506, roughness: 0.12, metalness: 0.1, clearcoat: 1}),
   light: new THREE.MeshStandardMaterial({color: 0x400000, emissive: 0xff2010, emissiveIntensity: 2}),
+  visor: VISOR, gear: GEAR,
 };
 
 // ---------- geometry helpers (all return BufferGeometry in metres) ----------
@@ -321,7 +323,7 @@ function suspension(P, x, r, wz, inZ, inY, dir) {
 }
 
 function build(year) {
-  const s = spec(year), P = {paint: [], carbon: [], disc: [], tyre: [], rim: [], dark: [], light: [], halo: [], helmet: [], stripe: []};
+  const s = spec(year), P = {paint: [], carbon: [], disc: [], tyre: [], rim: [], dark: [], light: [], halo: [], helmet: [], visor: [], gear: [], stripe: []};
   const tipX = s.len / 2, fx = tipX - s.fo, rx = fx - s.wb, hx = rx + 0.43 * s.wb, modern = s.era >= 2017;
   const ro = s.len - s.fo - s.wb;  // rear overhang: rear axle to the back of the car
 
@@ -417,9 +419,7 @@ function build(year) {
   // cockpit opening and driver
   P.dark.push(new THREE.CircleGeometry(1, 24).scale(0.42, 0.24, 1).rotateX(-Math.PI / 2).translate(hx + 0.05, cockpitY + 0.004, 0));
   const head = V(hx - 0.02, cockpitY + 0.12, 0);
-  P.helmet.push(new THREE.SphereGeometry(0.135, 24, 16).scale(1.08, 1, 0.92).translate(head.x, head.y, head.z));
-  P.dark.push(new THREE.SphereGeometry(0.137, 20, 6, Math.PI * (1 - 1 / 3.2), Math.PI / 1.6, Math.PI * 0.36, Math.PI * 0.17)
-    .scale(1.08, 1, 0.92).translate(head.x, head.y, head.z));  // visor, facing forward
+  for (const [k, list] of Object.entries(helmetGeometry(head, s.era >= 2008))) P[k].push(...list);  // HANS: mandatory from 2003
 
   // halo: hoop round the head, centre pillar down to the chassis, two rear mounts
   if (s.halo) {
@@ -498,7 +498,7 @@ export function buildCar(color, num, year, blob, far = Infinity, team = null) {
   paint.userData.toCar.value.copy(liveryFrame(t.geo.paint.boundingBox));  // the era's geometry is in the car's frame
   const own = {
     paint, disc: discMat(), stripe: new THREE.MeshStandardMaterial({color: 0xd8d8d8, roughness: 0.7}),
-    helmet: new THREE.MeshPhysicalMaterial({color: new THREE.Color(color).lerp(new THREE.Color(0xffffff), 0.55), roughness: 0.25, clearcoat: 1}),
+    helmet: helmetMaterial(new THREE.Color(color).lerp(new THREE.Color(0xffffff), 0.55), liv.accent),
     light: MAT.light.clone(),  // per car: it flashes while that car harvests energy
   };
   const group = new THREE.Group(), body = new THREE.Group(), halo = new THREE.Group();
@@ -528,6 +528,7 @@ export function buildCar(color, num, year, blob, far = Infinity, team = null) {
   const shared = new Set(Object.values(t.geo));
   const dispose = () => {
     for (const mt of Object.values(own)) mt.dispose();
+    own.helmet.map.dispose();
     group.traverse(o => { if (o.geometry && !shared.has(o.geometry)) o.geometry.dispose(); });
     shadow.material.dispose();
     decal?.map.dispose();

@@ -36,9 +36,10 @@ export function telAt(tel, wall) {
     ? {speed: tel.speed[i], rpm: tel.rpm[i], gear: tel.n_gear[i], throttle: tel.throttle[i], brake: tel.brake[i], drs: tel.drs[i]} : null;
 }
 
-// lights out (wall-clock s): the first launch after 20 s stood still, from the scheduled start on
+// lights out (wall-clock s): the first launch after 5 s stood still, from the scheduled start on. Only 5 s: the back of the
+// grid stops for ~10 s before the lights, against ~40 s at the front, and the overlay may be on any car
 export function launchAt(tel, after) {
-  const t0 = Date.parse(tel.start) / 1000, still = Math.round(20 / tel.step);
+  const t0 = Date.parse(tel.start) / 1000, still = Math.round(5 / tel.step);
   let run = 0;
   for (let i = Math.max(0, Math.round((after - t0) / tel.step)); i < tel.speed.length; i++) {
     const v = tel.speed[i];
@@ -47,6 +48,15 @@ export function launchAt(tel, after) {
     else run = 0;
   }
   return null;
+}
+
+// a session's start from Jolpica's race row (each session's `<Name>.date` + `.time`, the race's own `date` + `time`), or
+// null when the row doesn't list it. session: OpenF1's name, as the replay's session list has it
+const STARTS = {'Practice 1': 'FirstPractice.', 'Practice 2': 'SecondPractice.', 'Practice 3': 'ThirdPractice.',
+  'Sprint Qualifying': 'SprintQualifying.', Sprint: 'Sprint.', Qualifying: 'Qualifying.', Race: ''};
+export function sessionStart(race, session) {
+  const k = STARTS[session], d = k !== undefined && race?.[`${k}date`];
+  return d ? new Date(`${d}T${race[`${k}time`] || '00:00:00Z'}`) : null;
 }
 
 // every video rendition (one per resolution/bitrate/codec, best first) and audio track of a stream, from shaka's variants
@@ -69,7 +79,7 @@ function langName(code) {
 // shaka's player alone: the controls are our own (tvcontrols.js)
 export function loadShaka() {
   return shakaReady ??= new Promise((ok, fail) => {
-    document.head.append(el('script', {src: `${SHAKA}shaka-player.compiled.js`, onload: () => { shaka.polyfill.installAll(); ok(window.shaka); },
+    document.head.append(el('script', {src: `${SHAKA}shaka-player.compiled.js`, integrity: 'sha384-s9UMqmhXBYMVPmZjMacUXbVuQpiJTQGrmQ0qM3z0yeh7tXSIUb6jA4YWVufS0OYW', crossorigin: 'anonymous', onload: () => { shaka.polyfill.installAll(); ok(window.shaka); },
       onerror: () => { shakaReady = null; fail(new Error('Could not load the video player')); }}));
   });
 }
@@ -81,7 +91,7 @@ function showAccount() {
   }).catch(() => {});
 }
 
-async function json(url) {  // not util.get: play urls are signed per play and expire, so never cached
+export async function json(url) {  // not util.get: play urls are signed per play and expire, so never cached
   const res = await fetch(url, {headers: tvHeaders()}), body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(typeof body.detail === 'string' ? body.detail : `${res.status} ${res.statusText}`);
   return body;
@@ -115,11 +125,21 @@ export function connectPanel(id, onChange) {
   const desktop = () => { steps.hidden = true; signin.hidden = false; };
   if (window.pywebview?.api?.f1tv_login) desktop(); else window.addEventListener('pywebviewready', desktop, {once: true});
   const panel = el('div', {class: 'mvconnect', popover: '', id, 'aria-label': 'Connect F1 TV',
-    ontoggle: e => e.newState === 'open' && count('connect_open')},
+    ontoggle: e => {
+      if (e.newState !== 'open') return;
+      count('connect_open');
+      disconnect.hidden = !tvHeaders()['X-F1-Token'];
+      [...panel.querySelectorAll('a[href], button')].find(x => x.offsetParent)?.focus();
+    }},
     el('h3', {}, 'Connect F1 TV'),
     el('p', {}, "Sign in on F1's own site, like MultiViewer: your password never reaches this app, nothing is saved on the server, and the connection lasts until you close this tab."),
-    steps, signin,
-    el('button', {class: 'mvbtn', onclick: () => { try { sessionStorage.removeItem('f1tv'); } catch (e) {} onChange(); }}, 'Disconnect'));
+    steps, signin);
+  const disconnect = el('button', {class: 'mvbtn', hidden: true, onclick: () => {
+    try { sessionStorage.removeItem('f1tv'); } catch (e) {}
+    disconnect.hidden = true;
+    onChange();
+  }}, 'Disconnect');
+  panel.append(disconnect);
   return panel;
 }
 
@@ -225,9 +245,15 @@ function remember(closing = false) {
 function setOffset(s) {
   M.offset = s;
   M.syncOut.value = `${s >= 0 ? '+' : '−'}${Math.abs(s).toFixed(1)}s`;
-  try { localStorage.setItem(`f1tv-sync-${M.video.id}`, s); } catch (e) { /* storage off: the offset lasts this visit */ }
+  saveOffset(M.video.id, s);
 }
-const videoT0 = () => M.video.start / 1000 - LEAD + M.offset;
+export const savedOffset = id => { try { return +localStorage.getItem(`f1tv-sync-${id}`) || 0; } catch (e) { return 0; } };
+export function saveOffset(id, s) {
+  try { localStorage.setItem(`f1tv-sync-${id}`, s); } catch (e) { /* storage off: the offset lasts this visit */ }
+}
+// the wall clock (s since epoch) at a video's 0 s; also the commentary's clock in the 3D replay (commentary.js)
+export const videoZero = (video, offset) => video.start / 1000 - LEAD + offset;
+const videoT0 = () => videoZero(M.video, M.offset);
 
 // 4K on/off for every tile, each reloaded where it is
 function toggleUhd() {
@@ -238,8 +264,8 @@ function toggleUhd() {
 }
 const lead = () => M.tiles.find(t => t.root.classList.contains('audio')) ?? M.tiles[0];
 
-// 🏁 Lights out: every tile jumps to 10 s before the start, found in a car's telemetry (its first launch after 20 s
-// stood still) and put on the video's clock. It used to only line the data up, which looked like it did nothing; that
+// 🏁 Lights out: every tile jumps to 10 s before the start, found in a car's telemetry (launchAt: its first launch after a
+// standstill) and put on the video's clock. It used to only line the data up, which looked like it did nothing; that
 // is Shift+click now.
 async function lightsOut(e) {
   if (e?.shiftKey) return markLightsOut();
@@ -276,7 +302,7 @@ export async function openViewer(video) {
   M.lights.hidden = !['Race', 'Sprint'].includes(M.session);
   M.addBtn.disabled = true;
   M.teamBtn.hidden = true;
-  setOffset((() => { try { return +localStorage.getItem(`f1tv-sync-${video.id}`) || 0; } catch (e) { return 0; } })());
+  setOffset(savedOffset(video.id));
   M.dlg.showModal();
   dispatchEvent(new CustomEvent('f1:panel', {detail: M.dlg}));  // the circuits / cars / trace panels close (and stop drawing)
   M.raf ||= requestAnimationFrame(drawTelemetry);
@@ -284,12 +310,14 @@ export async function openViewer(video) {
   showAccount();
   const first = json(playUrl(''));  // the main feed's play request goes out with the channel list, not after it
   first.catch(() => {});
+  const opened = M.opened = {};  // this opening: Esc or another video while the channels load drops it (reopening can be the same video)
   try {
     const c = await get(`/api/f1tv/channels/${video.id}`);
+    if (M.opened !== opened || !M.dlg.open) return;
     const rank = s => (FIRST.indexOf(s.title) + 1) || (s.type === 'obc' ? 10 + (s.number || 0) : 9);
     M.content = {...c, streams: [...c.streams].sort((a, b) => rank(a) - rank(b))};
   } catch (e) {
-    M.grid.replaceChildren(el('p', {class: 'empty err'}, e.message));
+    if (M.opened === opened) M.grid.replaceChildren(el('p', {class: 'empty err'}, e.message));
     return;
   }
   M.grid.replaceChildren();
@@ -439,7 +467,8 @@ function tile(s) {
   pick.onchange = () => {
     const x = streams.find(y => String(y.channelId ?? '') === pick.value);
     if (x?.type === 'obc' && x.number) { drv.value = x.number; telemetry(t); }  // an onboard brings its driver's data
-    load(t);
+    // the selected tile has no other tile to join (load's default): it stays at its own time; `|| undefined`: not loaded yet, its resume point stands
+    load(t, t === lead() && t.player && !t.player.isLive() ? t.video.currentTime || undefined : undefined);
   };
   drv.onchange = () => telemetry(t);
   vq.onchange = aq.onchange = () => applyQuality(t);
@@ -486,9 +515,14 @@ async function radioFeed(t) {
     // a transcribed clip with no words in it (a click, engine noise) isn't a message
     t.clips = r.clips.filter(c => c.text !== '');
     t.radioError = r.error;
+    t.radioFails = 0;
     if (r.pending || t.player?.isLive()) t.radioTimer = setTimeout(() => radioFeed(t), 8000);
   } catch (e) {
+    if (!M.tiles.includes(t) || t.radioNum !== num) return;
     t.radioError = e.message;
+    t.clips ??= [];  // so the list can say why
+    t.radioFails = (t.radioFails ?? 0) + 1;
+    t.radioTimer = setTimeout(() => radioFeed(t), Math.min(8000 * 2 ** t.radioFails, 120000));  // 16 s, 32 s… up to 2 min
   }
 }
 
@@ -505,21 +539,26 @@ export function radioList(clips, wall) {
   return clips.filter(c => c.t <= wall);
 }
 
-// One radio clip playing at a time, F1's audio fetched with this tab's F1 TV token (an <audio src> can't send it). Its
+// One radio clip at a time, fetching or playing, F1's audio fetched with this tab's F1 TV token (an <audio src> can't send it). Its
 // buttons (the box redraws every minute, so found by clip) show ■ while it plays; a second press stops it.
 let playing = null;
 const mark = (url, text, title) => M.dlg.querySelectorAll('.mvplay').forEach(b => {
   if (b.dataset.url === url) { b.textContent = text; if (title) b.title = title; }
 });
-async function playClip(url) {
+function stopClip() {
+  playing?.abort.abort();
+  playing?.audio?.pause();  // its onpause resets its buttons
+  playing = null;
+}
+async function playClip(url, t) {
   const same = playing?.url === url;
-  playing?.audio.pause();  // its onpause resets its buttons
+  stopClip();
   if (same) return;
+  const me = playing = {url, t, abort: new AbortController()};
   try {
-    const r = await fetch(`/api/f1tv/radio/audio?${new URLSearchParams({u: url})}`, {headers: tvHeaders()});
+    const r = await fetch(`/api/f1tv/radio/audio?${new URLSearchParams({u: url})}`, {headers: tvHeaders(), signal: me.abort.signal});
     if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || `HTTP ${r.status}`);
-    const src = URL.createObjectURL(await r.blob()), audio = new Audio(src);
-    playing = {url, audio};
+    const src = URL.createObjectURL(await r.blob()), audio = me.audio = new Audio(src);
     mark(url, '■');
     audio.onended = audio.onpause = () => {
       URL.revokeObjectURL(src);
@@ -528,6 +567,8 @@ async function playClip(url) {
     };
     await audio.play();
   } catch (e) {
+    if (playing !== me) return;  // stopped or replaced: not a failure
+    playing = null;
     mark(url, '!', e.message);
   }
 }
@@ -711,7 +752,7 @@ function drawTelemetry() {
   for (const t of M.tiles) {
     if (t.clips) {  // the onboard's 📻 count and radio list, touched only when its messages change
       const live = t.player?.isLive(), wall = live ? (t.player.getPlayheadTimeAsDate?.()?.getTime() ?? 0) / 1000 : videoT0() + t.video.currentTime;
-      const said = radioList(t.clips, wall), key = said.map(c => `${c.t}${c.text}`).join() + (t.radioError ?? '');
+      const said = radioList(t.clips, wall), key = said.map(c => `${c.t}${c.text}${c.error}`).join() + (t.radioError ?? '');
       if (key !== t.radioShown) {
         t.radioShown = key;
         t.radioCount.textContent = said.length || '';
@@ -719,9 +760,9 @@ function drawTelemetry() {
           const atEnd = t.radio.scrollHeight - t.radio.scrollTop - t.radio.clientHeight < 40;  // reading older ones: stay there
           t.radio.replaceChildren(...said.map(c => el('li', {},
             el('button', {class: 'mvplay', 'data-url': c.url, title: 'Play this radio message', 'aria-label': 'Play this radio message',
-              onclick: () => playClip(c.url)}, playing?.url === c.url ? '■' : '▶'),
+              onclick: () => playClip(c.url, t)}, playing?.url === c.url ? '■' : '▶'),
             el('time', {}, new Date(c.t * 1000).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit'})),
-            el('span', {}, c.text ?? (t.radioWords ? 'transcribing…' : 'Team radio')))),
+            el('span', {}, c.text ?? c.error ?? (t.radioWords ? 'transcribing…' : 'Team radio')))),
             ...(said.length ? [] : [el('li', {class: 'none'}, t.radioError ?? 'No radio yet')]));
           if (atEnd) t.radio.scrollTop = t.radio.scrollHeight;
         }
@@ -743,6 +784,8 @@ function drawTelemetry() {
 }
 
 function drop(t) {
+  clearTimeout(t.radioTimer);
+  if (playing?.t === t) stopClip();
   t.player?.destroy();
   t.root.remove();
 }

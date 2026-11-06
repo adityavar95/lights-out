@@ -1,7 +1,8 @@
 // Run: node tests/test_multiviewer.mjs  — checks the F1 TV multiviewer's telemetry timing (multiviewer.js).
 import assert from 'node:assert/strict';
 import {short, sessionsOf} from '../src/static/stream.js';
-import {sessionName, telAt, launchAt, renditions, playError, radioList, arrange} from '../src/static/multiviewer.js';
+import {sessionName, telAt, launchAt, sessionStart, renditions, playError, radioList, arrange} from '../src/static/multiviewer.js';
+import {broadcastAt, pickVideo} from '../src/static/commentary.js';
 
 assert.equal(sessionName({label: 'Race', title: '2026 United States Grand Prix'}), 'Race');
 assert.equal(sessionName({label: 'Practice', title: '2026 United States GP - Practice 3'}), 'Practice 3');
@@ -18,12 +19,37 @@ tel.speed[900] = null;  // a gap in OpenF1's data
 
 assert.equal(launchAt(tel, t0), t0 + 230.5, 'lights out = the first moving sample after the long standstill');
 assert.equal(launchAt({...tel, speed: speed.map(() => 100)}, t0), null, 'no standstill, no lights out');
+const back = speed.map((v, i) => i * 0.5 >= 222 && i * 0.5 < 230 ? 0 : v || 120);  // the back of the grid: stopped only 8 s
+assert.equal(launchAt({...tel, speed: back}, t0), t0 + 230, 'a short stop before lights out still counts');
+const roll = speed.map((v, i) => i * 0.5 >= 100 && i * 0.5 < 102 ? 0 : v);  // a 2 s halt on the formation lap
+assert.equal(launchAt({...tel, speed: roll}, t0), t0 + 230.5, 'a momentary halt is not the start');
+const row = {date: '2026-11-08', time: '17:00:00Z', 'FirstPractice.date': '2026-11-06', 'FirstPractice.time': '11:30:00Z', 'Sprint.date': null};
+assert.equal(sessionStart(row, 'Race').toISOString(), '2026-11-08T17:00:00.000Z');
+assert.equal(sessionStart(row, 'Practice 1').toISOString(), '2026-11-06T11:30:00.000Z');
+assert.equal(sessionStart(row, 'Sprint'), null, 'not on this weekend');
+assert.equal(sessionStart(row, 'Press conference'), null, 'not a session we know');
+assert.equal(sessionStart(null, 'Race'), null, 'no calendar row');
 assert.equal(telAt(tel, t0 + 100).speed, 120);
 assert.equal(telAt(tel, t0 + 200).gear, 0);
 assert.equal(telAt(tel, t0 - 1), null, 'before the data');
 assert.equal(telAt(tel, t0 + 450), null, 'in a gap');
 assert.equal(telAt(tel, t0 + n * 0.5 + 10), null, 'after the data');
 console.log('multiviewer timing ok');
+
+// the commentary under the 3D replay: the session's own video, on the replay's clock
+const weekend = [{id: 1, kind: 'REPLAY', title: '2026 United States GP - Practice 1', start: 1},
+  {id: 2, kind: 'REPLAY', title: '2026 United States Grand Prix - Race', start: Date.parse(start) + 300e3},
+  {id: 3, kind: 'REPLAY', title: 'Pre-Race Show - United States GP', start: 2},
+  {id: 4, kind: 'REPLAY', title: '2026 United States GP - Race (Kids)', start: 3}];
+assert.equal(pickVideo(weekend, 'Race').id, 2, 'the race, not its show or kids version');
+assert.equal(pickVideo(weekend, 'Practice 1').id, 1);
+assert.equal(pickVideo([{id: 5, kind: 'REPLAY', title: '2023 Belgian GP - Sprint Shootout', start: 1}], 'Sprint Shootout').id, 5, "OpenF1's 2023 name for sprint qualifying");
+assert.equal(pickVideo(weekend, 'Qualifying'), undefined);
+const race = weekend[1];  // broadcast 0 s is 308 s (LEAD) before its scheduled start, here 8 s before the replay's
+assert.equal(broadcastAt(start, 0, race, 0), 8);
+assert.equal(broadcastAt(start, 100, race, 0), 108);
+assert.equal(broadcastAt(start, 100, race, 5), 103, 'a positive offset moves broadcast 0 s later, as in the viewer');
+console.log('commentary timing ok');
 
 // shaka variants = every video rendition × audio track; the ⚙ menu lists each once, best video first
 const variants = [];

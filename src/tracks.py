@@ -131,7 +131,10 @@ def lap_track(x: list, y: list) -> dict:
 def track(circuit_id: str, year: int, lat: float, lng: float, lap=lambda: None) -> dict | None:
     """lap: () -> an OpenF1 lap {x, y} at this circuit or None, tried when MultiViewer hasn't got the circuit."""
     key = MV_KEYS.get(circuit_id)
-    t = mv_track(key, year) if key else None
+    try:
+        t = mv_track(key, year) if key else None
+    except requests.RequestException:  # MultiViewer down: the fallbacks below will do
+        t = None
     if t is None and (positions := lap()):
         t = lap_track(positions["x"], positions["y"])
     t = t or _geo_track(lat, lng)

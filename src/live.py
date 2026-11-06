@@ -23,13 +23,15 @@ TOPICS = ["Heartbeat", "SessionInfo", "SessionStatus", "DriverList", "TimingData
           "LapCount", "RaceControlMessages", "WeatherData", "ExtrapolatedClock", "TopThree", "TimingStats",
           "TeamRadio", "Position.z", "CarData.z"]
 IDLE = 120
+REJECT_WAIT = 60  # s after F1 rejects a token before another is tried: they aren't verified here, and each forces a reconnect
+RUNNING = ("Started", "Aborted")  # SessionStatus while a session is on (Aborted: a red flag)
 BUFFER = 6  # seconds of GPS / car data samples kept for the browser
 RS = "\x1e"  # SignalR message separator
 
 _state: dict = {}
 # token: the last poller's F1 TV token, in memory only; rejected: one F1 refused, so pollers can't resend it every 5 s
 _status = {"connected": False, "error": None, "last_request": 0.0, "auth": False, "token": None, "rejected": None,
-           "auth_error": None}
+           "rejected_at": 0.0, "auth_error": None}
 _lock = threading.Lock()
 _start_lock = threading.Lock()
 _thread: threading.Thread | None = None
@@ -104,7 +106,7 @@ def _run():
             _status["auth"] = bool(tok)
             neg = requests.post(f"https://{HOST}/negotiate?negotiateVersion=1", headers=auth, timeout=15)
             if neg.status_code == 401 and tok:  # rejected token: drop it, and use the free feed for a while
-                _status.update(token=None, rejected=tok, auth_error="F1 rejected the F1 TV token: connect again")
+                _status.update(token=None, rejected=tok, rejected_at=time.time(), auth_error="F1 rejected the F1 TV token: connect again")
             neg.raise_for_status()
             cookie = "; ".join(f"{k}={v}" for k, v in neg.cookies.items())  # load balancer stickiness
             with connect(f"wss://{HOST}?id={neg.json()['connectionToken']}",
@@ -126,7 +128,9 @@ def _run():
         except Exception as e:
             _status.update(connected=False, error=str(e))
             time.sleep(5)
-    _status["connected"] = False
+    with _lock:  # the next connection mustn't serve this one's session as current
+        _state.clear()
+    _status.update(connected=False, error=None)
 
 
 def radio() -> tuple:
@@ -137,12 +141,23 @@ def radio() -> tuple:
         return copy.deepcopy(_state.get("SessionInfo")), copy.deepcopy(list(caps.values()) if isinstance(caps, dict) else caps)
 
 
+def status() -> dict | None:
+    """{live, title} from the feed as it stands, None when it isn't running. A check, not a poll: it neither opens the
+    connection nor keeps it open."""
+    with _lock:
+        if not _state:
+            return None
+        info = _state.get("SessionInfo") or {}
+        return {"live": (_state.get("SessionStatus") or {}).get("Status") in RUNNING,
+                "title": f"{(info.get('Meeting') or {}).get('Name', 'No session')} · {info.get('Name', '')}"}
+
+
 def snapshot(token: str | None = None) -> dict:
     """Current live state; starts the connection if needed and waits up to 5 s for the first data. A caller's F1 TV
     token (f1auth) unlocks car GPS and telemetry on the shared connection."""
     global _thread
     _status["last_request"] = time.time()
-    if token and token != _status["rejected"]:
+    if token and token != _status["rejected"] and time.time() - _status["rejected_at"] > REJECT_WAIT:
         _status.update(token=token, auth_error=None)
     with _start_lock:  # requests run in a thread pool: two first polls must not open two feed connections
         if _thread is None or not _thread.is_alive():

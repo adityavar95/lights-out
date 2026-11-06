@@ -34,13 +34,13 @@ function speckle(base, n, alpha) {
 // Material maps {map, normalMap, roughnessMap} for Poly Haven set `name`, one image `metres` across, on strips whose UVs
 // repeat every `tile` metres. They exist at once (canvas colour, flat normal, roughness 1), so materials compile with
 // every map, and each photo replaces its canvas when it lands; dispose() first, as the GPU texture changes size.
-// res: '1k' or '2k' (the road, seen from a chase camera a few metres up, gets 1 mm texels).
+// res: '1k', '2k' or '4k' (on the high tier every set is 4k: the road, seen from a chase camera a few metres up, gets 0.5 mm texels).
 function photo(name, metres, tile, fallback, res = '1k') {
   const plain = fill => { const t = canvasTex(4, 4, g => { g.fillStyle = fill; g.fillRect(0, 0, 4, 4); }); t.colorSpace = THREE.NoColorSpace; return t; };
   const set = {map: fallback, normalMap: plain('#8080ff'), roughnessMap: plain('#ffffff')};
   for (const [k, file] of [['map', 'diff'], ['normalMap', 'nor_gl'], ['roughnessMap', 'rough']]) {
     set[k].anisotropy = 16;  // the road is mostly seen at grazing angles; three clamps this to what the GPU supports
-    // decoded off the main thread (an <img> decoded inside the texture upload: ~20 ms per 2k photo, at the first frame).
+    // decoded off the main thread (an <img> decoded inside the texture upload: ~80 ms per 4k photo, at the first frame).
     // An ImageBitmap ignores the texture's flipY, so it comes flipped as the upload would have flipped the <img>.
     new THREE.ImageBitmapLoader().setCrossOrigin('anonymous').setOptions({imageOrientation: 'flipY', premultiplyAlpha: 'none', colorSpaceConversion: 'none'})
       .load(`${PH}/${res}/${name}/${name}_${file}_${res}.jpg`, img => {
@@ -49,7 +49,7 @@ function photo(name, metres, tile, fallback, res = '1k') {
         t.image = img;
         if (tile) t.repeat.setScalar(tile / metres);  // tile 0: the user sets the repeat (the terrain, per circuit)
         t.needsUpdate = true;
-        t.onUpdate = () => img.close();  // decoded photos (up to 16 MB each at 2k) aren't needed once on the GPU
+        t.onUpdate = () => img.close();  // decoded photos (up to 64 MB each at 4k) aren't needed once on the GPU
       }, undefined, () => {});
   }
   return set;
@@ -135,10 +135,10 @@ function foliage(S = 2048) {
   return t;
 }
 
-export function textures() {
+export function textures(high) {
   return {
-    asphalt: photo('asphalt_pit_lane', 2, 4, speckle('#2e2f34', 26000, 0.12), '2k'),  // fresh, uncracked: cracks would repeat every tile
-    gravel: photo('gravel_floor', 2.25, 6, speckle('#b8a580', 30000, 0.3)),
+    asphalt: photo('asphalt_pit_lane', 2, 4, speckle('#2e2f34', 26000, 0.12), high ? '4k' : '2k'),  // fresh, uncracked: cracks would repeat every tile
+    gravel: photo('gravel_floor', 2.25, 6, speckle('#b8a580', 30000, 0.3), high ? '4k' : '1k'),
     // kerb: red/white blocks a metre long (strip UVs repeat every 2 m) with ridges every 12.5 cm across them
     kerbRidges: normalTex(64, (u, v) => 0.5 * Math.sin(2 * Math.PI * 16 * v), 0.006),
     // debris fence on the barriers: 8 cm diamond mesh, a post every 4 m (one tile), top and bottom rails. Alpha cut out
@@ -156,7 +156,7 @@ export function textures() {
       g.fillRect(0, h - 6, w, 6);
     }),
     // relief for the terrain under its satellite / grass colour: tufts and soil in the normal and roughness maps
-    ground: photo('sparse_grass', 3, 0, speckle('#5a7a3a', 2000, 0.2), '2k'),
+    ground: photo('sparse_grass', 3, 0, speckle('#5a7a3a', 2000, 0.2), high ? '4k' : '2k'),
     foliage: foliage(),
     grass: canvasTex(256, 256, (g, w, h) => {  // plain speckle: mowing stripes shimmer from a distance
       g.fillStyle = '#427f31';

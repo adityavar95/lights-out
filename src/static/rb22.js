@@ -6,6 +6,7 @@
 import * as THREE from 'three';
 import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
 import {MeshoptDecoder} from 'three/addons/libs/meshopt_decoder.module.js';
+import {seatDriver} from './driver.js';
 
 const MODEL = new URL('./models/rb22.glb', import.meta.url).href;
 // Model space (as baked below): metres, nose +z, left +x, up +y.
@@ -208,7 +209,8 @@ function wheelDecals(map) {
 // accent: the livery's accent (trim, helmet band); ink: the number's colour; helmet: colour; num: race number or null;
 // stripe / light: materials shared with the far LOD level (tyre-compound rings, rear light). Call only once rb22Ready().
 // Returns {group, body, halo, paintMesh, wheels: [{pivot, spin, front}], steeringWheel, mirrors, discs (brake-glow
-// materials), tyre: [r, w], len, wb, width, eye, look, tcam, tcamLook, exhaust, plank, fronts, hubs, dispose}.
+// materials), tyre: [r, w], len, wb, width, eye, look, tcam, tcamLook, exhaust, plank, fronts, hubs, pose (the driver's
+// arms to the steering wheel's angle), dispose}.
 export function buildRB22({paint, accent, ink, helmet, num, stripe, light}) {
   const car = new THREE.Group(), root = template.clone(true), own = [];
   root.rotation.y = Math.PI / 2;  // model nose +z, left +x -> car nose +x, right +z
@@ -267,17 +269,10 @@ export function buildRB22({paint, accent, ink, helmet, num, stripe, light}) {
   steeringWheel.attach(steer);
   steeringWheel.position.x -= 0.12;
 
-  // the model has no driver: a helmet behind the steering wheel
-  const physical = o => { const m = new THREE.MeshPhysicalMaterial(o); own.push(m); return m; };
-  const head = new THREE.Vector3(sc.x - 0.80, 0.70 - ground, 0);
-  const helmetMesh = new THREE.Mesh(new THREE.SphereGeometry(0.125, 32, 20), physical({color: helmet, roughness: 0.25, clearcoat: 1}));
-  helmetMesh.scale.set(1.1, 1, 0.95); helmetMesh.position.copy(head);
-  const visor = new THREE.Mesh(new THREE.SphereGeometry(0.127, 32, 12, -0.9, 1.8, 1.2, 0.45),
-    physical({color: 0x0a0d12, metalness: 0.9, roughness: 0.05, clearcoat: 1}));
-  visor.scale.copy(helmetMesh.scale); visor.rotation.y = Math.PI / 2; visor.position.copy(head);
-  const band = new THREE.Mesh(new THREE.TorusGeometry(0.126, 0.012, 8, 40), physical({color: accent, roughness: 0.3, clearcoat: 1}));
-  band.rotation.y = Math.PI / 2; band.scale.set(1.1, 1, 0.95); band.position.copy(head);
-  for (const m of [helmetMesh, visor, band]) { m.castShadow = true; car.add(m); }
+  // the model has no driver: ours sits behind the steering wheel, hands on its grips (driver.js)
+  const head = new THREE.Vector3(sc.x - 0.62, 0.70 - ground, 0);  // in front of the roll hoop, chest under the model's belts
+  const driver = seatDriver(car, steeringWheel, head, {helmet, accent, suit: paint.userData.uBase.value});
+  own.push(...driver.materials);
 
   // the sprung body: everything but the wheels, so it can roll, pitch and heave over them
   const body = new THREE.Group(), pivots = new Set(wheels.map(w => w.pivot));
@@ -286,7 +281,7 @@ export function buildRB22({paint, accent, ink, helmet, num, stripe, light}) {
 
   const fin = box(body), fx = hubs[0][0], rx = hubs[2][0];
   const eye = new THREE.Vector3(sc.x - 0.55, head.y + 0.07, 0);
-  const tcam = new THREE.Vector3(head.x - 0.3, fin.max.y + 0.06, 0);
+  const tcam = new THREE.Vector3(sc.x - 1.1, fin.max.y + 0.06, 0);
   const lamp = box(root).min.x;  // the tail of the car, where the rain light sits
   // frees what this car owns (the template's baked geometry and materials are shared and kept); the stripe and light
   // materials belong to the far level
@@ -294,12 +289,12 @@ export function buildRB22({paint, accent, ink, helmet, num, stripe, light}) {
     for (const x of own) x.dispose();
     car.traverse(o => {
       o.userData.disposeMirror?.();
-      if (o.isMesh && (o.name.startsWith('mirror-') || o.geometry.type !== 'BufferGeometry')) o.geometry.dispose();  // clones, rings, helmet
+      if (o.isMesh && (o.name.startsWith('mirror-') || o.geometry.type !== 'BufferGeometry')) o.geometry.dispose();  // clones, rings
     });
   };
   return {group: car, body, halo: new THREE.Group(), paintMesh, wheels, steeringWheel, mirrors: MIRRORS.map(n => root.getObjectByName(n)), discs: [...discMats.values()],
           tyre: [hubs[0][2], hubs[0][3]], len: all.max.x - all.min.x, wb: fx - rx, width: all.max.z - all.min.z, hubs,
           eye, look: new THREE.Vector3(eye.x + 15, 0.55, 0), tcam, tcamLook: new THREE.Vector3(tcam.x + 15, 0.4, 0),
           exhaust: new THREE.Vector3(lamp + 0.1, 0.42, 0), plank: [rx + 0.2, fx - 1.0],
-          fronts: hubs.slice(0, 2).map(([x, z]) => new THREE.Vector3(x, 0.05, z)), dispose};
+          fronts: hubs.slice(0, 2).map(([x, z]) => new THREE.Vector3(x, 0.05, z)), pose: driver.pose, dispose};
 }

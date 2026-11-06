@@ -167,6 +167,7 @@ export function pitControl(R, car, h, line) {
     segmentTiming(R, car, past);
     if (!P.box || past > 40) return null;
     P.state = 'ENTRY';
+    car.seg = null;  // a run through the pit lane isn't racing pace: it would take the stop off the pit-loss estimate
     P.start = car.s - past;
     P.d0 = car.d;
   }

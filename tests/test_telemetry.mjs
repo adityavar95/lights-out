@@ -49,4 +49,6 @@ assert.deepEqual([2004, 2010, 2012, 2020, 2026].map(y => engine(y).pK), [0, 0, 6
 assert.ok(!engine(2010).drs && engine(2011).drs && !engine(2013).turbo && engine(2014).turbo);
 assert.ok(gearbox(200, engine(2004).rpmMax).rpm > gearbox(200).rpm && gearbox(200, 15000).rpm === gearbox(200).rpm);
 assert.equal(ersStep({soc: 0.5}, 0, 80, 200, 1, 2004).soc, 0.5, 'no recovery before 2009');
+assert.equal(ersStep({soc: 0.5}, 0, 80, 200, 1, 2005).mode, 'HOLD', 'a pre-hybrid car never harvests');
+assert.equal(ersStep({soc: 0.5}, 100, 0, 250, 1, 2005).mode, 'HOLD', 'nor deploys');
 console.log('ok');

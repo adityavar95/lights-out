@@ -9,10 +9,15 @@ build/
 .claude/
 .trail/
 graphify-out/
+.agents/
+.claude-flow/
+.swarm/
+skills-lock.json
 
 # internal working notes (docs/screenshots stays)
 docs/ux-audit.md
 docs/graphics-realism-plan.md
+docs/agents/
 
 # logs and OS files
 *.log

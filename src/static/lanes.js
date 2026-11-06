@@ -51,6 +51,23 @@ export function lanes(cars, len, half) {
   return out;
 }
 
+// GPS replays: the way a car faces at each frame (radians, in x, y's own axes), from the last stretch of at least min units
+// it covered, so a car at a standstill keeps the direction it arrived in, whichever way the replay got there. Before its
+// first move it faces the way it sets off. x, y: frames, null where the car has no data.
+export function headings(x, y, min) {
+  const out = new Float32Array(x.length).fill(NaN);
+  let ax = null, ay = null, yaw = NaN;
+  for (let i = 0; i < x.length; i++) {
+    if (x[i] === null) { ax = null; continue; }
+    if (ax === null) { ax = x[i]; ay = y[i]; }
+    else if (Math.hypot(x[i] - ax, y[i] - ay) >= min) { yaw = Math.atan2(y[i] - ay, x[i] - ax); ax = x[i]; ay = y[i]; }
+    out[i] = yaw;
+  }
+  const first = out.find(v => !Number.isNaN(v));
+  for (let i = 0; i < x.length && Number.isNaN(out[i]); i++) out[i] = first;
+  return out;
+}
+
 // GPS replays: OpenF1 positions are metres off and not quite in sync between cars, so two cars side by side or in a close
 // pass land on top of each other. cars: [{id, x, y, dx, dy}]: position (m, map axes, y down) and unit direction of travel.
 // sides: {pair: +1 / -1}, the caller's between frames: which side of the first car the second keeps until they're apart

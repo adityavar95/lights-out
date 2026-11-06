@@ -7,10 +7,11 @@ import json
 import math
 import os
 import time
+import uuid
 from bisect import bisect_right
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
-from functools import lru_cache
 from pathlib import Path
 from threading import Lock
 
@@ -31,8 +32,24 @@ class OpenF1Locked(ReplayUnavailable):
     """OpenF1 refuses free access to every session, past ones included, while any session is live."""
 
 
+_sent: deque = deque(maxlen=30)  # when the last 30 OpenF1 requests went out, across every thread
+_sent_lock = Lock()
+
+
+def _throttle():
+    """Waits for a slot in OpenF1's free tier: 30 requests in any 60 s, at most 3 a second. The lock stays held while
+    waiting, so callers queue in turn; a short burst still goes out at full speed."""
+    with _sent_lock:
+        now = time.monotonic()
+        wait = max(_sent[-1] + 1 / 3 - now if _sent else 0, _sent[0] + 60 - now if len(_sent) == _sent.maxlen else 0)
+        if wait > 0:
+            time.sleep(wait)
+        _sent.append(time.monotonic())
+
+
 def openf1(path: str) -> list:
     for attempt in range(6):
+        _throttle()
         r = requests.get(OPENF1 + path, timeout=120)
         if r.status_code == 429:  # free tier allows ~3 req/s and 30 req/min
             time.sleep(3 * (attempt + 1))
@@ -54,34 +71,50 @@ def save(path: Path, data):
     """Write a cache file atomically: a server killed mid-write would otherwise leave half a JSON file that every later
     request fails to parse until it is deleted by hand."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(f".{os.getpid()}.tmp")
-    tmp.write_text(json.dumps(data))
-    os.replace(tmp, path)
+    tmp = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        tmp.write_text(json.dumps(data))
+        for wait in (0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, None):
+            try:
+                os.replace(tmp, path)
+                return
+            except PermissionError:  # Windows refuses while another thread has the target open or is replacing it
+                if wait is None:
+                    raise
+                time.sleep(wait)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 LISTS = CACHE.parent / "openf1"
+_lists: dict = {}  # (kind, year) -> season list, for the server's lifetime; an empty answer isn't kept, so it's asked again
 
 
 def _season_list(kind: str, year: int) -> list:
     """A season's meetings or sessions (OpenF1 lists the whole season ahead). The last good copy is kept on disk, so
     cached replays still open while OpenF1 is locked during a live session."""
+    if (kind, year) in _lists:
+        return _lists[kind, year]
     saved = LISTS / f"{kind}_{year}.json"
     try:
         rows = openf1(f"{kind}?year={year}")
+        if rows:
+            save(saved, rows)
+        elif saved.exists():
+            rows = json.loads(saved.read_text())
     except OpenF1Locked:
-        if saved.exists():
-            return json.loads(saved.read_text())
-        raise
-    save(saved, rows)
+        if not saved.exists():
+            raise
+        rows = json.loads(saved.read_text())
+    if rows:
+        _lists[kind, year] = rows
     return rows
 
 
-@lru_cache(maxsize=32)
 def _meetings(year: int) -> list:
     return _season_list("meetings", year)
 
 
-@lru_cache(maxsize=32)
 def _sessions(year: int) -> list:
     return _season_list("sessions", year)
 
@@ -122,6 +155,16 @@ def find_session(year: int, race_date: str, session_name: str) -> dict | None:
                  and s["session_name"].lower() == session_name.lower()), None)
 
 
+def scheduled_session(now: datetime) -> str | None:
+    """'Meeting · Session' of the session inside its scheduled times + 30 min (they overrun), else None: tells whether
+    to expect a live session without opening the live feed."""
+    for s in _sessions(now.year):
+        if s.get("date_start") and s.get("date_end") and ts(s["date_start"]) <= now <= ts(s["date_end"]) + timedelta(minutes=30):
+            meeting = next((m for m in _meetings(now.year) if m["meeting_key"] == s["meeting_key"]), {})
+            return f"{meeting.get('meeting_name', 'Live session')} · {s['session_name']}"
+    return None
+
+
 def _resample(samples: list, start: datetime, n: int) -> dict:
     """Linear interpolation of x/y onto the STEP grid; None where the car has no data for >5 s."""
     t = [(ts(s["date"]) - start).total_seconds() for s in samples]
@@ -158,6 +201,8 @@ def _finished(session: dict) -> bool:
 
 
 REPLAY_LOCKS: dict[int, Lock] = {}  # a second request for a session being built waits for its cache, not ~30 more calls
+RECENT_TTL = 300  # s: how long a session too recent for the disk cache keeps its build (OpenF1 is still filling it in)
+_recent: dict = {}  # session_key -> (built at, replay)
 
 
 def gps_replay(session: dict) -> dict:
@@ -170,6 +215,9 @@ def _gps_replay(session: dict) -> dict:
     cached = CACHE / f"{sk}.json"
     if cached.exists():
         return json.loads(cached.read_text())
+    hit = _recent.get(sk)
+    if hit and time.time() - hit[0] < RECENT_TTL:
+        return hit[1]
 
     drivers = openf1(f"drivers?session_key={sk}")
     laps = [l for l in openf1(f"laps?session_key={sk}") if l.get("date_start")]
@@ -224,6 +272,11 @@ def _gps_replay(session: dict) -> dict:
         data[feed].sort(key=lambda e: e[0])  # the browser binary-searches these by time
     if _finished(session):
         save(cached, data)
+    else:
+        for k, (built, _) in list(_recent.items()):  # these are several MB each
+            if time.time() - built >= RECENT_TTL:
+                _recent.pop(k, None)
+        _recent[sk] = (time.time(), data)
     return data
 
 
@@ -302,6 +355,15 @@ def pitlane(circuit_id: str, races) -> dict | None:
 CAR_FIELDS = ("speed", "rpm", "n_gear", "throttle", "brake", "drs")
 
 
+def _replay_grid(sk: int, start: datetime, duration: float) -> bool:
+    """Whether this window is the cached GPS replay's own."""
+    try:
+        r = json.loads((CACHE / f"{sk}.json").read_text())
+    except (OSError, ValueError):
+        return False
+    return ts(r["start"]) == start and r["duration"] == duration
+
+
 def telemetry(session: dict, driver_number: int, start: datetime, duration: float, tag: str = "") -> dict:
     """One car's speed/rpm/gear/throttle/brake/DRS on its GPS replay's time grid. start / duration come from the
     browser's replay, so a session too recent to be cached isn't rebuilt (~30 OpenF1 requests) per driver.
@@ -317,7 +379,8 @@ def telemetry(session: dict, driver_number: int, start: datetime, duration: floa
         raise ReplayUnavailable("OpenF1 has no car telemetry for this driver.")
     samples.sort(key=lambda s: s["date"])
     data = {"step": STEP, **_hold(samples, start, int(duration / STEP) + 1, CAR_FIELDS)}
-    if _finished(session):
+    # the cache serves everyone, so a window the browser sent must be the replay's, or a short one would truncate it
+    if _finished(session) and (tag or _replay_grid(sk, start, duration)):
         save(cached, data)
     return data
 

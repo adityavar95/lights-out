@@ -6,17 +6,30 @@ export const ROW_H = 30;
 export const TYRES = {SOFT: ['S', '#ff2d2d'], MEDIUM: ['M', '#ffd400'], HARD: ['H', '#f2f2f2'], INTERMEDIATE: ['I', '#3ec455'], WET: ['W', '#2b8cff']};
 export const COLUMNS = [['gap', 'GAP'], ['int', 'INTERVAL'], ['last', 'LAST LAP'], ['trap', 'SPEED TRAP']];  // trap: live only
 
-// list: the <ol>; returns {driver id: row}
+// the row (index down the shown order) a key moves focus to; undefined for any other key
+export const rowAfter = (key, i, n) => ({ArrowDown: Math.min(i + 1, n - 1), ArrowUp: Math.max(i - 1, 0), Home: 0, End: n - 1}[key]);
+
+// list: the <ol>; returns {driver id: row}. One tab stop for the whole tower: the arrows walk it in the order on screen.
 export function buildTower(list, drivers, onSelect) {
   const rows = {};
   list.replaceChildren();
-  for (const d of drivers) {
-    const row = el('li', {class: 'trow', tabindex: 0, onclick: () => onSelect(d.id),
-                          onkeydown: e => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), onSelect(d.id))},
+  const onkey = (e, d, row) => {
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    const order = [...list.children].sort((a, b) => a.dataset.i - b.dataset.i), next = rowAfter(e.key, order.indexOf(row), order.length);
+    if (e.key !== 'Enter' && e.key !== ' ' && next === undefined) return;
+    e.preventDefault();
+    e.stopPropagation();  // Space here selects; it mustn't play or pause the replay as well
+    if (next === undefined) onSelect(d.id);
+    else order[next].focus();
+  };
+  for (const [i, d] of drivers.entries()) {
+    const row = el('li', {class: 'trow', role: 'button', tabindex: i ? -1 : 0, 'data-i': i, 'aria-pressed': 'false', 'aria-label': d.name ?? d.code, onclick: () => onSelect(d.id),
+                          onkeydown: e => onkey(e, d, row),
+                          onfocus: () => { for (const r of list.children) r.tabIndex = r === row ? 0 : -1; }},
       el('span', {class: 'pos'}), el('span', {class: 'bar', style: `background:${d.color}`}),
       el('span', {class: 'code'}, d.code, el('span', {class: 'secs', 'aria-hidden': 'true'}, el('i'), el('i'), el('i'))),
       el('span', {class: 'gap'}), el('span', {class: 'tyre'}), el('span', {class: 'badge'}),
-      el('button', {class: 'trcmp', title: `Compare ${d.code}'s telemetry`, 'aria-label': `Compare ${d.code}'s telemetry trace`,
+      el('button', {class: 'trcmp', tabindex: -1, title: `Compare ${d.code}'s telemetry`, 'aria-label': `Compare ${d.code}'s telemetry trace`,
                     onclick: e => { e.stopPropagation(); dispatchEvent(new CustomEvent('f1:trace', {detail: d.id})); },
                     onkeydown: e => e.stopPropagation()}, '⌁'));  // opens tracemodal.js
     list.append(row);
@@ -112,11 +125,16 @@ export function stableOrder(state, board, now, force = false) {
 }
 
 export function renderTower(rows, board, cols, column, selected, onTyre) {
+  const inside = board.length && rows[board[0].d.id].parentNode.matches(':focus-within');
   board.forEach((b, i) => {
     const row = rows[b.d.id], [pos, , code, gap, tyre, badge] = row.children, c = cols[b.d.id];
     row.style.transform = `translateY(${i * ROW_H}px)`;
     row.classList.toggle('out', b.out);
     row.classList.toggle('sel', selected === b.d.id);
+    row.dataset.i = i;
+    if (!inside) row.tabIndex = i ? -1 : 0;  // Tab lands on the leader
+    row.setAttribute('aria-pressed', selected === b.d.id);
+    row.setAttribute('aria-label', `${b.out ? 'Out' : `P${b.pos}`}, ${b.d.name ?? b.d.code}`);
     pos.textContent = b.out ? '–' : b.pos;
     gap.textContent = c[column] || '';
     gap.dataset.c = column === 'last' ? c.lastCls : column === 'trap' ? c.trapCls : '';

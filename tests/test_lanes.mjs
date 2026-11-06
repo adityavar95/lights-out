@@ -1,6 +1,6 @@
 // Run: node tests/test_lanes.mjs  — lap-timing replay lanes: grid columns and passing without driving through the car.
 import assert from 'node:assert/strict';
-import {lanes, GRID, apart} from '../src/static/lanes.js';
+import {lanes, GRID, apart, headings} from '../src/static/lanes.js';
 import {CAR_L, CAR_W} from '../src/static/racecraft.js';
 
 const LEN = 5000, HALF = 6.5;
@@ -49,4 +49,12 @@ for (let t = 0; t < 20; t += 0.02) {
 }
 assert.ok(side !== 0 && step < 0.3, `side ${side}, largest frame-to-frame shift ${step}`);
 assert.deepEqual(sides, {});  // forgotten once apart
+
+// standing still: jitter under the distance never turns a car; it keeps the direction it arrived in, gaps included
+const yaws = headings([0, 0, 40, 80, 80, 81, null, 80, 80, 120], [5, 5, 5, 5, 6, 4, null, 5, 6, 6], 30);
+near(yaws[0], 0); near(yaws[3], 0); near(yaws[5], 0); near(yaws[8], 0);  // set off along +x, arrived along +x, parked
+const up = headings([0, 0, 0, 0], [0, 40, 40, 41], 30);
+near(up[0], Math.PI / 2); near(up[3], Math.PI / 2);  // before its first move it faces the way it sets off
+assert.ok(headings([0, 1, 0], [0, 0, 1], 30).every(Number.isNaN));  // never moved: no heading
+function near(a, b) { assert.ok(Math.abs(a - b) < 1e-6, `${a} != ${b}`); }
 console.log('ok');

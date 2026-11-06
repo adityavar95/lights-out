@@ -7,16 +7,20 @@ import hashlib
 import json
 import queue
 import threading
+import time
 import re
 from datetime import datetime, timezone
-from pathlib import Path
+from functools import lru_cache
+from pathlib import Path, PurePosixPath
+from urllib.parse import unquote, urlsplit
 
 import requests
 
 import live
-from replay import CACHE, OpenF1Locked, openf1, save
+from replay import CACHE, OpenF1Locked, _finished, openf1, save
 
-STATIC = "https://livetiming.formula1.com/static/"
+HOST = "livetiming.formula1.com"
+STATIC = f"https://{HOST}/static/"
 DIR = CACHE.parent / "radio"
 MODEL = "small.en"  # ~0.5 GB, downloaded on first use; radio is English and noisy, the tiny models garble it
 # F1 words the model otherwise hears as everyday ones ("box" as "books", "DRS" as "DOS")
@@ -26,7 +30,11 @@ PROMPT = ("Formula 1 team radio. Box, box. Copy. Softs, mediums, hards, inters. 
 
 _jobs: queue.Queue = queue.Queue()
 _queued: set = set()
-_errors: dict = {}  # clip url -> why it has no text (the audio refused, a decode error)
+_errors: dict = {}  # clip url -> (when, why it has no text, whether it was refused for want of a token)
+RETRY = 300  # s before a clip that failed is tried again
+ROWS_TTL = 30  # s an unfinished session's clip list is kept (the viewer asks every 8 s per onboard)
+MAX_URL = 2048
+_rows: dict = {}  # (session_key, driver) -> (asked at, or None for good; OpenF1's rows, None while it's locked)
 _lock = threading.Lock()
 _worker: threading.Thread | None = None
 _model = None
@@ -46,6 +54,7 @@ def entry(url: str) -> dict | None:
         return None
 
 
+@lru_cache(maxsize=1)  # the model reloads after IDLE, and PATH mustn't grow each time
 def _cuda_dlls():
     """CUDA's cuBLAS/cuDNN from their pip wheels (nvidia-cublas-cu12, nvidia-cudnn-cu12) keep their DLLs in
     site-packages/nvidia/*/bin, where Windows doesn't look; ctranslate2 loads them by name at the first clip."""
@@ -101,6 +110,23 @@ def transcribe(audio) -> dict:
     return {"text": " ".join(x.text.strip() for x in segments).strip()}
 
 
+def clip_url(url: str) -> str:
+    """The url if it's an F1 team radio clip, else ValueError: it comes from the page or OpenF1, and the caller's F1 TV
+    token goes with the request. Checked decoded, since the host decodes %2e%2e back into a path outside /static/."""
+    u = urlsplit(url)
+    path = unquote(u.path)
+    if (len(url) > MAX_URL or (u.scheme, u.netloc) != ("https", HOST) or u.query or u.fragment
+            or re.search(r"[\\\x00-\x1f]", url + path) or "%" in path  # % left after decoding: encoded twice
+            or str(PurePosixPath(path)) != path or ".." in path.split("/")
+            or not path.startswith("/static/") or not path.endswith(".mp3")):
+        raise ValueError("Not an F1 team radio clip")
+    return url
+
+
+def _fetch(url: str, token: str | None):
+    return requests.get(clip_url(url), headers={"Authorization": f"Bearer {token}"} if token else {}, timeout=(5, 30))
+
+
 def _work():
     import io
     global _model
@@ -111,19 +137,24 @@ def _work():
             _model = None
             continue
         try:
-            headers = {"Authorization": f"Bearer {token}"} if token else {}
-            r = requests.get(url, headers=headers, timeout=(5, 30))
+            r = _fetch(url, token)
             if r.status_code in (401, 403):
-                _errors[url] = "F1's radio server refused the clip (needs an F1 TV sign-in)"
+                _errors[url] = (time.time(), "F1's radio server refused the clip (needs an F1 TV sign-in)", not token)
             elif not r.ok:
-                _errors[url] = f"clip unavailable ({r.status_code})"
+                _errors[url] = (time.time(), f"clip unavailable ({r.status_code})", False)
             else:
                 save(_path(url), transcribe(io.BytesIO(r.content)))
         except Exception as e:  # a bad clip mustn't stop the rest
-            _errors[url] = f"transcription failed: {e}"
+            _errors[url] = (time.time(), f"transcription failed: {e}", False)
         finally:
             with _lock:
                 _queued.discard(url)
+
+
+def _waiting(url: str, token: str | None) -> bool:
+    """A clip that failed waits RETRY s, unless it was refused for want of a token and now there is one."""
+    e = _errors.get(url)
+    return bool(e) and time.time() - e[0] < RETRY and not (token and e[2])
 
 
 def queue_clips(urls: list, token: str | None):
@@ -134,7 +165,8 @@ def queue_clips(urls: list, token: str | None):
             _worker = threading.Thread(target=_work, daemon=True)
             _worker.start()
         for u in urls:
-            if u not in _queued and u not in _errors and not _path(u).exists():
+            if u not in _queued and not _waiting(u, token) and not _path(u).exists():
+                _errors.pop(u, None)
                 _queued.add(u)
                 _jobs.put((u, token))
 
@@ -156,17 +188,30 @@ def started(published: float, url: str) -> float:
     return published - delay if delay < 300 else published
 
 
+def _team_radio(session: dict, driver: int) -> list | None:
+    """OpenF1's rows for one driver, or None while it's locked; the viewer polls per onboard and OpenF1 allows ~30 req/min."""
+    key = (session["session_key"], driver)
+    hit = _rows.get(key)
+    if hit and (hit[0] is None or time.time() - hit[0] < ROWS_TTL):
+        return hit[1]
+    try:
+        rows = openf1(f"team_radio?session_key={session['session_key']}&driver_number={driver}")
+    except OpenF1Locked:
+        rows = None
+    _rows[key] = (None if rows and _finished(session) else time.time(), rows)
+    return rows
+
+
 def clips(session: dict | None, session_name: str, year: int, driver: int) -> list:
     """[(unix seconds it was said, audio url)] for one driver: OpenF1's once the session is over, else the live feed's
     when it's running this session (OpenF1 is locked while it's live)."""
-    if session:
-        try:
-            rows = openf1(f"team_radio?session_key={session['session_key']}&driver_number={driver}")
-            return sorted((started(_ts(r["date"]), r["recording_url"]), r["recording_url"]) for r in rows)
-        except OpenF1Locked:
-            pass
     info, caps = live.radio()
-    if info and info.get("Name") == session_name and str(info.get("Path", "")).startswith(f"{year}/"):
+    on_feed = info and info.get("Name") == session_name and str(info.get("Path", "")).startswith(f"{year}/")
+    if session and not (on_feed and (live.status() or {}).get("live")):  # running on the feed: OpenF1 would only refuse
+        rows = _team_radio(session, driver)
+        if rows is not None:
+            return sorted((started(_ts(r["date"]), r["recording_url"]), r["recording_url"]) for r in rows)
+    if on_feed:
         urls = [(_ts(c["Utc"]), STATIC + info["Path"] + c["Path"]) for c in caps if str(c.get("RacingNumber")) == str(driver)]
         return sorted((started(t, u), u) for t, u in urls)
     return []
@@ -178,22 +223,22 @@ TRANSCRIBE = True
 
 
 def radio(session: dict | None, session_name: str, year: int, driver: int, token: str | None) -> dict:
-    """{clips: [{t (when it was said), url, text}], pending, error, transcribe}: what the viewer shows. url:
-    F1's audio, played through /api/f1tv/radio/audio; text null with transcription off, or while it's being transcribed."""
+    """{clips: [{t (when it was said), url, text, error}], pending, error, transcribe}: what the viewer shows. url:
+    F1's audio, played through /api/f1tv/radio/audio; text null with transcription off, or while it's being transcribed;
+    error: why this clip has no words (it's tried again after RETRY s), else null."""
     cs = clips(session, session_name, year, driver)
     if TRANSCRIBE:
         queue_clips([u for _, u in cs], token)
-    out = [{"t": t, "url": u, "text": (e := entry(u)) and e["text"] if TRANSCRIBE else None} for t, u in cs]
-    errs = {_errors[u] for _, u in cs if u in _errors}
+    why = lambda u: _errors[u][1] if u in _errors else None
+    out = [{"t": t, "url": u, "text": (e := entry(u)) and e["text"] if TRANSCRIBE else None, "error": why(u)} for t, u in cs]
+    errs = {why(u) for _, u in cs if u in _errors}
     return {"clips": out, "pending": sum(1 for _, u in cs if u in _queued), "error": next(iter(errs), None), "transcribe": TRANSCRIBE}
 
 
 def audio(url: str, token: str | None) -> bytes:
     """A clip's audio from F1's livetiming server, which refuses it without an F1 TV sign-in; only clips are fetched
     (the url comes from the page)."""
-    if not url.startswith(STATIC) or ".." in url:
-        raise ValueError("Not an F1 team radio clip")
-    r = requests.get(url, headers={"Authorization": f"Bearer {token}"} if token else {}, timeout=(5, 30))
+    r = _fetch(url, token)
     if r.status_code in (401, 403):
         raise PermissionError("F1's radio server refused the clip: connect your F1 TV account")
     r.raise_for_status()

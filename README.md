@@ -105,7 +105,7 @@ Watching a race tells you what happened. Lights Out lets you **look inside it**:
 
 ## 📸 A tour of Lights Out
 
-The app has three sections, switched in the header: **Analytics** (real races), **Simulate** (physics races) and **Stream** (F1 TV).
+The app has three sections, switched in the header: **Races** (real races), **Simulate** (physics races) and **Stream** (F1 TV).
 
 ### 🎬 3D race replay
 
@@ -177,7 +177,7 @@ The **Simulate** view runs a full physics race on the real circuit, with a grid 
 <img src="docs/screenshots/telemetry-trace.jpg" alt="Telemetry trace comparing two cars at Monaco with delta time, speed, throttle, brake and rpm channels and race-engineer insights" width="100%">
 </p>
 
-### 📊 Analytics
+### 📊 Races
 
 Everything about the race you're looking at, one tab away.
 
@@ -496,7 +496,7 @@ F1/
 │   ├── radio.py         # Team radio clips and faster-whisper transcription
 │   └── static/          # Frontend: vanilla JS modules, no build step
 │       ├── index.html, launcher.html, style.css, circuitdeck.css
-│       ├── app.js            # Analytics / Simulate / Stream, calendar, hero, tabs
+│       ├── app.js            # Races / Simulate / Stream, calendar, hero, tabs
 │       ├── replay.js         # Replay engine (GPS, lap timing, live)
 │       ├── scene3d.js        # three.js scene, cameras, shadows, ground
 │       ├── circuit3d.js, track3d.js, cars3d.js, rb22.js, post.js, vfx.js, mirror.js

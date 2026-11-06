@@ -1,0 +1,42 @@
+/* Race analysis: the race trace in the Lap chart tab, Pace and Undercut ledger in Strategy lab. */
+
+/* labels are 11-12 px in a 1000-wide viewBox: below ~860 px they shrink past reading, so a phone scrolls .chartwrap */
+.chartwrap .lapchart { min-width: 860px; }
+.lab-controls[hidden] { display: none; }
+
+.lapchart .zero { stroke: var(--muted); stroke-width: 1.5; }
+.lapchart .sc { fill: var(--yellow); opacity: .16; }
+.lapchart.trace .series .endlabel { paint-order: stroke; stroke: var(--panel); stroke-width: 3px; stroke-linejoin: round; }
+.legenditem[aria-pressed=true] { background: var(--ink); color: var(--bg); }  /* as .pill.on; the rim can't change colour */
+
+.card.pace, .card.ledger { margin-top: 16px; }
+.pace .stintcell { line-height: 1.25; font-variant-numeric: tabular-nums; }
+.ledger tr.pick { cursor: pointer; }
+.rowbtn { all: unset; cursor: pointer; }
+.rowbtn:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+
+/* Standings: season trends. An extra driver's line shows only when hovered or pinned (.on, set by charts.js follower) */
+.seasontrends { margin-top: 16px; }
+.seasontrends > summary { cursor: pointer; font-size: 18px; font-weight: 800; }
+.seasontrends > summary:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+.seasontrends h3 { margin: 20px 0 4px; }
+.series.extra:not(.on) { display: none; }
+.lapchart.trend .series .endlabel { paint-order: stroke; stroke: var(--panel); stroke-width: 3px; stroke-linejoin: round; }
+.seasonnote { margin: 10px 0; padding: 8px 12px; border-left: 3px solid var(--yellow); background: var(--panel-2); border-radius: var(--radius-sm); }
+.alive { margin-top: 12px; }
+.alive p { margin: 4px 0; }
+
+/* Drivers: the teammate line on a card, the table in the career dialog */
+.dh2h { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dh2h:empty { display: none; }
+.ch2h { margin: 16px 0; }
+.ch2h h3 { margin: 0 0 6px; }
+
+/* Results: pit-stop league table and overtake ledger */
+.ledgerbox { margin-top: 16px; }
+.ledgerbox > summary { cursor: pointer; font-size: 18px; font-weight: 800; }
+.ledgerbox > summary:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+.ledgerbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin: 12px 0 6px; }
+.ledgerbar h3 { margin: 0; }
+.ledgerbar > button:only-child { margin-left: auto; }
+.ledgerbox .stationary { margin-top: 16px; }

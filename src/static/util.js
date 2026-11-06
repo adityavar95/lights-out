@@ -1,15 +1,19 @@
 // Shared helpers: fetching, team colours, flags, formatting.
 
 const cache = new Map();
-const KEEP = [['/api/replay/', 2], ['/api/telemetry/', 4], ['/api/f1tv/telemetry/', 8]];  // [url prefix, how many kept]
+// live URLs carry a one-off ?ts=, so nothing rereads them: 1 is as good as none
+const KEEP = [['/api/replay/', 2], ['/api/telemetry/', 4], ['/api/f1tv/telemetry/', 8], ['/api/live', 1]];  // [url prefix, how many kept]
+// this season's tables and F1 TV lists change as weekends run, past seasons' don't (5 min: the server's own cache of them)
+const FRESH = new RegExp(`^/api/(jolpica|season|f1tv)/${new Date().getFullYear()}\\b`), TTL = 5 * 60e3;
 
 export async function get(url) {
-  if (!cache.has(url)) {
-    cache.set(url, fetch(url).then(async res => {
+  if (!cache.has(url) || (FRESH.test(url) && Date.now() - cache.get(url).at > TTL)) {
+    cache.set(url, Object.assign(fetch(url).then(async res => {
       const body = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(body.detail || `${res.status} ${res.statusText}`);
+      // FastAPI's validation errors (422) send detail as a list
+      if (!res.ok) throw new Error(typeof body.detail === 'string' ? body.detail : `${res.status} ${res.statusText}`);
       return body;
-    }));
+    }), {at: Date.now()}));
     cache.get(url).catch(() => cache.delete(url));  // let failed requests be retried
     // replays (several MB) and telemetry (0.3-3 MB a driver) keep their last few, not every one opened since the page loaded
     const keep = KEEP.find(([prefix]) => url.startsWith(prefix));
@@ -17,6 +21,19 @@ export async function get(url) {
   }
   return cache.get(url);
 }
+
+// a failed load's message in plain words: browsers report no connection as "Failed to fetch" and the like
+export function plain(msg) {
+  const m = String(msg?.message ?? msg);
+  if (/failed to fetch|networkerror|load failed|network request/i.test(m)) return "Can't reach the server. Check your connection and that the app is still running.";
+  if (/^429\b/.test(m)) return 'Too many requests for now. Try again in a minute.';
+  if (/^5\d\d\b/.test(m)) return 'The server had a problem. Try again in a moment.';
+  return m;
+}
+
+// what a view shows when its data didn't load, with a way to ask again (get() has dropped the failed fetch from its cache)
+export const failed = (msg, retry) => el('div', {class: 'empty err', role: 'alert'}, el('p', {}, plain(msg)),
+  retry && el('button', {class: 'pill', onclick: retry}, 'Retry'));
 
 // the F1 TV token the Connect bookmarklet brought back (f1auth.py): kept for this tab only, sent with each request
 export function tvHeaders() {
@@ -60,6 +77,34 @@ export function dropUp(button, menu) {
 // a cached live list, so this is cheap every frame)
 export const covered = () => document.body.dataset.section === 'stream'  // the Stream page hides the stage too
   || [...document.getElementsByTagName('dialog')].some(d => d.matches(':modal'));
+
+// placeholder bars in the shape of the rows to come, not a spinner: the layout doesn't jump when they land
+export const skeleton = (bars = 7) => el('div', {class: 'skeleton', role: 'status', 'aria-label': 'Loading…'}, ...Array.from({length: bars}, () => el('i')));
+
+// a sortable table's header cell: the button makes it reachable by keyboard; app.js sorts on its click
+export const th = text => el('th', {scope: 'col'}, el('button', {class: 'thsort', type: 'button'}, text));
+
+// a table cell's text (explorer.js shows it, the CSV exports it)
+export function cellText(v) {
+  if (v === null || v === undefined) return '';
+  if (Array.isArray(v)) return v.map(x => typeof x === 'object' ? (x.name ?? JSON.stringify(x)) : x).join(', ');
+  return typeof v === 'object' ? JSON.stringify(v) : String(v);
+}
+
+// A spreadsheet runs a cell starting = + - @ as a formula, and these cells hold other people's text: the leading ' makes it
+// plain text. A JS number can't be a formula, so it stays a number a sheet can add up; strings like '+5.123' get the '.
+const csvCell = v => {
+  const s = typeof v === 'number' ? String(v) : cellText(v).replace(/^\s*[=+\-@]/, "'$&");
+  return `"${s.replaceAll('"', '""')}"`;
+};
+export const toCsv = (columns, rows) => [columns, ...rows].map(r => r.map(csvCell).join(',')).join('\n');
+
+// rows(): read at the click, so a table that hasn't been downloaded costs nothing
+export const csvButton = (name, columns, rows) => el('button', {class: 'pill', title: 'Download these rows as CSV', onclick: () => {
+  const a = el('a', {href: URL.createObjectURL(new Blob([toCsv(columns, rows())], {type: 'text/csv'})), download: `${name}.csv`});
+  a.click();
+  URL.revokeObjectURL(a.href);
+}}, '⤓ CSV');
 
 // status light used by every deck's buttons (CSS colours it on/off)
 export const led = () => el('i', {class: 'led', 'aria-hidden': 'true'});
