@@ -3,7 +3,7 @@
 // from the road frames (circuit3d.js frames: P centre, T along, N left, B up), in scene units through m().
 import * as THREE from 'three';
 import {mergeGeometries} from 'three/addons/utils/BufferGeometryUtils.js';
-import {normalGeometry, positionGeometry, step, vec3, mix} from 'three/tsl';
+import {normalGeometry, positionGeometry, step, vec2, vec3, mix, floor, fwidth, smoothstep, abs} from 'three/tsl';
 import {noise} from './track3d.js';
 
 const mtx = new THREE.Matrix4(), quat = new THREE.Quaternion(), scale = new THREE.Vector3(1, 1, 1), basis = new THREE.Matrix4();
@@ -23,6 +23,16 @@ function instanced(geometry, material, items, {shadow = true} = {}) {
   mesh.computeBoundingSphere();  // or the renderer culls by the geometry alone, at the world's origin
   return mesh;
 }
+
+// a geometry with one colour in its vertices, for parts merged under one material
+function colored(g, color) {
+  const c = new THREE.Color(color), n = g.attributes.position.count;
+  g.setAttribute('color', new THREE.Float32BufferAttribute(Array.from({length: n}, () => [c.r, c.g, c.b]).flat(), 3));
+  return g;
+}
+
+// scene units per metre's inverse, from the circuit's m()
+const METRES = m => 1 / m(1);
 
 function boardTexture(text) {
   const c = Object.assign(document.createElement('canvas'), {width: 128, height: 128}), g = c.getContext('2d');
@@ -61,12 +71,12 @@ export function buildTrackside({F, runs, half, wall, m, armco}) {
       let last = -Infinity, k = 0;
       for (const f of run) {
         const d = dist[F.indexOf(f)];
-        if (d - last < m(1.6)) continue;
+        if (d - last < m(2.45)) continue;
         last = d;
         items.push({p: at(f, -side * (half + wall - m(0.7)), m(0.5)), f, color: k++ % 2 ? red : white});
       }
     }
-    if (items.length) made.push(instanced(new THREE.BoxGeometry(m(0.9), m(1), m(1.5)), tecpro, items));
+    if (items.length) made.push(instanced(new THREE.BoxGeometry(m(0.9), m(1), m(2.4)), tecpro, items));  // one per road frame (every ~2.5 m), end to end
   }
 
   // braking boards 150, 100 and 50 m before every corner reached by a straight long enough to need them
@@ -89,47 +99,99 @@ export function buildTrackside({F, runs, half, wall, m, armco}) {
     if (!items.length) continue;
     const mat = new THREE.MeshStandardNodeMaterial({map: boardTexture(String(metres)), roughness: 0.6});
     boardMats.push(mat);
-    made.push(instanced(new THREE.BoxGeometry(m(1.3), m(1.3), m(0.08)), mat, items));
+    // a board on two legs (their uvs land on the white of the texture); it stood on nothing
+    const board = mergeGeometries([new THREE.BoxGeometry(m(1.3), m(1.3), m(0.08)), ...[-1, 1].map(s => new THREE.BoxGeometry(m(0.07), m(0.8), m(0.07)).translate(s * m(0.45), -m(1), 0))]);
+    made.push(instanced(board, mat, items));
   }
   const poles = [];
-  for (let d = 0, i = 0; i < n; i++) if (dist[i] >= d) { poles.push(i); d += m(420); }
+  for (let d = 0, i = 0; i < n; i++) if (dist[i] >= d) { poles.push(i); d += m(700); }
 
   // floodlight towers beside the track; their lamps stay off until a night sky turns them on
   const lamp = new THREE.MeshStandardNodeMaterial({color: 0x20242c, emissive: 0xfff2d8, emissiveIntensity: 0});
   const towers = poles.map((i, k) => ({p: at(F[i], (k % 2 ? 1 : -1) * (half + wall + m(14)), 0), f: F[i]})).filter(t => clear(t.p, m(8)));
   if (towers.length) {
     made.push(instanced(new THREE.CylinderGeometry(m(0.22), m(0.35), m(26), 8).translate(0, m(13), 0), steel, towers));
-    made.push(instanced(new THREE.BoxGeometry(m(5), m(1.6), m(0.5)).translate(0, m(26), 0), lamp, towers, {shadow: false}));
+    made.push(instanced(new THREE.BoxGeometry(m(6), m(2.6), m(0.5)).translate(0, m(26.5), 0), lamp, towers, {shadow: false}));
   }
 
-  // grandstands on the outside of the corners with the longest approach, and along the start straight: stepped tiers, the
-  // crowd a coloured noise on them (each spectator is under a pixel from anywhere a camera goes)
-  const stands = [];
-  const tiers = Array.from({length: 7}, (_, k) => new THREE.BoxGeometry(m(44), m(1.2 + k * 1.5), m(2.6)).translate(0, m((1.2 + k * 1.5) / 2 - 1), -m(k * 2.4)));
-  const standGeo = mergeGeometries(tiers);
-  tiers.forEach(t => t.dispose());
+  // marshal posts every ~330 m just behind the barrier, alternate sides: an orange cabin, a roof, a dark light panel facing the track
+  const post = mergeGeometries([colored(new THREE.BoxGeometry(m(2.4), m(2.4), m(2.2)).translate(0, m(1.2), 0), 0xd9661f), colored(new THREE.BoxGeometry(m(2.9), m(0.18), m(2.7)).translate(0, m(2.5), 0), 0xe8e8e8),
+    colored(new THREE.BoxGeometry(m(1.7), m(0.8), m(0.08)).translate(0, m(1.7), m(1.13)), 0x0b0c0e)]);
+  const postMat = new THREE.MeshStandardNodeMaterial({vertexColors: true, roughness: 0.7});
+  const marshals = [];
+  let side = 1;
+  for (let d = m(120), i = 0; i < n; i++) if (dist[i] >= d) {
+    side = -side; d += m(330);
+    const s = {N: F[i].T.clone().multiplyScalar(side), B: F[i].B, T: F[i].N.clone().multiplyScalar(side)};  // its +z faces the track
+    const p = at(F[i], side * (half + wall + m(2.2)));
+    if (clear(p, wall + m(1.2))) marshals.push({p, f: s});
+  }
+  if (marshals.length) made.push(instanced(post, postMat, marshals));
+
+  // Grandstands on the outside of some corners and along the start straight, facing the track: a concrete base, 18 rows of
+  // seats rising away from it, a back wall and a cantilever roof on brackets, instanced. Built with z towards the track.
+  const ROWS = 18, TREAD = 0.85, RISE = 0.42, BASE = 2.4, WIDE = 44, DEEP = ROWS * TREAD;
+  const profile = new THREE.Shape([[0, 0], [0, BASE]].map(([z, y]) => new THREE.Vector2(z, y)));
+  for (let k = 0; k < ROWS; k++) profile.lineTo(-k * TREAD - TREAD, BASE + k * RISE), profile.lineTo(-k * TREAD - TREAD, BASE + (k + 1) * RISE);
+  profile.lineTo(-DEEP, 0);
+  // the shape is drawn in (z, y), extruded along x: rotate its plane's x onto z
+  const standGeo = new THREE.ExtrudeGeometry(profile, {depth: WIDE, bevelEnabled: false}).translate(0, 0, -WIDE / 2).rotateY(-Math.PI / 2).scale(1 / METRES(m), 1 / METRES(m), 1 / METRES(m));
   const crowd = new THREE.MeshStandardNodeMaterial({roughness: 0.9});
   {
-    // treads (normal up) are people in bright clothes on team-coloured seats, risers and ends are concrete
-    // blocks of a few seats, hard-edged: a single spectator is under a pixel, and fine noise averaged out to flat beige
-    const c = positionGeometry.div(m(1.4)), pick = (n, at) => step(at, noise(c.xz.mul(n).add(n * 7)));
-    const people = mix(mix(vec3(0.04, 0.06, 0.12), vec3(0.6, 0.05, 0.05), pick(1, 0.5)), mix(vec3(0.72, 0.7, 0.62), vec3(0.8, 0.5, 0.05), pick(0.6, 0.5)), pick(1.3, 0.6));
-    crowd.colorNode = mix(vec3(0.19, 0.2, 0.21), people, step(0.5, normalGeometry.y));
+    // a seat is ~55 cm by a row: its own colour, an eighth of them empty and showing the stand's plastic. Past a few pixels a seat
+    // would only shimmer, so it gives way to blocks of colour that survive the distance. Risers are the same crowd in shade.
+    const c = positionGeometry.mul(METRES(m)), row = floor(c.y.sub(BASE).div(RISE)), cell = vec2(floor(c.x.div(0.55)), row);
+    const pick = (at, k) => step(at, noise(cell.mul(k).add(0.5)));
+    const seat = mix(mix(vec3(0.03, 0.04, 0.07), vec3(0.2, 0.05, 0.05), pick(0.55, 13.7)), mix(vec3(0.34, 0.33, 0.3), vec3(0.28, 0.2, 0.1), pick(0.62, 7.1)), pick(0.55, 3.3));
+    const dressed = mix(vec3(0.05, 0.09, 0.15), seat, step(0.2, noise(cell.mul(19.3).add(0.5))));
+    const block = mix(mix(vec3(0.07, 0.08, 0.12), vec3(0.16, 0.07, 0.07), step(0.5, noise(c.xy.div(9).add(3)))), vec3(0.24, 0.23, 0.2), step(0.55, noise(c.xy.div(5).add(11))));
+    const far = smoothstep(0.35, 1.2, fwidth(cell.x));
+    const people = mix(dressed, block, far).mul(mix(0.55, 1, step(0.5, normalGeometry.y)));
+    const concrete = vec3(0.11, 0.115, 0.12), seating = step(BASE, c.y).mul(step(abs(normalGeometry.x), 0.5)).mul(step(-0.5, normalGeometry.z));
+    // along the base's top, a painted band: the same dark and white as the barrier's boards
+    const band = step(1.7, c.y).mul(step(c.y, BASE)).mul(step(0.5, normalGeometry.z));
+    crowd.colorNode = mix(mix(concrete, vec3(0.03, 0.035, 0.05), band), people, seating);
   }
-  // the roof, on columns along the back: a white canopy reads from the air as a grandstand, not a block
-  const roofParts = [new THREE.BoxGeometry(m(46), m(0.35), m(20)).rotateX(0.06).translate(0, m(15.5), -m(7))];
-  for (let k = -2; k <= 2; k++) roofParts.push(new THREE.BoxGeometry(m(0.5), m(16), m(0.5)).translate(k * m(10.5), m(7.5), -m(16.2)));
-  const roofGeo = mergeGeometries(roofParts);
-  roofParts.forEach(t => t.dispose());
-  const roofMat = new THREE.MeshStandardNodeMaterial({color: 0xc9ced4, metalness: 0.3, roughness: 0.55});
-  const addStand = (f, side) => {
-    const p = at(f, side * (half + wall + m(30)), m(0.2)), rotated = {N: f.T.clone().multiplyScalar(side), B: f.B, T: f.N.clone().multiplyScalar(-side)};
-    if (clear(p, m(26))) stands.push({p, f: rotated});
+  // back wall, a roof rising towards the track, brackets from the wall's top out under it, and a fascia along its front edge
+  const wallTop = 15.2, roofDepth = DEEP + 3;
+  const bar = (a, b, r) => {
+    const d = new THREE.Vector3(...b).sub(new THREE.Vector3(...a)), g = new THREE.BoxGeometry(r, d.length(), r);
+    return g.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), d.clone().normalize())).translate((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2);
   };
-  addStand(F[Math.floor(n * 0.01)], 1);
-  addStand(F[Math.floor(n * 0.985)], 1);
-  runs.forEach((run, r) => { if (r % 3 === 0 && run.length > 3) addStand(run[run.length >> 1], -Math.sign(run[run.length >> 1].P.clone().sub(run[0].P).dot(run[0].N)) || 1); });
-  if (stands.length) made.push(instanced(standGeo, crowd, stands), instanced(roofGeo, roofMat, stands));
+  const roofParts = [colored(new THREE.BoxGeometry(WIDE + 2, 0.25, roofDepth).rotateX(-0.07).translate(0, wallTop + 0.7, -DEEP + roofDepth / 2 - 0.4), 0xc2c7cd),
+    colored(new THREE.BoxGeometry(WIDE + 2, 0.7, 0.2).translate(0, wallTop + 0.7 + 0.07 * roofDepth / 2 - 0.15, -DEEP + roofDepth - 0.4), 0x22252b),
+    colored(new THREE.BoxGeometry(WIDE, wallTop, 0.3).translate(0, wallTop / 2, -DEEP - 0.15), 0x5d6168)];
+  for (let k = -3; k <= 3; k++) {
+    const x = k * WIDE / 6.2;
+    roofParts.push(colored(new THREE.BoxGeometry(0.5, wallTop + 0.6, 0.5).translate(x, (wallTop + 0.6) / 2, -DEEP - 0.5), 0x7b8087),
+      colored(bar([x, wallTop - 4, -DEEP - 0.3], [x, wallTop + 0.6 + 0.07 * roofDepth * 0.55, -DEEP + roofDepth * 0.55], 0.28), 0x7b8087));
+  }
+  const roofGeo = mergeGeometries(roofParts).scale(1 / METRES(m), 1 / METRES(m), 1 / METRES(m));
+  roofParts.forEach(t => t.dispose());
+  const roofMat = new THREE.MeshStandardNodeMaterial({vertexColors: true, metalness: 0.2, roughness: 0.6});
+  const stands = [];
+  const addStand = (f, side) => {
+    const front = half + wall + m(7), out = dir => f.N.clone().multiplyScalar(side * dir);
+    const p = at(f, side * front, 0), rotated = {N: f.T.clone().multiplyScalar(side), B: f.B, T: f.N.clone().multiplyScalar(side)};
+    // nothing of it on another stretch of road: its corners and the middle of its back
+    const test = [[-22, 0], [22, 0], [-22, -DEEP], [22, -DEEP], [0, -DEEP]].map(([x, z]) => p.clone().addScaledVector(f.T, m(x)).addScaledVector(out(1), m(-z)));
+    if (test.every(q => clear(q, wall + m(3)))) stands.push({p, f: rotated});
+  };
+  // three in a row down each side of the start straight (a pit lane on one side clears its own, see clearOf), then every other corner
+  for (const k of [-1, 0, 1]) for (const s of [1, -1]) {
+    let i = 0;
+    while (i < n - 1 && dist[i] < (k + 1.2) * m(46)) i++;
+    addStand(F[i], s);
+  }
+  for (const k of [1, 2]) {
+    let i = n - 1;
+    while (i > 0 && dist[n - 1] - dist[i] < k * m(46)) i--;
+    addStand(F[i], 1);
+    addStand(F[i], -1);
+  }
+  runs.forEach((run, r) => { if (r % 2 === 0 && run.length > 3) { const f = run[run.length >> 1]; addStand(f, -Math.sign(f.P.clone().sub(run[0].P).dot(run[0].N)) || 1); } });
+  const standMeshes = stands.length ? [instanced(standGeo, crowd, stands), instanced(roofGeo, roofMat, stands)] : [];
+  made.push(...standMeshes);
 
   const stanchionGeo = new THREE.CylinderGeometry(m(0.05), m(0.05), m(4.1), 6).translate(0, m(2.05), 0);
   let posts = null;
@@ -151,6 +213,13 @@ export function buildTrackside({F, runs, half, wall, m, armco}) {
       posts.layers.set(1);  // with the fence they carry
       world.add(posts);
     },
+    // a pit lane's points: the stands standing on it go (zero-scale instances)
+    clearOf(points) {
+      const none = new THREE.Matrix4().makeScale(0, 0, 0), reach = (m(30)) ** 2;
+      stands.forEach(({p}, i) => {
+        if (points.some(q => (q.x - p.x) ** 2 + (q.z - p.z) ** 2 < reach)) for (const o of standMeshes) { o.setMatrixAt(i, none); o.instanceMatrix.needsUpdate = true; }
+      });
+    },
     night: v => { lamp.emissiveIntensity = v; },
     dispose(world) {
       if (posts) { world.remove(posts); posts.dispose(); }
@@ -160,7 +229,7 @@ export function buildTrackside({F, runs, half, wall, m, armco}) {
       roofMat.dispose();
       for (const o of made) { world.remove(o); o.geometry.dispose(); o.dispose(); }
       for (const mat of boardMats) { mat.map.dispose(); mat.dispose(); }
-      steel.dispose(); lamp.dispose(); crowd.dispose();
+      steel.dispose(); lamp.dispose(); crowd.dispose(); postMat.dispose();
     },
   };
 }

@@ -609,7 +609,7 @@ function effects(c, at, next, simDt, dt, fx) {
     vfx.spray(c.group.localToWorld(new THREE.Vector3(c.exhaust.x - 0.2, 0.15, rnd(-0.7, 0.7))), vel);
 }
 
-// RB22 cars (separate wheels and sprung body), from the car's motion: turn (rad) over moved (m) since the last frame.
+// Every car has separate wheels and a sprung body; from the car's motion: turn (rad) over moved (m) since the last frame.
 // Wheels roll by distance / radius and the fronts steer to the path's curvature (the player's car: its real road-wheel
 // angle); the body rolls with lateral g, pitches with longitudinal g (dive under braking, squat on throttle) and
 // settles as downforce (~v^2) compresses the springs; the DRS flap opens with the simulation's DRS.
@@ -623,13 +623,17 @@ function chassis(c, turn, moved, f) {
   const delta = f?.cam ? -f.cam.steer : THREE.MathUtils.clamp(Math.atan(c.wb * k), -0.38, 0.38);  // road-wheel angle, + = left
   c.delta = (c.delta ?? 0) + (delta - (c.delta ?? 0)) * 0.25;
   for (const w of c.wheels) if (w.front) w.pivot.rotation.y = c.delta;
-  c.steeringWheel.rotation.x = -c.delta * STEERING_RATIO;
-  c.pose();  // the driver's hands go with it
+  if (c.steeringWheel) {  // the RB22's: procedural cars have no cockpit interior
+    c.steeringWheel.rotation.x = -c.delta * STEERING_RATIO;
+    c.pose();  // the driver's hands go with it
+  }
   const gLat = THREE.MathUtils.clamp(c.v * c.v * k / 9.81, -6, 6);
   c.gLat = (c.gLat ?? 0) + (gLat - (c.gLat ?? 0)) * 0.1;
   c.body.rotation.x = 0.004 * c.gLat;                                    // ~0.25 deg/g, outside of the corner down
   c.body.rotation.z = 0.003 * THREE.MathUtils.clamp(c.acc / 9.81, -6, 3);  // nose down under braking
   c.body.position.y = -0.02 * Math.min(1, (c.v / 90) ** 2);              // ~20 mm of aero compression at 320 km/h
+  c.halo.rotation.copy(c.body.rotation);
+  c.halo.position.y = c.body.position.y;
 }
 
 // The focused car's rear-view mirrors reflect the scene in the cockpit view (its own rear wheels left out); built the

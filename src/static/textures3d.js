@@ -111,6 +111,13 @@ function foliage(S = 2048) {
     }
   };
   g.lineCap = 'round';
+  // a solid dark body under the needles: without it a spray's coverage averaged under the alpha cut-off a few mips down and
+  // the whole conifer dissolved to dust at a distance
+  g.fillStyle = shade(0.3, 0.1);
+  g.beginPath();
+  for (let x = 0; x <= S * 0.93; x += 8 * u) g.lineTo(ox + x, mid - env(x) * 0.62);
+  for (let x = S * 0.93; x >= 0; x -= 8 * u) g.lineTo(ox + x, mid + env(x) * 0.62);
+  g.fill();
   g.lineWidth = 3 * u;
   for (let x = 30 * u; x < S * 0.92; x += (34 + 20 * rand()) * u) {
     for (const s of [-1, 1]) {
@@ -118,7 +125,7 @@ function foliage(S = 2048) {
       g.strokeStyle = '#4a3c2e';
       g.lineWidth = 3 * u;
       g.beginPath(); g.moveTo(ox + x, mid); g.lineTo(ox + tx, ty); g.stroke();
-      g.lineWidth = 2.2 * u;
+      g.lineWidth = 3.4 * u;
       needles(x, mid, tx, ty, (14 + 8 * rand()) * u, Math.ceil(h / (3 * u)), 0.42 + 0.4 * (x / S));
     }
   }
@@ -145,19 +152,13 @@ export function textures(high) {
     gravel: photo('gravel_floor', 2.25, 6, speckle('#b8a580', 30000, 0.3), high ? '4k' : '1k'),
     // kerb: red/white blocks a metre long (strip UVs repeat every 2 m) with ridges every 12.5 cm across them
     kerbRidges: normalTex(64, (u, v) => 0.5 * Math.sin(2 * Math.PI * 16 * v), 0.006),
-    // debris fence on the barriers: 8 cm diamond mesh, a post every 4 m (one tile), top and bottom rails. Alpha cut out
-    // at 0.5: the wires are 0.6, so at the first coarser mip they average under the cut-off and drop out together (fully
-    // opaque wires dithered into moiré dots at mid distance), leaving posts and rails.
+    // debris fence on the barriers: 8 cm diamond mesh; stanchions and rails are real geometry (trackside.js, circuit3d.js)
     fence: canvasTex(512, 384, (g, w, h) => {
-      g.strokeStyle = 'rgba(163,168,173,0.6)';
+      g.strokeStyle = 'rgba(150,155,160,0.75)';
       g.lineWidth = 2;
       for (let x = -h; x < w + h; x += 10) {
         g.beginPath(); g.moveTo(x, 0); g.lineTo(x + h, h); g.moveTo(x, h); g.lineTo(x + h, 0); g.stroke();
       }
-      g.fillStyle = '#6d7277';
-      g.fillRect(0, 0, 14, h);  // post
-      g.fillRect(0, 0, w, 6);   // top rail
-      g.fillRect(0, h - 6, w, 6);
     }),
     // relief for the terrain under its satellite / grass colour: tufts and soil in the normal and roughness maps
     ground: photo('sparse_grass', 3, 0, speckle('#5a7a3a', 2000, 0.2), high ? '4k' : '2k'),
@@ -171,18 +172,47 @@ export function textures(high) {
       }
     }),
     kerb: canvasTex(8, 64, (g, w, h) => {
-      g.fillStyle = '#c4161c';
+      g.fillStyle = '#a30d12';  // the tone curve lifts red towards salmon
       g.fillRect(0, 0, w, h / 2);
       g.fillStyle = '#e8e8e4';
       g.fillRect(0, h / 2, w, h / 2);
     }),
-    wall: canvasTex(128, 32, (g, w, h) => {
-      g.fillStyle = '#1f3f8f';
-      g.fillRect(0, 0, w / 2, h);
-      g.fillStyle = '#ececec';
-      g.fillRect(w / 2, 0, w / 2, h);
-      g.fillStyle = '#222';
-      g.fillRect(0, h * 0.82, w, h * 0.18);
+    // one 8 m tile of barrier, 1.1 m tall: two boards on a concrete base, tyre scuffs low down, a joint at each block
+    wall: canvasTex(2048, 282, (g, w, h) => {
+      const boardH = h * 0.8;
+      [['#16181d', '#f2f2f2'], ['#eeeeec', '#16181d']].forEach(([back, ink], k) => {
+        const x = k * w / 2;
+        g.fillStyle = back;
+        g.fillRect(x, 0, w / 2, boardH);
+        g.fillStyle = '#c4161c';
+        g.fillRect(x, boardH - 10, w / 2, 10);
+        g.fillStyle = ink;
+        g.font = '800 italic 112px Geist, system-ui, sans-serif';
+        g.textAlign = 'center';
+        g.textBaseline = 'middle';
+        g.fillText('LIGHTS OUT', x + w / 4, boardH / 2 + 2);
+      });
+      g.fillStyle = '#7d7f82';
+      g.fillRect(0, boardH, w, h - boardH);
+      for (let i = 0; i < 90; i++) {  // rubber and dirt
+        g.fillStyle = `rgba(15,15,15,${0.04 + 0.1 * rand()})`;
+        g.fillRect(rand() * w, h * (0.55 + 0.45 * rand()), 40 + rand() * 260, 2 + rand() * 7);
+      }
+      g.fillStyle = 'rgba(0,0,0,0.5)';
+      for (const x of [0, w / 2]) g.fillRect(x - 2, 0, 4, h);
+    }),
+    // three-rail Armco, 1.1 m tall: 8 m of rails over dark gaps, each rail bright along its bulge
+    armco: canvasTex(256, 128, (g, w, h) => {
+      g.fillStyle = '#34363a';
+      g.fillRect(0, 0, w, h);
+      for (let k = 0; k < 3; k++) {
+        const y = 6 + k * 42, rail = g.createLinearGradient(0, y, 0, y + 34);
+        rail.addColorStop(0, '#6e7278'); rail.addColorStop(0.5, '#c8ccd2'); rail.addColorStop(1, '#5c6066');
+        g.fillStyle = rail;
+        g.fillRect(0, y, w, 34);
+      }
+      g.fillStyle = '#2a2c30';
+      for (const x of [0, w / 2]) g.fillRect(x, 0, 6, h);
     }),
     checker: canvasTex(64, 16, (g, w, h) => {
       for (let x = 0; x < 8; x++) for (let y = 0; y < 2; y++) {

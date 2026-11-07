@@ -6,7 +6,7 @@ import * as THREE from 'three';
 import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
 import {SkyMesh} from 'three/addons/objects/SkyMesh.js';
 import {mergeGeometries} from 'three/addons/utils/BufferGeometryUtils.js';
-import {attribute, float, fract, mix, mrt, output, smoothstep, time, vec3} from 'three/tsl';
+import {attribute, float, fract, mix, smoothstep, time, vec3} from 'three/tsl';
 import {el} from './util.js';
 import {ready, setDeck, shared} from './scene3d.js';
 import {buildCar} from './cars3d.js';
@@ -18,7 +18,7 @@ const RIGS = [
    key: [0xf4f7ff, 2.2, [0.4, 7, 0.2]], extra: [[0xcfdcff, 0.5, [-5, 2.5, 4]], [0xcfdcff, 0.5, [5, 2.5, -4]]]},
   {name: 'Sunset Golden Hour', env: 'sunset', envI: 0.8, bg: 0x2a1a18, floor: 0x3a2c28, floorR: 0.3,
    key: [0xffa861, 3.4, [-6, 1.8, 3]], extra: [[0x7f94c9, 0.5, [5, 3, -4]]]},
-  {name: 'Dark Wind-Tunnel Rim Light', env: 'room', envI: 0.12, bg: 0x030405, floor: 0x08090b, floorR: 0.2,
+  {name: 'Dark Wind-Tunnel Rim Light', env: 'room', envI: 0.12, bg: 0x030405, floor: 0x08090b, floorR: 0.6,
    key: [0x9fd8ff, 4.5, [-3, 3, -6]], extra: [[0xeaf6ff, 3.5, [3.5, 2.5, 6]], [0x4aa8ff, 1.2, [0, 0.4, 7]]]},
 ];
 
@@ -210,9 +210,8 @@ async function create(host) {
   setRig(0);
 }
 
-// The canvas's one attachment, named as the scene pass's: a material writing only bloom or velocity matches nothing here and
-// compiles to an empty, invalid shader (as in mirror.js).
-const OUTPUTS = mrt({output});
+// No MRT here: the canvas's frame buffer texture isn't named 'output', so mrt({output}) matches nothing and every material
+// compiles to an empty output struct, which WebGPU refuses (no car, no airflow).
 const draw = () => {
   // A renderer only hears the resize of its current target, and that's this one only here: resized from the observer its
   // depth buffer stayed the old size, and WebGPU refused every frame.
@@ -220,9 +219,7 @@ const draw = () => {
   S.controls.update();
   placePins();
   const {renderer} = shared();
-  renderer.setMRT(OUTPUTS);
   renderer.render(S.scene, S.camera);
-  renderer.setMRT(null);
 };
 
 export async function openShowroom(host) {

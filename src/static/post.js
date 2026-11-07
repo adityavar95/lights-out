@@ -118,9 +118,9 @@ export function createPost(renderer, scene, camera, samples = 4) {
     // threshold in linear HDR: 2.5 rather than a display-range 0.85, or every pixel of the photographed sky would bloom.
     // Only sun glints, sparks, hot brakes and rain lights get there, and emissive is lifted so they always do.
     bloomNode = bloom(blurred.rgb.add(glow.rgb.mul(1.5)), 0.32, 0.45, 2.5);
-    // lateral chromatic aberration: red and blue land at slightly different magnifications, ~3 px at a 1080p corner
+    // lateral chromatic aberration: red and blue land at slightly different magnifications, ~1 px at a 1080p corner
     const lens = Fn(() => {
-      const p = uv(), d = p.sub(0.5), o = d.mul(dot(d, d)).mul(0.006);
+      const p = uv(), d = p.sub(0.5), o = d.mul(dot(d, d)).mul(0.002);
       return vec4(blurred.sample(p.add(o)).r, blurred.sample(p).g, blurred.sample(p.sub(o)).b, 1);
     })();
     // AgX keeps highlights from clipping but flattens everything else: a red livery came out salmon, the asphalt pale grey.

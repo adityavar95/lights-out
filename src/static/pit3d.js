@@ -19,7 +19,7 @@ const tint = (geo, color) => {
 // panel inside, and the team's box painted on the lane (where the car stops). laneHalf: m. Returns the meshes.
 export function garages(boxes, mps, laneHalf) {
   const box = (w, h, d, x, y, z) => new THREE.BoxGeometry(w, h, d).translate(x, y, z);
-  const parts = {shell: [], upper: [], band: [], light: [], paint: []}, m = new THREE.Matrix4(), s = 1 / mps;
+  const parts = {shell: [], upper: [], glass: [], band: [], light: [], paint: []}, m = new THREE.Matrix4(), s = 1 / mps;
   for (const {P, out, color} of boxes) {
     const up = new THREE.Vector3(0, 1, 0), z0 = laneHalf + APRON;  // m from the lane's centre to the doors
     // a right-handed basis (x = up x z), or the mirrored boxes would face inside out; a bay is symmetric in x
@@ -30,6 +30,8 @@ export function garages(boxes, mps, laneHalf) {
     put(parts.shell, box(BAY, DOOR, 0.3, 0, DOOR / 2, z0 + DEEP));                    // back wall
     for (const x of [-BAY / 2, BAY / 2]) put(parts.shell, box(0.6, DOOR, DEEP, x, DOOR / 2, z0 + DEEP / 2));  // partitions
     put(parts.upper, box(BAY, 4, DEEP + 1.5, 0, DOOR + 2.6, z0 + DEEP / 2 - 0.75));   // upper floor, overhanging the doors
+    put(parts.upper, box(BAY, 0.35, DEEP + 3, 0, DOOR + 4.8, z0 + DEEP / 2 - 1.5));   // the roof, its edge shading the windows
+    put(parts.glass, box(BAY - 0.5, 2.4, 0.08, 0, DOOR + 2.7, z0 - 1.54));            // the hospitality floor's window band
     put(parts.band, tint(box(BAY - 0.6, 0.6, 0.2, 0, DOOR + 0.3, z0 - 0.75), color));
     put(parts.light, new THREE.PlaneGeometry(BAY - 2, DEEP - 2).rotateX(Math.PI / 2).translate(0, DOOR - 0.02, z0 + DEEP / 2));
     // the box: a team-colour rectangle where the car stops, 6.4 x 2.6 m
@@ -47,6 +49,7 @@ export function garages(boxes, mps, laneHalf) {
   return [
     mesh(parts.shell, new THREE.MeshStandardMaterial({color: 0x9da1a6, roughness: 0.6})),
     mesh(parts.upper, new THREE.MeshStandardMaterial({color: 0xe4e6e9, roughness: 0.8})),
+    mesh(parts.glass, new THREE.MeshStandardMaterial({color: 0x10151b, roughness: 0.08, metalness: 0.85}), false),
     mesh(parts.band, new THREE.MeshStandardMaterial({vertexColors: true, roughness: 0.5}), false),
     mesh(parts.light, new THREE.MeshStandardMaterial({color: 0x111111, emissive: 0xf4f6ff, emissiveIntensity: 1.2}), false),
     mesh(parts.paint, new THREE.MeshStandardMaterial({vertexColors: true, roughness: 0.7}), false),

@@ -1,6 +1,7 @@
 /* circuit selector (circuitdeck.js): a glass deck over the 3D stage, a grid of circuit cards */
 .circuitdeck { position: absolute; z-index: 4; inset: 64px 24px calc(var(--deck-h, 64px) + 18px); display: flex; flex-direction: column;
   gap: 8px; padding: 8px 12px; color: var(--hud-ink); animation: cdin var(--panel-t); }
+.glass.circuitdeck { background: rgb(14 14 14 / .96); }  /* the race HUD's text behind it made the cards unreadable */
 .circuitdeck[hidden] { display: none; }
 @keyframes cdin { from { transform: translateY(-14px) scale(.98); opacity: 0; } }
 .circuitdeck .pwhead .phead { margin: 0; }
