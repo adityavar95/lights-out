@@ -20,8 +20,9 @@ import {setupLoadStage, stage, stageDone, progressOf, announce} from './loadstag
 const SIZE = 1000;                  // the circuit is scaled to this many scene units across
 const UP = new THREE.Vector3(0, 1, 0);
 const SUN = new THREE.Vector3(0.45, 0.62, 0.3).normalize();  // direction towards the sun; re-aimed at the HDRI's sun
-// photographed HDR sky (CC0, Poly Haven), 4k on every tier, from scripts/fetch_assets.py; the procedural sky stays if the file is missing
+// photographed HDR sky (CC0, Poly Haven): 4k on every tier once downloaded (assets.py); until then the 1k streams (1.4 MB, not 21)
 const hdri = name => `/static/assets/hdri/${name}_4k.hdr`;
+const streamed = url => `https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/${url.split('/').pop().replace('_4k', '_1k')}`;
 // L cycles them. sun: direct light, env: image-based light, hemi: fill; lamps: the floodlights' glow
 const SKIES = [
   {name: 'Midday', url: hdri('kloofendal_48d_partly_cloudy_puresky'), sun: 3.2, color: 0xfff8ed, env: 0.7, hemi: 0.15, lamps: 0},
@@ -303,7 +304,7 @@ export const graphicsTier = () => post.tier.name;
 function loadSky(preset) {
   const token = ++skyToken;
   stage('sky', `Sky: ${preset.name}`);
-  new HDRLoader().load(preset.url, hdr => {
+  const load = (url, next) => new HDRLoader().load(url, hdr => {
     if (token !== skyToken) { hdr.dispose(); return; }  // pressed L again meanwhile
     const {data, width: w, height: h} = hdr.image, half = THREE.DataUtils.fromHalfFloat;
     let best = 0, at = 0;
@@ -341,9 +342,11 @@ function loadSky(preset) {
     resized = true;  // a still frame should show it now
     stageDone('sky');
   }, e => stage('sky', `Sky: ${preset.name}`, progressOf(e)), e => {
+    if (next) return load(next);
     console.warn('3D: the sky could not be loaded', e);
     stageDone('sky', 'offline: keeping this sky');
   });
+  load(preset.url, streamed(preset.url));
 }
 
 // ---------- circuit (circuit3d.js builds it) ----------

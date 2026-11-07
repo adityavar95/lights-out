@@ -14,6 +14,7 @@ import {capturing} from './input.js';
 import {setupPalette, openPalette, openSheet, openCounts, copyLink} from './palette.js';
 import {parseHash, formatHash} from './share.js';
 import {resultLedgers} from './ledgers.js';
+import {setupDownloads, startDownload, canDownload} from './downloads.js';
 
 const $ = id => document.getElementById(id);
 const A = {year: null, round: null, races: [], mode: 'watch', section: 'analytics'};
@@ -386,6 +387,7 @@ function commands() {
       A.bounced = false;
       activate(b.dataset.tab);
     }})) : []),
+    ...(canDownload() ? [{label: 'Download assets', hint: 'About 600 MB', run: startDownload}] : []),
     {label: 'Circuits', hint: 'Simulate', run: () => { setView('sim'); open('circuitdeck'); }},
     {label: 'Cars', hint: 'Simulate', run: () => { setView('sim'); open('carsdeck'); }},
     ...(A.round ? [{label: 'Telemetry trace', hint: 'Shift T', run: () => { stage(); open('tracedeck'); }},
@@ -530,6 +532,7 @@ async function init() {
   setInterval(checkLive, 60000);
   setupGlass();
   nextSession();
+  setupDownloads();
   // the circuit selector (circuitdeck.js): a simulation at that circuit's latest race, switching season if needed
   addEventListener('f1:circuit', ({detail: {year, round}}) => {
     setMode('sim', false);

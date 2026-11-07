@@ -349,11 +349,10 @@ Windows users can [download the exe](#%EF%B8%8F-desktop-app-and-executable): unz
 git clone https://github.com/adityavar95/lights-out.git F1
 cd F1
 uv sync
-uv run python scripts/fetch_assets.py  # three.js, fonts, skies, textures, satellite tiles: 610 MB, ~45 min, once
 uv run python src/server.py
 ```
 
-Open **http://127.0.0.1:8086**. Other devices on the same network can open **http://&lt;this-computer-ip&gt;:8086** (the server prints the address). If Windows Firewall asks, allow access on private networks.
+Open **http://127.0.0.1:8086**. The first load fetches the page's libraries, so it needs internet. The **Download assets** button at the top right fetches every 4K sky and texture and the satellite ground (about 600 MB, ~45 min, resumes if interrupted), so nothing has to load later. Without it the 3D view streams lighter versions. The exe ships with all of this, so there the button just reads **Assets ready**. Other devices on the same network can open **http://&lt;this-computer-ip&gt;:8086** (the server prints the address). If Windows Firewall asks, allow access on private networks.
 
 > [!NOTE]
 > On start-up the server builds the GPS replays of the season's last 3 races in the background. The first replay of any other GPS session downloads every car's trace from OpenF1 (20–60 s); the lap-timing replay plays meanwhile and the GPS replay takes over when it's ready. Finished sessions are cached in `.cache/replay/`.

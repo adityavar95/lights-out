@@ -3,7 +3,8 @@
 import * as THREE from 'three';
 import {normalTex} from './cars3d.js';
 
-const PH = '/static/assets/textures';  // Poly Haven's, downloaded by scripts/fetch_assets.py
+const PH = '/static/assets/textures';  // Poly Haven's, once downloaded (assets.py); until then its 1k sets stream (9 MB, not 133)
+const CDN = 'https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k';
 
 let seed = 1;
 const rand = () => (seed = (seed * 16807) % 2147483647) / 2147483647;  // seeded so textures don't change between loads
@@ -42,8 +43,8 @@ function photo(name, metres, tile, fallback, res = '1k') {
     set[k].anisotropy = 16;  // the road is mostly seen at grazing angles; three clamps this to what the GPU supports
     // decoded off the main thread (an <img> decoded inside the texture upload: ~80 ms per 4k photo, at the first frame).
     // An ImageBitmap ignores the texture's flipY, so it comes flipped as the upload would have flipped the <img>.
-    new THREE.ImageBitmapLoader().setOptions({imageOrientation: 'flipY', premultiplyAlpha: 'none', colorSpaceConversion: 'none'})
-      .load(`${PH}/${res}/${name}/${name}_${file}_${res}.jpg`, img => {
+    const loader = new THREE.ImageBitmapLoader().setCrossOrigin('anonymous').setOptions({imageOrientation: 'flipY', premultiplyAlpha: 'none', colorSpaceConversion: 'none'});
+    const landed = img => {
         const t = set[k];
         t.dispose();
         t.image = img;
@@ -51,7 +52,9 @@ function photo(name, metres, tile, fallback, res = '1k') {
         t.flipY = false;  // WebGPU would honour it and undo the flip the loader already made
         t.needsUpdate = true;
         t.onUpdate = () => img.close();  // decoded photos (up to 64 MB each at 4k) aren't needed once on the GPU
-      }, undefined, () => {});
+    };
+    loader.load(`${PH}/${res}/${name}/${name}_${file}_${res}.jpg`, landed, undefined,
+      () => loader.load(`${CDN}/${name}/${name}_${file}_1k.jpg`, landed, undefined, () => {}));
   }
   return set;
 }

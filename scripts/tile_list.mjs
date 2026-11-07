@@ -1,4 +1,4 @@
-// Which imagery tiles the app asks for at each circuit, so fetch_assets.py can download exactly those: the same fit and box
+// Which imagery tiles the app asks for at each circuit, so the download (assets.py) fetches exactly those; scripts/tile_list.py runs this: the same fit and box
 // as scene3d.js setGround + groundwork.js, at each size it asks for, plus Stream's aerial picture.
 // In (stdin): [{x, y, rotation, mpu, geo: {x, y, lat, lng}}]. Out (stdout): ["z/y/x", ...].
 import {readFileSync} from 'node:fs';

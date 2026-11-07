@@ -23,6 +23,7 @@ from starlette.middleware.gzip import DEFAULT_EXCLUDED_CONTENT_TYPES, GZipMiddle
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
+import assets
 import f1auth
 import f1tv
 import ledgers
@@ -65,6 +66,10 @@ def season(year: int):
 
 @app.get("/")
 def index():
+    try:
+        assets.core()
+    except Exception as e:
+        raise HTTPException(503, f"The first start needs internet to fetch the page's libraries: {e!r}")
     return FileResponse(Path(__file__).parent / "static" / "index.html")
 
 
@@ -565,6 +570,21 @@ def count(event: str, request: Request):
     return Response(status_code=204)
 
 
+@app.get("/api/assets")
+def assets_status():
+    """Whether the 3D resources are downloaded, and how a download is going (downloads.js)."""
+    return assets.status()
+
+
+@app.post("/api/assets/download", status_code=202)
+def assets_download(request: Request):
+    origin = request.headers.get("origin")
+    if origin and urlsplit(origin).netloc != request.headers.get("host"):  # another site's page can't start a 600 MB download
+        raise HTTPException(403, "Cross-origin download")
+    assets.start()
+    return Response(status_code=202)
+
+
 @app.get("/api/counts")
 def counts():
     """The usage counts so far: {day: {event: n}}."""
@@ -577,8 +597,6 @@ def warm_up():
     ~10 ms warm; the page asked for them one after another), and the GPS replays of the season's last 3 races (~30
     OpenF1 requests, ~40 s each on the free tier; a click meanwhile waits on REPLAY_LOCKS instead of building it twice).
     All network-bound, so threads run them side by side despite the GIL."""
-    if not (Path(__file__).parent / "static" / "assets" / "three").exists():
-        print("3D assets are missing: run scripts/fetch_assets.py")
     today = date.today().isoformat()
     year = int(today[:4])
     try:

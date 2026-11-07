@@ -79,6 +79,9 @@ button, select, input { font: inherit; color: var(--ink); }
 .nextbtn { margin-left: auto; border-radius: 999px; padding: 4px 12px; font-size: 13px; cursor: pointer; white-space: nowrap; font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .nextbtn b { color: var(--ink); }
 .nextbtn[hidden] { display: none; }
+.dlbtn { flex: none; border-radius: 999px; padding: 4px 12px; font-size: 13px; white-space: nowrap; cursor: pointer; font-variant-numeric: tabular-nums; }
+.dlbtn:disabled { cursor: default; background: none; border: 1px solid var(--hairline); color: var(--muted); }
+.dlbtn[hidden] { display: none; }
 @media (max-width: 1400px) { .nextwhere { display: none; } }  /* the tooltip still names the race */
 @media (max-width: 1300px) { .nextbtn:not([hidden]) { display: none; } }  /* no room in the narrower headers; Stream's Coming up row has it */
 /* a race run since the last visit (app.js newRace) */
