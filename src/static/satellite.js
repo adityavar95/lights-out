@@ -70,10 +70,14 @@ export const mercator = ([lon, lat], z) => {
   return [(lon + 180) / 360 * s, (1 - Math.asinh(Math.tan(r)) / Math.PI) / 2 * s];
 };
 
-// Imagery covering [lon, lat] points at the sharpest zoom (up to 18, ~0.6 m per pixel) that fits in maxPx square.
-// Resolves {canvas (an OffscreenCanvas), z, x0, y0} (x0, y0: the canvas's top-left Mercator pixel); tiles that fail to
-// load stay black. Called in groundwork.js's worker, which also fetches and decodes the tiles off the main thread.
-export async function satellite(corners, maxPx) {
+// Downloaded tiles first (scripts/fetch_assets.py); Esri for any it doesn't hold, such as an older layout's edge
+export const fetchTile = async (z, y, x) => {
+  const local = await fetch(`/static/assets/tiles/${z}/${y}/${x}.jpg`);
+  return local.ok ? local : fetch(`${TILES}/${z}/${y}/${x}`);
+};
+
+// The sharpest zoom (up to 18, ~0.6 m per pixel) whose tiles round [lon, lat] points fit in maxPx square, and their range
+export function tileRange(corners, maxPx) {
   let z = 18, a, b;
   for (; z > 10; z--) {
     const px = corners.map(c => mercator(c, z));
@@ -81,14 +85,42 @@ export async function satellite(corners, maxPx) {
     b = [Math.max(...px.map(p => p[0])), Math.max(...px.map(p => p[1]))].map(v => Math.floor(v / 256));
     if ((b[0] - a[0] + 1) * 256 <= maxPx && (b[1] - a[1] + 1) * 256 <= maxPx) break;
   }
+  return {z, a, b};
+}
+
+// Imagery covering [lon, lat] points at tileRange's zoom.
+// Resolves {canvas (an OffscreenCanvas), z, x0, y0} (x0, y0: the canvas's top-left Mercator pixel); tiles that fail to
+// load stay black. Called in groundwork.js's worker, which also fetches and decodes the tiles off the main thread.
+export async function satellite(corners, maxPx, onProgress = () => {}) {
+  const {z, a, b} = tileRange(corners, maxPx);
   // willReadFrequently: a CPU canvas. A GPU one's ImageBitmap belongs to the worker's GPU context and went invalid when the
   // worker ended (black ground, 'invalid mailbox name' GL errors)
   const canvas = new OffscreenCanvas((b[0] - a[0] + 1) * 256, (b[1] - a[1] + 1) * 256), g = canvas.getContext('2d', {willReadFrequently: true});
-  const jobs = [], get = (url, retry = 1) => fetch(url).catch(e => (retry ? get(url, retry - 1) : Promise.reject(e)));  // a network blip
+  // Six at a time: a circuit is up to ~480 tiles, and firing them all at once made the browser queue them behind every other
+  // request of the page. Retries back off, since a failing tile server won't recover in the next millisecond. Stopping
+  // is the worker's terminate() (scene3d.js setGround, on a circuit switch), which cancels whatever is in flight.
+  const get = async (x, y, tries = 3) => {
+    for (let i = 0; ; i++) {
+      try {
+        const r = await fetchTile(z, y, x);
+        if (r.ok || r.status < 500 || i >= tries) return r;
+      } catch (e) {
+        if (i >= tries) throw e;
+      }
+      await new Promise(done => setTimeout(done, 250 * 2 ** i));
+    }
+  };
+  const jobs = [];
   for (let x = a[0]; x <= b[0]; x++) for (let y = a[1]; y <= b[1]; y++) {
-    jobs.push(get(`${TILES}/${z}/${y}/${x}`).then(r => (r.ok ? r.blob() : null)).then(blob => blob && createImageBitmap(blob))
-      .then(img => img && g.drawImage(img, (x - a[0]) * 256, (y - a[1]) * 256), () => {}));
+    jobs.push(() => get(x, y).then(r => (r.ok ? r.blob() : null)).then(blob => blob && createImageBitmap(blob))
+      .then(img => { if (img) { g.drawImage(img, (x - a[0]) * 256, (y - a[1]) * 256); img.close(); } }, () => {}));
   }
-  await Promise.all(jobs);
+  let next = 0, finished = 0;
+  await Promise.all(Array.from({length: 6}, async () => {
+    while (next < jobs.length) {
+      await jobs[next++]();
+      onProgress(++finished / jobs.length);
+    }
+  }));
   return {canvas, z, x0: a[0] * 256, y0: a[1] * 256};
 }

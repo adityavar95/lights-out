@@ -385,6 +385,35 @@ def telemetry(session: dict, driver_number: int, start: datetime, duration: floa
     return data
 
 
+EVENTS = CACHE.parent / "events"
+
+
+def session_events(session: dict) -> dict:
+    """What the F1 TV viewer's seek bars mark: race control, who led and the start, in 4 requests where a GPS replay
+    takes ~30. Times in seconds from `start`, the same window as session_telemetry."""
+    sk = session["session_key"]
+    cached = EVENTS / f"{sk}.json"
+    if cached.exists():
+        return json.loads(cached.read_text())
+    start = ts(session["date_start"]) - timedelta(minutes=10)
+    rel = lambda d: round((ts(d) - start).total_seconds(), 1)
+    first = [rel(l["date_start"]) for l in openf1(f"laps?session_key={sk}&lap_number=1") if l.get("date_start")]
+    data = {
+        "start": start.isoformat(),
+        "duration": (ts(session["date_end"]) - start).total_seconds() + 40 * 60,
+        "drivers": [{"id": str(d["driver_number"]), "code": d["name_acronym"]} for d in openf1(f"drivers?session_key={sk}")],
+        "race_control": sorted(([rel(m["date"]), m.get("category"), m.get("flag"), m["message"]]
+                                for m in openf1(f"race_control?session_key={sk}")), key=lambda e: e[0]),
+        "positions": sorted(([rel(p["date"]), str(p["driver_number"]), 1] for p in openf1(f"position?session_key={sk}&position=1")),
+                            key=lambda e: e[0]),
+        "first_lap": min(first) if first and session.get("session_type") == "Race" else None,
+    }
+    if _finished(session):
+        EVENTS.mkdir(parents=True, exist_ok=True)
+        save(cached, data)
+    return data
+
+
 def session_telemetry(session: dict, driver_number: int) -> dict:
     """The whole session's telemetry for one car (the F1 TV overlay): 10 min before the scheduled start to 40 min
     after the scheduled end, with the grid's start time, since a broadcast's video runs on past both."""

@@ -7,7 +7,7 @@ import {buildTrack, trackPos, at, idx} from './track.js';
 import {COMPOUNDS, thermalGrip, wearGrip, surfaceGrip, aquaplaneSpeed} from './tyres.js';
 import {createWeather, weatherStep, setWetness, wetAt, trackWetness} from './weather.js';
 import {createControl, controlStep, deploy, neutralised, vscDelta, safetyCar} from './racecontrol.js';
-import {createPit, pitControl, inPitLane, aiStrategy, aiPace, predictRejoin, PACE, pitLayout, lanePath, lanePos, pitPath, laneFor, ease} from './strategy.js';
+import {createPit, pitControl, inPitLane, aiStrategy, aiPace, predictRejoin, PACE, pitLayout, lanePath, lanePos, pitPath, laneFor, ease, PIT_LIMIT} from './strategy.js';
 import {racecraft, resolveContacts, blocker} from './racecraft.js';
 import {playerControls, ASSISTS} from './player.js';
 import {carSpec, gearUp, aero as aeroStep, vehicleStep, lateralLimit, autoShift, control} from './vehicle.js';
@@ -71,6 +71,14 @@ function envelope(T, c, plan, s0, n) {
   return {v, vmax};
 }
 
+// The envelope reads the track per sample, so it only moves when the car crosses a sample (every ~4 steps at speed) or its
+// grip shifts. It was a quarter of the page's CPU at 10x, recomputed for every car every step.
+function planned(T, car, c, plan, look) {
+  const i = idx(T, car.s), e = car.env;
+  if (e?.i === i && e.look >= look && Math.abs(plan.mu - e.mu) < 0.003 * e.mu && Math.abs(plan.ClA - e.ClA) < 0.005 * e.ClA) return e;
+  return (car.env = {...envelope(T, c, plan, car.s, look), i, look, mu: plan.mu, ClA: plan.ClA});
+}
+
 const CORNERS = ['FL', 'FR', 'RL', 'RR'];
 
 // entry list in grid order, one car per driver: a shared drive lists its driver once per car (Moss, Britain 1957)
@@ -87,6 +95,11 @@ export function createRace({year, mapPts, mpu, width, drivers, laps, compounds, 
   c.ClA *= aero?.cl ?? 1;
   c.CdA *= aero?.cd ?? 1;
   c.drsCut = aero?.drs ?? 0.22;  // a small Monza rear wing gains less from opening the flap
+  // Thin air at altitude takes downforce and drag alike (both go as rho), and the power of an engine with no turbo
+  const air = (ann?.rho ?? RHO) / RHO;
+  c.ClA *= air;
+  c.CdA *= air;
+  if (!c.turbo) c.pIce *= air;
   gearUp(c, c.CdA * (c.active ? c.active.xCd : c.drs ? 1 - c.drsCut : 1));  // geared for the circuit's top speed
   const total = laps ?? Math.ceil(305e3 / T.len);  // race distance: the fewest complete laps covering 305 km
   const cars = drivers.map((id, g) => ({
@@ -94,7 +107,7 @@ export function createRace({year, mapPts, mpu, width, drivers, laps, compounds, 
     spec: {...c}, ctl: control(),  // its own copy of the car (its fuel burns) and the controls it is driven with
     skill: 1 + 0.012 * (1 - 2 * g / Math.max(1, drivers.length - 1)),  // qualifying order as car/driver pace, +-1.2 %
     tyre: {compound: compounds?.[g] ?? ['MEDIUM', 'SOFT', 'MEDIUM', 'HARD'][g % 4], health: [100, 100, 100, 100],
-           ts: [70, 70, 60, 60], tc: [70, 70, 60, 60]},                     // blankets: ~70 C front, 60 C rear
+           ts: [70, 70, 70, 70], tc: [70, 70, 70, 70]},                     // off the blankets: 70 C
     pit: createPit(compounds?.[g] ?? ['MEDIUM', 'SOFT', 'MEDIUM', 'HARD'][g % 4]), stint: 0, hist: [], attackLaps: 0,
     pace: 'BALANCED', paceUser: null, slide: 0, wet: 0, spray: 0, vref: new Float32Array(T.n),  // green-flag speed per sample
     player: false, delta: 0, kPath: 0, psi: 0, vy: 0, r: 0, aLong: 0, spin: 0, locked: false, tcCut: false, damage: 0, contact: 0,
@@ -108,11 +121,11 @@ export function createRace({year, mapPts, mpu, width, drivers, laps, compounds, 
   }));
   // the start: five red lights come on a second apart, then go out together after a random 0.2-3 s hold
   const R = {T, c, total, cars, t: 0, status: 'RED', lightsOut: 5.2 + 2.8 * Math.random(), laps: {}, leaderPass: [], winner: null, done: false,
-             W: createWeather(), control: createControl(c.overtake ? 'OVERTAKE' : 'DRS'),
+             W: createWeather(), control: createControl(c.overtake ? 'OVERTAKE' : 'DRS', year >= 2024 ? 1 : 2),
              ai: {pace: 1, aggression: 0.5}, assists: {...ASSISTS}, input: {throttle: 0, brake: 0, steer: 0, clutch: 0}, player: null,
              wing: 0,  // pit-wall trim, -5..+5 clicks
              // the circuit's real pit lane from GPS when there is one, else one alongside the main straight
-             pit: (pitLane && lanePath(T, pitLane)) ?? pitLayout(T, pitLoss ? laneFor(+pitLoss.normal) : 400)};
+             pit: Object.assign((pitLane && lanePath(T, pitLane)) ?? pitLayout(T, pitLoss ? laneFor(+pitLoss.normal, ann?.pitLimit ?? PIT_LIMIT) : 400), {limit: ann?.pitLimit ?? PIT_LIMIT})};
   for (const car of cars) R.laps[car.id] = [];
 
   // the car on track directly in front (any lap), as a distance and a time gap at the follower's speed
@@ -231,7 +244,7 @@ export function createRace({year, mapPts, mpu, width, drivers, laps, compounds, 
     // corner-mode aero (the 2026 flaps shut the moment the driver lifts) at the settled ride height.
     const look = Math.min(140, Math.ceil((v * v / 16 + 80) / T.ds));
     car.plan = {mu: muPlan, ClA: A.ClAplan, CdA: A.CdA};  // also for the racing-line ribbon
-    const env = envelope(T, c, car.plan, car.s, look);
+    const env = planned(T, car, c, car.plan, look);
     let vAllow = env.v[0], brakeAhead = Infinity, turn = 1, slowest = 150;
     for (let j = 1; j <= look; j++) {
       if (env.vmax[j] < v - 8 && j * T.ds < brakeAhead) brakeAhead = j * T.ds;
@@ -249,7 +262,7 @@ export function createRace({year, mapPts, mpu, width, drivers, laps, compounds, 
     if (o && safetyCar(ctl) && car.gapAhead < 80) vAllow = Math.min(vAllow, o.v + (car.gapAhead - 15) * 0.8);
     // (racecraft.js blocker: lanes judged on where the car is and where it's heading, so converging lines count)
     else if (!car.player && (car.block = blocker(R, car))) vAllow = Math.min(vAllow, car.block.o.v + (car.block.gap - 8 - 0.15 * v) * 1.5);
-    if (pit) vAllow = Math.min(vAllow, pit.vCap);  // pit entry braking and the 80 km/h limiter
+    if (pit) vAllow = Math.min(vAllow, pit.vCap);  // pit entry braking and the limiter
     if (car.finished) vAllow = Math.min(vAllow, 45);  // cool-down lap
 
     // --- ERS mode, and (AI) the lane: racecraft.js picks racing line / tow / attack / defence and leaves the space ---
@@ -296,24 +309,24 @@ export function createRace({year, mapPts, mpu, width, drivers, laps, compounds, 
     const s0 = car.s, out = vehicleStep(R, car, X, h, {T, k, mu: muN, N, down: A.down, drag: A.drag, slope, sinBank, off, rail: !!pit, dRail: dTarget});
     const {a, aLat, throttle, brake} = out;
 
-    // --- DRS: armed when crossing a detection point within 1.000 s of the car ahead (from lap 3), opens in the zone
-    // on throttle, snaps shut on the brakes or at the end of the zone. From 2026 the same rule arms the overtake
-    // override (extra MGU-K power and energy) instead of a flap ---
+    // --- DRS: armed when crossing a detection point within 1.000 s of the car ahead, opens in the zone on throttle,
+    // snaps shut on the brakes or at the end of the zone. From 2026 the overtake override (extra MGU-K power and energy)
+    // replaces the flap: one detection point before the line, then the whole of the next lap to spend it on ---
     if (!neutralised(ctl) && !pit && car.lapsDone >= 1 && !car.player) car.vref[vi] = car.v;  // learn racing pace (after lap 1)
     const cross = x => { const p = ((s0 % T.len) + T.len) % T.len; return p <= x && p + (car.s - s0) > x; };
-    // Race control's interlock (green flag, dry track, lap 3+, 2 laps after a restart) gates it all; the testing
+    // Race control's interlock (green flag, dry track, laps after the start or a restart) gates it all; the testing
     // toggle stands in for the 1-second rule but not for the safety interlocks.
     const allowed = (c.drs || c.overtake) && (ctl.drs || (drs.forced && !neutralised(ctl) && trackWetness(R.W) <= 0.2));
-    T.zones.forEach((z, i) => {
-      if (cross(z.detect)) { drs.armed = allowed && (car.gapSec <= 1 || drs.forced) && !pit; drs.zone = i; }
-    });
+    const detected = i => { drs.armed = allowed && (car.gapSec <= 1 || drs.forced) && !pit; drs.zone = i; };
+    if (c.overtake) { if (cross(T.len - 150)) detected(0); }
+    else T.zones.forEach((z, i) => { if (cross(z.detect)) detected(i); });
     const zone = T.zones[drs.zone];  // zone ends may lie past the line (end > len), so test the lap position both ways
-    const inZone = !!zone && ((lapS >= zone.start && lapS <= zone.end) || (lapS + T.len >= zone.start && lapS + T.len <= zone.end));
+    const inZone = c.overtake ? !pit : !!zone && ((lapS >= zone.start && lapS <= zone.end) || (lapS + T.len >= zone.start && lapS + T.len <= zone.end));
     // the player opens it with the DRS button (R / Space / pad A), the AI whenever it isn't braking (a follower held at
     // the speed of the car ahead may be on part throttle)
     const ask = manual ? R.input.drs : brake === 0;
     if (manual) R.input.drs = false;
-    if (drs.open && (brake > 0 || !inZone || !allowed || (manual && ask))) { drs.open = false; drs.armed = false; }
+    if (drs.open && (brake > 0 || !inZone || !allowed || (manual && ask))) { drs.open = false; if (!c.overtake || !allowed) drs.armed = false; }
     else if (drs.armed && inZone && ask) drs.open = true;
 
     // --- tyres, per corner: load share, sliding heat, airflow cooling, wear ---
@@ -399,7 +412,8 @@ export function createRace({year, mapPts, mpu, width, drivers, laps, compounds, 
     const order = cars.slice().sort((x, y) => (y.finished && x.finished ? y.finishLaps - x.finishLaps || x.finishT - y.finishT : y.s - x.s));
     return order.map((car, i) => {
       const lapsDown = car.finished && order[0].finished ? order[0].finishLaps - car.finishLaps : Math.floor((order[0].s - car.s) / T.len);
-      const pass = R.leaderPass[Math.floor(car.s / 20)];
+      const at = car.s / 20, b = Math.floor(at), from = R.leaderPass[b], to = R.leaderPass[b + 1] ?? from;
+      const pass = from === undefined ? undefined : from + (to - from) * (at - b);  // between the 20 m marks, or cars inside one show one gap
       const gap = i === 0 || car.s < 0 ? null : car.finished && order[0].finished && !lapsDown ? car.finishT - order[0].finishT
                 : pass !== undefined ? R.t - pass : null;
       return {car, pos: i + 1, lap: clamp(car.lapsDone + 1, 1, total), gap, lapsDown};

@@ -65,7 +65,7 @@ export function simState(race, byId) {
     // game chase cam follows)
     fx[c.id] = {sparks: Math.max(c.sparks, c.contact > 0 ? 1 : 0), smoke: c.smoke, spray: c.spray, light: c.ers.harvesting || c.ers.derate,
                 cam: c.player ? {gLat: c.gLat, gLong: c.gLong, steer: c.delta, v: c.v} : null,
-                g: {gLat: c.gLat, gLong: c.gLong, kerb: c.kerb}};
+                g: {gLat: c.gLat, gLong: c.gLong, kerb: c.kerb}, drs: c.drs.open || c.aeroX > 0.5};
   }
   const board = race.board().map(({car, pos, lap, gap, lapsDown}) => ({
     d: byId[car.id], pos, lap, gap, tyre: car.tyre.compound, age: car.lapsDone - (car.stintLap ?? 0), out: false,
@@ -84,8 +84,8 @@ export function simFocus(race, id) {
   const e = c.ers, state = e.derate ? 'DERATE' : e.clipping ? 'CLIP' : e.harvesting ? 'HARVEST' : e.deploying ? 'DEPLOY' : 'HOLD';
   return {kmh: c.v * 3.6, gear: c.gear, rpm: c.rpm, throttle: Math.round(c.throttle * 100), brake: Math.round(c.brake * 100),
           drs: c.drs.open ? 'open' : c.drs.armed ? 'detected' : 'off', drsForced: c.drs.forced,
-          ers: {soc: e.soc, mode: state, user: e.user, plan: e.mode}, g: {gLat: c.gLat, gLong: c.gLong},
-          tyres: {temps: c.tyre.ts, wear: c.tyre.health.map(h => 100 - h), compound: c.tyre.compound}, sim: true,
+          ers: {soc: e.soc, mode: state, user: e.user, plan: e.mode, harvested: e.harvested / 1e6, deployed: e.deployed / 1e6, kw: c.spec.pK / 1000}, g: {gLat: c.gLat, gLong: c.gLong},
+          tyres: {temps: c.tyre.ts, core: c.tyre.tc, wear: c.tyre.health.map(h => 100 - h), compound: c.tyre.compound}, sim: true,
           damage: c.damage, radar: proximity(race, c),
           lap: {time: c.s < 0 ? null : race.t - c.lapStart, delta: c.lapDelta, best: c.best < Infinity ? c.best : null},
           // 2026 active aero: the flaps' mode in the DRS slot (the override still shows as open / detected)

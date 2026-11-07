@@ -4,6 +4,7 @@ import os
 # nothing here does matrix maths
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 import json
+import mimetypes
 import re
 import threading
 import time
@@ -18,16 +19,17 @@ import pandas as pd
 import uvicorn
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
-from fastapi.middleware.gzip import GZipMiddleware
+from starlette.middleware.gzip import DEFAULT_EXCLUDED_CONTENT_TYPES, GZipMiddleware
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
+import assets
 import f1auth
 import f1tv
 import ledgers
 import radio
 from jolpica import JOLPICA, driver_career, jolpica_fetch, races
-from replay import CACHE, OpenF1Locked, ReplayUnavailable, elevation, find_session, laps_replay, pitlane, replay, save, scheduled_session, season_session_rows, session_telemetry, telemetry
+from replay import CACHE, OpenF1Locked, ReplayUnavailable, elevation, find_session, laps_replay, pitlane, replay, save, scheduled_session, session_events, season_session_rows, session_telemetry, telemetry
 import live
 from tracks import _geo_track, mv_track, track
 
@@ -64,6 +66,10 @@ def season(year: int):
 
 @app.get("/")
 def index():
+    try:
+        assets.core()
+    except Exception as e:
+        raise HTTPException(503, f"The first start needs internet to fetch the page's libraries: {e!r}")
     return FileResponse(Path(__file__).parent / "static" / "index.html")
 
 
@@ -378,6 +384,25 @@ async def f1tv_license(request: Request, u: str, x_f1_token: str | None = Header
     return Response(body, status_code=status, media_type=kind)
 
 
+@app.get("/api/events/{year}/{round}")
+def event_marks(year: int, round: int, session: str = "Race"):
+    """A session's important events for the F1 TV viewer's seek bars."""
+    check_season(year, round)
+    race = race_info(year, round)
+    names = [session, "Sprint Shootout"] if session == "Sprint Qualifying" else [session]
+    try:
+        s = next((x for n in names if (x := find_session(year, race["date"], n))), None) if year >= 2023 else None
+        if s is None:
+            raise HTTPException(404, "Session events need a 2023 or later session (OpenF1 data).")
+        return raw_json(session_events(s))
+    except HTTPException:
+        raise
+    except OpenF1Locked:
+        raise HTTPException(503, "OpenF1 locks its data while a session is live.")
+    except Exception as e:
+        raise HTTPException(502, f"Session events request failed: {e}")
+
+
 @app.get("/api/f1tv/telemetry/{year}/{round}/{driver}")
 def f1tv_telemetry(year: int, round: int, driver: int, session: str = "Race"):
     """One car's telemetry over a whole session, for the multiviewer's overlay on an F1 TV stream."""
@@ -511,13 +536,16 @@ async def revalidate_static(request, call_next):
 
 
 # replay payloads are several MB of JSON; level 1 is ~4x faster than the default 9 for ~20 % more bytes
-app.add_middleware(GZipMiddleware, minimum_size=1000, compresslevel=1)
+mimetypes.add_type("image/vnd.radiance", ".hdr")
+# a 21 MB sky hardly compresses: gzipping it would only slow the local load
+app.add_middleware(GZipMiddleware, minimum_size=1000, compresslevel=1, exclude_content_types=(*DEFAULT_EXCLUDED_CONTENT_TYPES, "image/vnd.radiance"))
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
 
 # Anonymous usage counts (docs/ux-audit.md item 11): per day, how often each of these happened. The page sends only the
 # event's name (util.js count): no id, cookie, IP or page address is kept, and nothing goes to a third party.
 EVENTS = {"visit", "return_7d", "intro_shown", "intro_explore", "intro_simulate", "intro_stream", "first_play", "watched_60s",
-          "new_race_watch", "stream_open", "video_here", "video_f1tv", "connect_open", "f1tv_connected", "palette_open", "shortcuts_open"}
+          "new_race_watch", "highlights", "stream_open", "video_here", "video_f1tv", "connect_open", "f1tv_connected", "palette_open", "shortcuts_open",
+          "why_open", "why_moment"}
 COUNTS = CACHE.parent / "counts.json"  # shortcut: lives in .cache, so deleting the cache resets it; move it if it matters
 _counts_lock = threading.Lock()  # one read-add-write at a time
 
@@ -540,6 +568,21 @@ def count(event: str, request: Request):
         raise HTTPException(404, "Unknown event")
     count_event(event, date.today().isoformat())
     return Response(status_code=204)
+
+
+@app.get("/api/assets")
+def assets_status():
+    """Whether the 3D resources are downloaded, and how a download is going (downloads.js)."""
+    return assets.status()
+
+
+@app.post("/api/assets/download", status_code=202)
+def assets_download(request: Request):
+    origin = request.headers.get("origin")
+    if origin and urlsplit(origin).netloc != request.headers.get("host"):  # another site's page can't start a 600 MB download
+        raise HTTPException(403, "Cross-origin download")
+    assets.start()
+    return Response(status_code=202)
 
 
 @app.get("/api/counts")

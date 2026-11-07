@@ -145,7 +145,7 @@ const ISO = {
 
 export function flag(country, size = 40) {
   const iso = ISO[country];
-  return iso ? el('img', {class: 'flag', src: `https://flagcdn.com/w${size}/${iso}.png`, alt: `${country} flag`}) : null;
+  return iso ? el('img', {class: 'flag', src: `/static/assets/flags/w${size}/${iso}.png`, alt: `${country} flag`}) : null;
 }
 
 export function fmtClock(s) {
@@ -179,9 +179,10 @@ export function trackStatus(rc, t) {
   let s = 'GREEN';
   for (let i = 0; i <= n; i++) {
     const [, cat, flag, msg] = rc[i], m = (msg || '').toUpperCase();
-    if (cat === 'SafetyCar') s = m.includes('VIRTUAL') ? (m.includes('ENDING') ? 'VSC ENDING' : 'VSC') : (m.includes('IN THIS LAP') ? 'SC IN' : 'SC');
-    else if (flag === 'RED') s = 'RED';
+    if (cat === 'SafetyCar') s = m.includes('VIRTUAL') || m.includes('VSC') ? (m.includes('ENDING') ? 'VSC ENDING' : 'VSC') : (m.includes('IN THIS LAP') ? 'SC IN' : 'SC');
+    else if (flag === 'RED' || m === 'SESSION ABORTED' || m.startsWith('RED FLAG')) s = 'RED';  // some races carry it only in these messages
     else if (flag === 'CHEQUERED') s = 'CHEQUERED';
+    else if (s === 'RED') { if (m === 'SESSION STARTED' || m === 'SESSION RESUMED') s = 'GREEN'; }  // track-clear messages come during a stoppage
     else if ((flag === 'GREEN' && m.includes('GREEN LIGHT')) || m.includes('TRACK CLEAR')) s = 'GREEN';
   }
   return s;

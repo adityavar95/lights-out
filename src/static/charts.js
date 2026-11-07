@@ -1,7 +1,7 @@
 // Results, qualifying, lap chart and standings views.
 import {el, svg, teamColor, th} from './util.js';
 import {raceModel} from './whatif.js';
-import {raceTrace} from './pace.js';
+import {raceTrace, roadVsClassified} from './pace.js';
 
 const tipEl = el('div', {class: 'tooltip', role: 'tooltip', hidden: true});
 document.body.append(tipEl);
@@ -264,7 +264,10 @@ export function renderLapChart(root, laps, results, pitstops, why) {
     body.replaceChildren(...traceChart(M, ids, info, refId, pitstops.length > 0, pinned));
   }
   draw();
-  root.replaceChildren(el('div', {class: 'card'}, el('h2', {}, 'Lap chart'), pick, controls, body));
+  const moved = roadVsClassified(laps, results);
+  root.replaceChildren(el('div', {class: 'card'}, el('h2', {}, 'Lap chart'), pick, controls, body, moved.length ? el('p', {class: 'muted small'},
+    `This is the order on the road. The classification differs for ${moved.length} drivers, usually through time penalties: `,
+    moved.map(x => `${code(info[x.id])} P${x.road} → P${x.classified}`).join(', '), '.') : null));
 }
 
 // note: what these standings are, when they aren't the race's own

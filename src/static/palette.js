@@ -1,12 +1,13 @@
 // Keyboard layer: ? the shortcut sheet, / the Drivers search (else the palette), Ctrl/Cmd+K the command palette, plus the
 // usage counts view. app.js registers the commands; the sheet lists the keys other modules really handle.
-import {el, count, failed, fmtDate, th} from './util.js';
+import {el, count, failed, fmtDate, th, skeleton} from './util.js';
 
 const SHORTCUTS = [
   ['Anywhere', [['?', 'This sheet'], ['/', 'Find a driver on the Drivers tab, else the command palette'], ['Ctrl K', 'Command palette (⌘ K on a Mac)'],
     ['Esc', 'Close a dialog or panel']]],
   ['Race replay', [['Space', 'Play or pause'], ['← →', 'Back or forward 10 s, further at high speed (not in a simulation)'], ['- +', 'Slower or faster'],
-    ['C', 'Next camera'], ['T', 'Telemetry trace']]],
+    ['1 2 3 4 5', 'Overview, Chase, Cockpit, T-Cam, Helicopter'], ['[ ]', 'Previous or next driver'], [', .', 'Previous or next key moment'], ['H', 'Race highlights'], ['C', 'Car showroom'], ['T', 'Telemetry drawer'],
+    ['Shift T', 'Telemetry trace'], ['L', 'Next time of day'], ['G', 'Next graphics quality']]],
   ['Tabs and timing tower, when focused', [['← →', 'Previous or next tab'], ['↑ ↓', 'Move between drivers'], ['Home End', 'First or last driver'],
     ['Enter', 'Select the driver']]],
   ['Driving a simulated car', [['W ↑', 'Throttle'], ['S ↓', 'Brake'], ['A D ← →', 'Steer'], ['E Shift', 'Gear up'], ['Q Ctrl', 'Gear down'], ['X', 'Clutch'],
@@ -78,7 +79,7 @@ export function openSheet() {
 }
 
 export function openCounts() {
-  const box = el('div', {class: 'loading'}, el('div', {class: 'spinner'}), 'Loading counts…');
+  const box = el('div', {}, skeleton(5));
   modal('pcounts', 'Usage counts', null, closer(), el('h2', {}, 'Usage counts'), box,
     el('p', {class: 'muted'}, 'Counted: how many times each of these happened, per day, kept on this app’s own server. Each count is only the event’s name. ',
       'Not kept: any id, cookie, IP address or page address, and nothing goes to a third party. Nothing is sent at all when your browser asks not to be tracked (Do Not Track or Global Privacy Control).'));

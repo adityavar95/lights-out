@@ -1,10 +1,13 @@
 """Builds dist/LightsOut/LightsOut.exe from src/desktop.py. Run: .venv/Scripts/python scripts/build_exe.py
 A folder, not one file: a one-file exe unpacks ~0.5 GB to a temp dir on every launch, and .cache would land there."""
+import subprocess
+import sys
 from pathlib import Path
 
 import PyInstaller.__main__
 
 ROOT = Path(__file__).resolve().parent.parent
+subprocess.run([sys.executable, str(ROOT / "scripts" / "fetch_assets.py")], check=True)  # they ship inside static
 PyInstaller.__main__.run([
     str(ROOT / "src" / "desktop.py"),
     "--name", "LightsOut", "--windowed", "--noconfirm",

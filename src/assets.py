@@ -1,0 +1,167 @@
+"""What the page used to fetch from CDNs, kept in static/assets (gitignored). `core`: three.js, shaka, fonts and flags, which the
+page can't start without, fetched on the first page load. `start`: skies, textures and satellite tiles for every circuit
+(~600 MB), which the page gets at lower resolution or from Esri until someone chooses to download them (downloads.js, or
+scripts/fetch_assets.py before a build). The page's own modules name what's needed; files already here are skipped."""
+import json
+import os
+import re
+import threading
+import time
+import uuid
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+
+import requests
+
+STATIC = Path(__file__).parent / "static"
+ASSETS = STATIC / "assets"
+THREE = "https://cdn.jsdelivr.net/npm/three@0.187.0/"
+SHAKA = "https://cdn.jsdelivr.net/npm/shaka-player@4.12.6/dist/shaka-player.compiled.js"
+PH = "https://dl.polyhaven.org/file/ph-assets"
+ESRI = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile"
+FONTS = ["family=Geist:wght@400;500&family=Geist+Mono:wght@400;500&family=Titillium+Web:ital,wght@1,900",
+         "family=Titillium+Web:ital,wght@0,400;0,600;0,700;1,900"]
+CHROME = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130.0 Safari/537.36"}  # Google sends others no woff2
+
+_core_done = False
+_core_lock = threading.Lock()
+_lock = threading.Lock()
+_state = {"state": "idle", "done": 0, "total": 0, "failed": 0, "missing": None}
+
+
+def _read(name: str) -> str:
+    return (STATIC / name).read_text(encoding="utf8")
+
+
+def fetch(url: str, dest: Path) -> Path:
+    """Atomic: a download killed midway must not pass for a finished file on the next run."""
+    if dest.exists():
+        return dest
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_name(f"{dest.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        with requests.get(url, stream=True, timeout=120) as r:
+            r.raise_for_status()
+            with tmp.open("wb") as f:
+                for chunk in r.iter_content(1 << 20):
+                    f.write(chunk)
+        os.replace(tmp, dest)
+    finally:
+        tmp.unlink(missing_ok=True)
+    return dest
+
+
+def _three() -> None:
+    """The two builds, every addon the app imports, and whatever those import in turn."""
+    app = "".join(p.read_text(encoding="utf8") for p in STATIC.glob("*.js"))
+    queue = ["build/three.webgpu.js", "build/three.tsl.js"]
+    queue += ["examples/jsm/" + a for a in re.findall(r"""(?:from\s*|import\(\s*)['"]three/addons/([^'"]+)""", app)]
+    seen = set()
+    while queue:
+        path = queue.pop()
+        if path in seen:
+            continue
+        seen.add(path)
+        src = re.sub(r"/\*.*?\*/", "", fetch(THREE + path, ASSETS / "three" / path).read_text(encoding="utf8"), flags=re.S)
+        # relative imports only: three, three/webgpu and three/tsl are the import map's own entries
+        for dep in re.findall(r"""(?:from|import)\s*['"](\.{1,2}/[^'"]+)['"]""", src):
+            queue.append(os.path.normpath(os.path.join(os.path.dirname(path), dep)).replace("\\", "/"))
+
+
+def _fonts() -> None:
+    out = ASSETS / "fonts" / "fonts.css"
+    if out.exists():
+        return
+    css = ""
+    for q in FONTS:
+        r = requests.get(f"https://fonts.googleapis.com/css2?{q}&display=swap", headers=CHROME, timeout=60)
+        r.raise_for_status()
+        css += r.text
+    urls = set(re.findall(r"url\((https://[^)]+\.woff2)\)", css))
+    assert urls, "Google Fonts sent no woff2"
+    with ThreadPoolExecutor(6) as pool:
+        list(pool.map(lambda u: fetch(u, ASSETS / "fonts" / u.rsplit("/", 1)[1]), urls))
+    out.write_text(re.sub(r"url\(https://[^)]+/([^/)]+\.woff2)\)", r"url(\1)", css), encoding="utf8")
+
+
+def core() -> None:
+    """Once a process, cheap when everything's here. Raises if it can't: the page can't start without these."""
+    global _core_done
+    with _core_lock:
+        if _core_done:
+            return
+        _three()
+        _fonts()
+        iso = re.search(r"const ISO = \{(.*?)\};", _read("util.js"), re.S).group(1)
+        jobs = {f"https://flagcdn.com/w40/{c}.png": ASSETS / "flags" / "w40" / f"{c}.png" for c in set(re.findall(r": '([a-z]{2})'", iso))}
+        jobs[SHAKA] = ASSETS / "shaka" / "shaka-player.compiled.js"
+        with ThreadPoolExecutor(6) as pool:
+            list(pool.map(lambda job: fetch(*job), jobs.items()))
+        _core_done = True
+
+
+def _heavy() -> dict[str, Path]:
+    """Sky presets, photo sets at both tiers' resolutions, and the tiles scripts/tile_list.py listed."""
+    jobs = {}
+    for name in re.findall(r"hdri\('(\w+)'\)", _read("scene3d.js")):
+        jobs[f"{PH}/HDRIs/hdr/4k/{name}_4k.hdr"] = ASSETS / "hdri" / f"{name}_4k.hdr"
+    photos = re.findall(r"photo\('(\w+)'.*?high \? '(\w+)' : '(\w+)'\)", _read("textures3d.js"))
+    assert photos, "no photo sets found in textures3d.js"
+    for name, hi, lo in photos:
+        for res in (hi, lo):
+            for kind in ("diff", "nor_gl", "rough"):
+                file = f"{res}/{name}/{name}_{kind}_{res}.jpg"
+                jobs[f"{PH}/Textures/jpg/{file}"] = ASSETS / "textures" / file
+    for path in json.loads(_read("tile_list.json")):
+        z, y, x = path.split("/")
+        jobs[f"{ESRI}/{path}"] = ASSETS / "tiles" / z / y / f"{x}.jpg"
+    return jobs
+
+
+def _missing() -> dict[str, Path]:
+    return {u: d for u, d in _heavy().items() if not d.exists()}
+
+
+def _one(job: tuple[str, Path]) -> str:
+    """'ok', or 'none' where the server has no such file. Other failures retry, then count: another run picks up the rest."""
+    for wait in (2, 8, 30, None):
+        try:
+            fetch(*job)
+            return "ok"
+        except requests.HTTPError as e:
+            if e.response.status_code == 404:
+                return "none"
+        except (requests.RequestException, OSError):  # OSError: a full disk, say; the partial file is already gone
+            pass
+        if wait is None:
+            return "failed"
+        time.sleep(wait)
+
+
+def _run() -> None:
+    try:
+        jobs = _missing()
+        _state["total"] = len(jobs)
+        with ThreadPoolExecutor(6) as pool:  # six at a time, as the page itself asks for tiles
+            for result in pool.map(_one, jobs.items()):
+                _state["done"] += 1
+                _state["failed"] += result == "failed"
+        _state["missing"] = len(_missing())
+        _state["state"] = "error" if _state["failed"] else "done"
+    except Exception as e:  # on a thread nobody waits for: the page must hear it from status()
+        print(f"asset download failed: {e!r}")
+        _state["state"] = "error"
+
+
+def start() -> None:
+    with _lock:
+        if _state["state"] != "running":
+            _state.update(state="running", done=0, total=0, failed=0)
+            threading.Thread(target=_run, daemon=True).start()
+
+
+def status() -> dict:
+    with _lock:
+        if _state["missing"] is None:  # ~25,000 file checks: once, and again after a download
+            _state["missing"] = len(_missing())
+    return dict(_state)

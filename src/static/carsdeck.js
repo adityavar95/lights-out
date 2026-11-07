@@ -4,14 +4,12 @@
 // dimensions from cars3d.js spec(year) (both approximate per-era figures), and the season's results from Jolpica's
 // constructor and driver standings. Any team of that season can be previewed in its colours. "Race this era" opens the
 // season's first round as a Simulation, whose physics (mass, power, ERS, DRS) and engine audio follow the year.
-import * as THREE from 'three';
-import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
-import {RoomEnvironment} from 'three/addons/environments/RoomEnvironment.js';
 import {get, rows, el, teamColor, led, skeleton} from './util.js';
 import {panelFocus} from './circuitdeck.js';
 import {engine} from './telemetry.js';
-import {buildCar, spec} from './cars3d.js';
+import {spec} from './cars3d.js';
 import {loadRB22} from './rb22.js';
+import {openShowroom, closeShowroom, showCar} from './showroom.js';
 
 const ERAS = [['V10', 1996, 2005], ['V8', 2006, 2013], ['Turbo hybrid', 2014, 2021], ['Ground effect', 2022, 2025], ['Active aero', 2026, 2026]];
 // year: [Jolpica constructorId, chassis, engine supplier, best-known innovation]
@@ -32,7 +30,7 @@ const CARS = {
   2026: ['red_bull', 'RB22', 'Red Bull Ford'],
 };
 
-let D, P = null;  // the deck's elements; the preview's three.js state, made on first open
+let D;  // the deck's elements
 
 const badge = (k, v) => el('span', {class: 'cdbadge'}, el('small', {}, k), el('b', {}, v));
 
@@ -46,7 +44,7 @@ export function setupCarsDeck(stage, top) {
   D.btn = el('button', {class: 'neu cdbtn', 'aria-expanded': false, 'aria-controls': 'carsdeck', onclick: () => toggle()}, led(), 'CARS');
   D.panel = el('section', {class: 'glass circuitdeck carsdeck', id: 'carsdeck', hidden: true, 'aria-label': 'Car showroom'},
     el('header', {class: 'pwhead'}, el('div', {class: 'phead'}, 'CAR SHOWROOM'),
-      el('small', {class: 'cdsub'}, 'Champions by era: specs, season results, 360° preview'),
+      el('small', {class: 'cdsub'}, 'Champions by era: specs, season results, studio view'),
       el('button', {class: 'neu cdclose', 'aria-label': 'Close car showroom', onclick: () => toggle(false)}, '✕')),
     D.chips,
     el('div', {class: 'csbody'}, D.grid,
@@ -59,15 +57,19 @@ export function setupCarsDeck(stage, top) {
   stage.append(D.panel);
 }
 
+let opening = null;  // the showroom's device and scene, ready to show a car
+
+// C opens and closes it from anywhere on the stage
+export const toggleCars = () => toggle();
+
 function toggle(open = D.panel.hidden, restore = true) {
   D.panel.hidden = !open;
   if (open) dispatchEvent(new CustomEvent('f1:panel', {detail: D.panel}));
   D.btn.setAttribute('aria-expanded', open);
-  if (!open) { D.focus.closed(restore); return; }
+  if (!open) { closeShowroom(); D.focus.closed(restore); return; }
   D.focus.opened();
-  preview();
+  opening = openShowroom(D.canvas);
   if (D.year === null) era(2026);
-  else loop();
 }
 
 // one card per season of the era starting `from`
@@ -122,68 +124,6 @@ function showTeam() {
     D.stats.replaceChildren(badge('CONSTRUCTORS', `P${c.position}${D.year === 2026 ? ' so far' : ''}`), badge('WINS', c.wins), badge('POINTS', c.points),
       el('div', {class: 'csdrivers'}, names.join(' · ')));
   }
-  show(teamColor(id), D.year, c?.['Constructor.name'] ?? id);
-}
-
-// ---------- 360° preview: its own small renderer, drawn only while the deck is open ----------
-
-function preview() {
-  if (P) return;
-  const renderer = new THREE.WebGLRenderer({antialias: true, alpha: true, powerPreference: 'high-performance'});
-  renderer.toneMapping = THREE.NeutralToneMapping;  // as the race scene
-  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-  const scene = new THREE.Scene(), pmrem = new THREE.PMREMGenerator(renderer);
-  scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-  const sun = new THREE.DirectionalLight(0xffffff, 1.5);
-  sun.position.set(3, 6, 2);
-  scene.add(sun);
-  const camera = new THREE.PerspectiveCamera(32, 1, 0.1, 100);
-  camera.position.set(5.5, 2.2, 5.5);
-  camera.layers.enable(1);  // the cars' contact shadows
-  const controls = new OrbitControls(camera, renderer.domElement);
-  Object.assign(controls, {enableDamping: true, autoRotate: true, autoRotateSpeed: 1.2, enablePan: false, minDistance: 3, maxDistance: 14,
-                           maxPolarAngle: Math.PI * 0.49});
-  controls.target.set(0, 0.45, 0);
-  // soft shadow under the car (the car's own contact-shadow planes use it too)
-  const c = document.createElement('canvas');
-  c.width = c.height = 64;
-  const g = c.getContext('2d'), grad = g.createRadialGradient(32, 32, 4, 32, 32, 32);
-  grad.addColorStop(0, 'rgba(0,0,0,.55)');
-  grad.addColorStop(1, 'rgba(0,0,0,0)');
-  g.fillStyle = grad;
-  g.fillRect(0, 0, 64, 64);
-  D.canvas.append(renderer.domElement);
-  P = {renderer, scene, camera, controls, blob: new THREE.CanvasTexture(c), car: null, mats: [], raf: 0, token: 0};
-}
-
-async function show(color, year, team) {
-  const token = ++P.token;
-  if (year >= 2026) await loadRB22().catch(() => {});  // the procedural 2026 car if the model can't load
-  if (token !== P.token) return;
-  if (P.car) { P.scene.remove(P.car.group); P.car.dispose(); P.mats.forEach(m => m.dispose()); }
-  P.car = buildCar(color, null, year, P.blob, Infinity, team);
-  // Clones: era and model materials are shared with the race scene, where scene3d.js patches them for its cascaded
-  // shadows (and keeps their compiled uniforms); copy() leaves that patch behind. The livery paint is this car's own
-  // (never in the race scene), and a clone would lose its livery shader.
-  P.mats = [];
-  P.car.group.traverse(o => { if (o.isMesh && !o.material.userData.livery) P.mats.push(o.material = o.material.clone()); });
-  P.scene.add(P.car.group);
-  loop();
-}
-
-function loop() {
-  cancelAnimationFrame(P.raf);
-  const frame = () => {
-    if (D.panel.hidden) return;
-    const {renderer, camera, controls, scene} = P, w = D.canvas.clientWidth, h = D.canvas.clientHeight;
-    if (w && h && (renderer.domElement.width !== Math.round(w * renderer.getPixelRatio()))) {
-      renderer.setSize(w, h);
-      camera.aspect = w / h;
-      camera.updateProjectionMatrix();
-    }
-    controls.update();
-    renderer.render(scene, camera);
-    P.raf = requestAnimationFrame(frame);
-  };
-  frame();
+  const year = D.year;
+  opening.then(() => showCar(teamColor(id), year, c?.['Constructor.name'] ?? id, year >= 2026 ? () => loadRB22().catch(() => {}) : null));  // the procedural 2026 car if the model can't load
 }

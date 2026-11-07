@@ -1,74 +1,73 @@
-// Track surface: procedural asphalt shader. The racing line its rubber follows comes from sim.js.
+// Track surface: procedural asphalt as a TSL node material. The racing line its rubber follows comes from sim.js.
 import * as THREE from 'three';
+import {Fn, uniform, attribute, texture, uv, vec2, vec3, float, fract, floor, dot, mix, smoothstep, clamp, exp, abs, max, min, sqrt, fwidth,
+        normalize, normalMap as normalMapNode, materialColor} from 'three/tsl';
 
-export const NOISE = /* glsl */`
-float hash(vec2 p) { vec3 q = fract(vec3(p.xyx) * 0.1031); q += dot(q, q.yzx + 33.33); return fract((q.x + q.y) * q.z); }
-float noise(vec2 p) {
-  vec2 i = floor(p), f = fract(p);
-  f = f * f * (3.0 - 2.0 * f);
-  return mix(mix(hash(i), hash(i + vec2(1, 0)), f.x), mix(hash(i + vec2(0, 1)), hash(i + 1.0), f.x), f.y);
-}`;
+const hash = Fn(([p]) => {
+  const q = fract(vec3(p.x, p.y, p.x).mul(0.1031)).toVar();
+  q.addAssign(dot(q, q.yzx.add(33.33)));
+  return fract(q.x.add(q.y).mul(q.z));
+});
 
-// Procedural asphalt: MeshStandardMaterial with GLSL injected. vTrack = (metres across from the left edge, metres along the
-// lap). Rubber laid down on the racing line darkens the surface and polishes it smoother (lower roughness), strongest in
-// two tyre tracks 0.8 m either side of the line, inside a broad band where different cars' lines overlap; uRubber grows
-// over the session (track evolution). Elsewhere tone and roughness wander with low-frequency noise (patches, repairs);
-// the photo set's normal and roughness maps give the aggregate (the photo is a little warm, the tint cools it).
+// value noise: cheap, tile-free, and the same at every LOD of the road (mx_noise is ~4x the instructions for no visible gain here)
+export const noise = Fn(([p]) => {
+  const i = floor(p), f = fract(p), s = f.mul(f).mul(f.mul(-2).add(3));
+  return mix(mix(hash(i), hash(i.add(vec2(1, 0))), s.x), mix(hash(i.add(vec2(0, 1))), hash(i.add(1)), s.x), s.y);
+});
+
+// Procedural asphalt. track = (metres across from the left edge, metres along the lap). Rubber laid down on the racing line
+// darkens the surface and polishes it smoother, strongest in two tyre tracks 0.8 m either side of the line, inside a broad
+// band where different cars' lines overlap; userData.rubber grows over the session (track evolution). Elsewhere tone and
+// roughness wander with low-frequency noise (patches, repairs); the photo set's normal and roughness maps give the
+// aggregate (the photo is a little warm, the tint cools it).
 //
 // The photo tiles every 2 m; a second sample of it, rotated 37 deg and at 0.83x the scale, is blended in by low-frequency
 // noise so the grid never lines up (its normals rotated back into the first sample's tangent frame). On top: tyre marks
 // (thin dark streaks along the lap, densest around the line) and the sealed joints between paving lanes every 4.5 m,
 // antialiased by their screen-space width so they fade instead of shimmering at a distance.
 //
-// Water (uWetLine / uWetOff, 0..1 from the weather model): depth at a point is the racing line's within ~2 m of the line
-// and the off-line value elsewhere, the same blend as weather.js wetAt, so the drying line shows as a matt grey stripe
-// through a shiny track. Standing water collects first in the low spots of the surface, so puddles (a low-frequency
-// noise threshold) appear before the whole track floods. Water fills the asphalt's pores: light that would have
-// scattered back out is trapped, so wet asphalt is darker. A continuous film is optically flat, so roughness drops
-// towards 0.035 and the image-based lighting becomes near-mirror reflections of the sky and cars. Water is a dielectric
-// (F0 = 0.02, close to asphalt's 0.04), so metalness stays 0: the mirror look is smoothness plus Fresnel, which makes
-// reflections strongest at the grazing angles a camera sees a track from.
+// Water (wetLine / wetOff, 0..1 from the weather model): depth at a point is the racing line's within ~2 m of the line and
+// the off-line value elsewhere, the same blend as weather.js wetAt, so the drying line shows as a matt grey stripe through a
+// shiny track. Standing water collects first in the low spots of the surface, so puddles (a low-frequency noise threshold)
+// appear before the whole track floods. Water fills the asphalt's pores: light that would have scattered back out is
+// trapped, so wet asphalt is darker. A continuous film is optically flat, so roughness drops towards 0.035, and it adds a
+// clearcoat lobe for the near-mirror reflection of sky and cars. Water is a dielectric (F0 = 0.02, close to asphalt's
+// 0.04), so metalness stays 0: the mirror look is smoothness plus Fresnel, strongest at the grazing angles a camera sees.
 // maps: {map, normalMap, roughnessMap} (textures3d.js)
 export function asphalt(maps, half) {
-  const mat = new THREE.MeshStandardMaterial({...maps, color: 0xd0d6e0, roughness: 1, side: THREE.DoubleSide});
-  Object.assign(mat.userData, {rubber: {value: 0.3}, wetLine: {value: 0}, wetOff: {value: 0}});
-  mat.onBeforeCompile = sh => {
-    sh.uniforms.uRubber = mat.userData.rubber;
-    sh.uniforms.uWetLine = mat.userData.wetLine;
-    sh.uniforms.uWetOff = mat.userData.wetOff;
-    sh.uniforms.uHalf = {value: half};
-    sh.vertexShader = 'attribute float line;\nvarying float vLine;\nvarying vec2 vTrack;\n' +
-      sh.vertexShader.replace('#include <uv_vertex>', '#include <uv_vertex>\nvLine = line;\nvTrack = uv * 4.0;');  // 4 m tiles
-    sh.fragmentShader = `uniform float uRubber, uHalf, uWetLine, uWetOff;\nvarying float vLine;\nvarying vec2 vTrack;\n${NOISE}
-      const mat2 ROT = mat2(0.8, 0.6, -0.6, 0.8);
-      vec2 uvB(vec2 uv) { return ROT * uv * 0.83 + 0.37; }\n` + sh.fragmentShader
-      .replace('#include <map_fragment>', `
-        float bmix = smoothstep(0.35, 0.65, noise(vTrack * 0.3));
-        diffuseColor *= mix(texture2D(map, vMapUv), texture2D(map, uvB(vMapUv)), bmix);
-        float lat = vTrack.x - uHalf - vLine;  // metres from the racing line
-        float rubber = clamp(uRubber * (0.6 * exp(-pow((abs(lat) - 0.8) / 0.35, 2.0)) + 0.5 * exp(-pow(lat / 1.8, 2.0)))
-                             * (0.6 + 0.6 * noise(vTrack * vec2(0.6, 0.08))), 0.0, 1.0);  // streaky along the lap
-        diffuseColor.rgb *= (0.92 + 0.16 * noise(vTrack * 0.12)) * (1.0 - 0.6 * rubber);
-        float marks = smoothstep(0.62, 0.9, noise(vec2(lat * 3.0, vTrack.y * 0.015)))
-                    * smoothstep(0.45, 0.75, noise(vec2(lat * 0.7 + 5.0, vTrack.y * 0.04))) * (0.4 + 0.6 * exp(-lat * lat / 20.0));
-        float jw = max(fwidth(vTrack.x), 1e-4), jd = abs(fract(vTrack.x / 4.5 + 0.5) - 0.5) * 4.5;  // metres to a joint
-        float joint = clamp((0.03 - jd) / jw + 0.5, 0.0, 1.0) * min(1.0, 0.06 / jw);
-        diffuseColor.rgb *= (1.0 - 0.3 * marks) * (1.0 - 0.2 * joint);
-        float wet = mix(uWetOff, uWetLine, exp(-lat * lat / 8.0));
-        float puddle = smoothstep(0.55, 0.75, noise(vTrack * 0.09 + 3.0));
-        float water = clamp(wet * 1.4 - 0.15 + puddle * wet, 0.0, 1.0);
-        diffuseColor.rgb *= mix(1.0, 0.45, sqrt(water));`)
-      .replace('#include <roughnessmap_fragment>', `
-        float roughnessFactor = roughness * mix(texture2D(roughnessMap, vRoughnessMapUv).g, texture2D(roughnessMap, uvB(vRoughnessMapUv)).g, bmix);
-        roughnessFactor = mix(roughnessFactor * (0.88 + 0.15 * noise(vTrack * 0.3 + 7.0)), 0.55, max(rubber, 0.5 * marks));
-        roughnessFactor = mix(roughnessFactor, 0.035, water);`)
-      .replace('#include <normal_fragment_maps>', `
-        vec3 nA = texture2D(normalMap, vNormalMapUv).xyz * 2.0 - 1.0, nB = texture2D(normalMap, uvB(vNormalMapUv)).xyz * 2.0 - 1.0;
-        nB.xy = nB.xy * ROT;  // = transpose(ROT) * xy: the rotated sample's slopes in the first sample's frame
-        vec3 mapN = normalize(mix(nA, nB, bmix));
-        mapN.xy *= normalScale;
-        normal = normalize(tbn * mapN);`);
-  };
-  mat.customProgramCacheKey = () => 'asphalt';
+  const mat = new THREE.MeshPhysicalNodeMaterial({color: 0xd0d6e0, side: THREE.DoubleSide, clearcoatRoughness: 0.05, ior: 1.5});
+  const rubberAmount = uniform(0.3), wetLine = uniform(0), wetOff = uniform(0), normalScale = uniform(1);
+  mat.userData = {rubber: rubberAmount, wetLine, wetOff, normalScale};
+  const track = uv().mul(4);  // 4 m tiles
+  const lat = track.x.sub(half).sub(attribute('line', 'float'));  // metres from the racing line
+  // the set's repeat arrives when its photos load: uniform() holds the Vector2 itself, so it follows
+  const uvA = uv().mul(uniform(maps.map.repeat));
+  const uvB = vec2(dot(uvA, vec2(0.8, -0.6)), dot(uvA, vec2(0.6, 0.8))).mul(0.83).add(0.37);
+  const bmix = smoothstep(0.35, 0.65, noise(track.mul(0.3)));
+
+  const band = lat.abs().sub(0.8).div(0.35), broad = lat.div(1.8);
+  const rubber = clamp(rubberAmount.mul(exp(band.mul(band).negate()).mul(0.6).add(exp(broad.mul(broad).negate()).mul(0.5)))
+    .mul(noise(track.mul(vec2(0.6, 0.08))).mul(0.6).add(0.6)), 0, 1);  // streaky along the lap
+  const marks = smoothstep(0.62, 0.9, noise(vec2(lat.mul(3), track.y.mul(0.015))))
+    .mul(smoothstep(0.45, 0.75, noise(vec2(lat.mul(0.7).add(5), track.y.mul(0.04))))).mul(exp(lat.mul(lat).div(-20)).mul(0.6).add(0.4));
+  const jw = max(fwidth(track.x), 1e-4), jd = abs(fract(track.x.div(4.5).add(0.5)).sub(0.5)).mul(4.5);  // metres to a joint
+  const joint = clamp(float(0.03).sub(jd).div(jw).add(0.5), 0, 1).mul(min(1, float(0.06).div(jw)));
+  const wet = mix(wetOff, wetLine, exp(lat.mul(lat).div(-8)));
+  const puddle = smoothstep(0.55, 0.75, noise(track.mul(0.09).add(3)));
+  const water = clamp(wet.mul(1.4).sub(0.15).add(puddle.mul(wet)), 0, 1);
+
+  mat.colorNode = materialColor.rgb.mul(mix(texture(maps.map, uvA), texture(maps.map, uvB), bmix).rgb)
+    .mul(noise(track.mul(0.12)).mul(0.16).add(0.92)).mul(rubber.mul(-0.6).add(1))
+    .mul(marks.mul(-0.3).add(1)).mul(joint.mul(-0.2).add(1)).mul(mix(1, 0.45, sqrt(water)));
+  // bare aggregate ~0.72, polished rubber 0.28, a water film 0.035
+  const rough = mix(texture(maps.roughnessMap, uvA).g, texture(maps.roughnessMap, uvB).g, bmix).mul(0.72)
+    .mul(noise(track.mul(0.3).add(7)).mul(0.15).add(0.88));
+  mat.roughnessNode = mix(mix(rough, 0.28, max(rubber, marks.mul(0.5))), 0.035, water);
+  mat.metalnessNode = float(0);
+  mat.clearcoatNode = max(water, rubber.mul(0.15));
+  // the second sample's slopes rotated into the first's frame, blended, and scaled by the water film smoothing the aggregate
+  const nA = texture(maps.normalMap, uvA).xyz, nB = texture(maps.normalMap, uvB).xyz.mul(2).sub(1);
+  const nBack = vec3(dot(nB.xy, vec2(0.8, 0.6)), dot(nB.xy, vec2(-0.6, 0.8)), nB.z).mul(0.5).add(0.5);
+  mat.normalNode = normalMapNode(normalize(mix(nA.mul(2).sub(1), nBack.mul(2).sub(1), bmix)).mul(0.5).add(0.5), normalScale);
   return mat;
 }

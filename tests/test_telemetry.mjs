@@ -1,6 +1,6 @@
 // Run: node tests/test_telemetry.mjs  — checks the derived telemetry the HUD shows when the feeds don't carry it.
 import assert from 'node:assert/strict';
-import {kinematics, gearbox, pedals, ersStep, tyreState, tyreStep, drsZones, engine, G} from '../src/static/telemetry.js';
+import {kinematics, gearbox, pedals, ersStep, tyreState, tyreStep, drsZones, engine, G, mgukTaper, brakeStep, brakeGlow} from '../src/static/telemetry.js';
 
 const close = (a, b, tol, msg) => assert.ok(Math.abs(a - b) < tol, `${msg}: ${a} vs ${b}`);
 
@@ -24,9 +24,31 @@ assert.deepEqual(gearbox(0), {gear: 0, rpm: 4000});
 assert.equal(gearbox(300).gear, 7);
 assert.equal(gearbox(400).gear, 8);
 
-// ERS: 1 s of full deployment at 120 kW drains 120 kJ of a 4 MJ store
+// ERS: 1 s of full deployment at 120 kW, 80 kW of it from the MGU-H, drains 40 kJ of a 4 MJ store; 2026 has no MGU-H
 const ers = ersStep({soc: 0.5}, 100, 0, 250, 1, 2024);
-close(ers.soc, 0.5 - 0.03, 1e-9, 'deployment');
+close(ers.soc, 0.5 - 0.01, 1e-9, 'deployment');
+close(ersStep({soc: 0.5}, 100, 0, 250, 1, 2026).soc, 0.5 - 350e3 / 4e6, 1e-9, '2026 deployment');
+close(ersStep({soc: 0.5}, 100, 0, 320, 1, 2026).soc, 0.5 - 200e3 / 4e6, 1e-9, '2026 fades with speed');
+assert.equal(ersStep({soc: 0.5}, 0, 100, 10, 1, 2024).soc, 0.5, 'no harvest at walking pace');
+
+// the 2026 MGU-K taper meets at its knees: 350 kW at 290 km/h, 100 kW at 340, nil at 345; the override 350 kW at 337.5, nil at 355
+for (const [kmh, boost, kw] of [[250, false, 350], [290, false, 350], [300, false, 300], [340, false, 100], [345, false, 0], [337.5, true, 350], [355, true, 0]])
+  close(mgukTaper(kmh, boost), kw * 1e3, 1e-6, `taper at ${kmh}`);
+
+// brake discs: a hard stop from 330 km/h after a straight reaches the glow, a lap of them holds there, and it doesn't run away
+{
+  let T = 200, peak = 0;
+  for (let lap = 0; lap < 5; lap++) {
+    let v = 92;
+    while (v > 25) { T = brakeStep(T, 45, v, 0.01); v -= 0.45; peak = Math.max(peak, T); }
+    for (let t = 0; t < 15; t++) T = brakeStep(T, 0, 80, 1);
+  }
+  assert.ok(peak > 750 && peak < 1100, `brake peak ${peak}`);
+  assert.ok(T > 100 && T < 450, `cooled on the straight to ${T}`);
+  assert.ok(brakeGlow(peak) > 0.3 && brakeGlow(300) === 0, 'glows hot, dark cold');
+  assert.ok(brakeStep(300, 0, 0, 1) < 300, 'cools at a standstill');
+  assert.equal(brakeStep(40, -5, 30, 1), 40, 'accelerating adds no heat');
+}
 assert.equal(ers.mode, 'DEPLOY');
 
 // tyres settle in the 85-100 C range on a long straight, and a long right-hander heats the left side more

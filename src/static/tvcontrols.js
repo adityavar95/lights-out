@@ -2,6 +2,7 @@
 // (a live stream's clock time and a LIVE button that goes back to the edge), mute + volume, speed, captions,
 // picture-in-picture and fullscreen of the whole tile (so the overlays stay on screen). Shows on hover or while paused;
 // hides itself 2.5 s after the mouse stops. `icon` is the viewer's one icon set (line icons on a 24 px grid).
+import {markLayer} from './scrubmarks.js';
 import {el} from './util.js';
 
 const SPEEDS = [0.5, 1, 1.5, 2];
@@ -59,6 +60,10 @@ export function controls(video, root, player) {
   const btn = (name, title, onclick) => el('button', {class: 'tvc-b', title, 'aria-label': title, onclick}, icon(name));
   const play = btn('play', 'Play (k)', () => video.paused ? video.play().catch(() => {}) : video.pause());
   const seek = el('input', {class: 'tvc-seek', type: 'range', min: 0, max: 1000, step: 1, value: 0, 'aria-label': 'Position'});
+  const marks = markLayer(seek, m => { video.currentTime = m.seek ?? m.t; });
+  let marked = null;
+  const placeMarks = () => { if (marked && Number.isFinite(video.duration)) marks.set(marked, video.duration); };
+  video.addEventListener('durationchange', placeMarks);
   const time = el('span', {class: 'tvc-time'}, '0:00');
   const mute = btn('vol', 'Mute (m)', () => { video.muted = !video.muted; });
   const vol = el('input', {class: 'tvc-vol', type: 'range', min: 0, max: 1, step: 0.05, value: 1, 'aria-label': 'Volume'});
@@ -75,7 +80,7 @@ export function controls(video, root, player) {
     if (p?.goToLive) p.goToLive(); else if (p) video.currentTime = p.seekRange().end;
   }}, 'LIVE');
   const bar = el('div', {class: 'tvc', onpointerdown: e => e.stopPropagation()},
-    seek,
+    marks.wrap,
     el('div', {class: 'tvc-row'}, play, btn('back', 'Back 10 s (←)', () => { video.currentTime -= 10; }),
       btn('fwd', 'Forward 10 s (→)', () => { video.currentTime += 10; }), live, time, el('span', {class: 'tvc-sp'}),
       mute, vol, speed, cc, btn('pip', 'Picture in picture', () => video.requestPictureInPicture?.().catch(() => {})),
@@ -117,14 +122,15 @@ export function controls(video, root, player) {
     idle = setTimeout(() => root.classList.remove('active'), 2500);
   });
   root.addEventListener('pointerleave', () => { clearTimeout(idle); root.classList.remove('active'); });
+  root.addEventListener('dblclick', e => { if (e.target.closest('.mvvideo')) bar.querySelector('[title^=Fullscreen]').click(); });
   // keyboard on the focused tile: k/space play, ←/→ 10 s, m mute, f fullscreen
   root.tabIndex = 0;
   root.addEventListener('keydown', e => {
-    if (e.target.closest('select, input, button, summary')) return;
+    if (e.ctrlKey || e.metaKey || e.altKey || e.target.closest('select, input, summary') || (e.key === ' ' && e.target.closest('button'))) return;  // Ctrl+F is the browser's; Space presses a focused button
     const act = {' ': () => play.click(), k: () => play.click(), ArrowLeft: () => { video.currentTime -= 10; }, ArrowRight: () => { video.currentTime += 10; },
       m: () => mute.click(), f: () => bar.querySelector('[title^=Fullscreen]').click()}[e.key];
     if (act) { e.preventDefault(); act(); }
   });
   draw();
-  return {bar, draw};
+  return {bar, draw, setMarks: m => { marked = m; placeMarks(); }};
 }

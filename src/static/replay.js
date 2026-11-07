@@ -1,10 +1,16 @@
 // Race replay: the 3D stage with the broadcast HUD round it (timing tower, telemetry, radar, control deck).
 import {teleUrl} from './reallap.js';
 import {compared, openCompare} from './tracemodal.js';
+import {highlightReel} from './highlights.js';
+import {setupStory} from './storypanel.js';
+import {nextMoment} from './moments.js';
+import {markLayer, gpsMarks, lapMarks, NO_MARKS} from './scrubmarks.js';
 import {get, el, rows, failed, teamColor, fmtClock, fmtLap, lastBefore, trackStatus, led, covered, dropUp, count} from './util.js';
-import {init3d, setTrack, setCars, updateCars, setView, setParts, setTyre, setGround, setPitLane, setStartLights} from './scene3d.js';
+import {init3d, setTrack, setCars, updateCars, setView, setParts, setTyre, setGround, setPitLane, setStartLights, nextSky, nextTier, announce, hasCockpitWheel} from './scene3d.js';
 import {setupOnboard, setCameraUi, setWheelAngle, nextCamera} from './onboard.js';
 import {fetchLive, liveInfo, liveDrivers, liveFeeds, liveStatus, liveClock, liveState, liveGps, hasGps, gpsAt, liveCar, resetGps} from './live.js';
+import {setupDrawer, toggleDrawer, updateDrawer} from './teledrawer.js';
+import {toggleCars} from './carsdeck.js';
 import {setupHud, setRadar, renderRadar, renderFocus, renderFeed, STATUS} from './hud.js';
 import {SIM, simSession, simState, realPitLane} from './simmode.js';
 import {setupDecks, updateDecks} from './decks.js';
@@ -56,16 +62,28 @@ export function setupReplay(root, copyView) {
     if (ui.has3d) setCars([], select, year);
     idleHint();
   };
-  ui.scrub.oninput = () => { S.t = +ui.scrub.value; render(true); };
+  ui.scrub.oninput = () => { stopReel(); S.t = +ui.scrub.value; render(true); };
   document.addEventListener('keydown', e => {
-    if (!S || !S.data || e.ctrlKey || e.metaKey || e.altKey || !root.offsetParent || covered()) return;
+    if (!S || e.ctrlKey || e.metaKey || e.altKey || !root.offsetParent || covered()) return;
     // a focused button keeps its own Space / Enter (a click) and a tab its arrows; every other shortcut still works after clicking ▶
     if (['INPUT', 'SELECT'].includes(e.target.tagName) || (e.target.tagName === 'BUTTON' && ['Space', 'Enter', 'NumpadEnter'].includes(e.code)) || e.target.closest('[role=tab]')) return;
+    // the stage's own keys work on the bare circuit; the rest need a session playing
+    if (e.code === 'KeyC' && ui.has3d) toggleCars();  // while driving, input.js takes C first for the next camera (driverdeck.js)
+    if (e.code === 'KeyL' && ui.has3d) announce(`Sky: ${nextSky()}`);
+    if (e.code === 'KeyG' && ui.has3d) announce(`Graphics: ${nextTier()}`);
+    if (e.code === 'KeyH') toggleHighlights();  // before the replay's loaded too: it loads it
+    if (!S.data) return;
     if (e.code === 'Space') { e.preventDefault(); togglePlay(); }
     const step = {Minus: -1, NumpadSubtract: -1, Equal: 1, NumpadAdd: 1}[e.code];  // - / + : slower / faster
-    if (e.code === 'KeyC' && ui.has3d && S.data) nextCamera();  // while driving, input.js takes C first (driverdeck.js)
+    if (e.code === 'Escape' && S.reel) stopReel();
+    if (e.code === 'KeyT' && !e.shiftKey) { if (toggleDrawer() && !S.selected) setMode('chase'); render(true); }  // the drawer is one car's;  // render: so it isn't empty on a paused replay
+    const cam = {Digit1: 'overview', Digit2: 'follow', Digit3: 'onboard', Digit4: 'tcam', Digit5: 'heli'}[e.code];
+    if (cam && ui.has3d) setMode(cam);
+    if ((e.code === 'Comma' || e.code === 'Period') && !S.sim) jumpMoment(e.code === 'Period' ? 1 : -1);
+    if (e.code === 'BracketLeft' || e.code === 'BracketRight') cycleDriver(e.code === 'BracketRight' ? 1 : -1);
     if (step && !S.sim?.player) setSpeed(SPEEDS[Math.min(SPEEDS.length - 1, Math.max(0, SPEEDS.indexOf(ui.speed) + step))]);
     if ((e.code === 'ArrowRight' || e.code === 'ArrowLeft') && !S.sim) {  // a simulation can't be rewound
+      stopReel();
       S.t = Math.min(S.data.duration, Math.max(0, S.t + (e.code === 'ArrowRight' ? 10 : -10) * Math.max(1, S.speed / 5)));
       render(true);
     }
@@ -86,10 +104,18 @@ export function setupReplay(root, copyView) {
   } catch (e) {
     ui.map.append(el('p', {class: 'empty'}, '3D view needs WebGL, which is turned off in this browser.'));
   }
+  setupDrawer(ui.stage);
   const hud = setupHud(ui.stage, {onClose: () => S?.selected && select(S.selected),
     onErsMode: m => S?.sim?.setErsMode(S.selected, m), onDrsTest: () => S?.sim?.toggleDrsTest(S.selected)});
   hud.top.append(ui.flag, ui.lap, ui.mode, ui.weather);
-  ui.stage.append(ui.startLights);
+  ui.reelBtn = el('button', {class: 'neu', title: 'Race highlights: the key moments in about 5 minutes (H)', onclick: toggleHighlights}, 'Highlights');
+  ui.story = setupStory(ui.stage, () => S, openLap);
+  ui.reelText = el('b');
+  ui.reelCount = el('small');
+  ui.reelBar = el('div', {class: 'reelbar glass', hidden: true, role: 'status'}, ui.reelCount, ui.reelText,
+    el('button', {class: 'neu', title: 'Next clip (.)', onclick: () => S.reel && reelGo(S.reel.i + 1)}, 'Skip'),
+    el('button', {class: 'neu', title: 'Back to the full replay (Esc)', onclick: () => stopReel()}, 'Exit'));
+  ui.stage.append(ui.startLights, ui.reelBar);
   hud.left.append(el('div', {class: 'towerhead'}, el('span', {}, 'TIMING'), ui.colBtn), el('div', {class: 'towerscroll'}, ui.tower));
   // the deck itself: session, play, speed, position, camera. Cinematic, sound and the telemetry trace sit in the ⋯ menu
   const moreBtn = el('button', {class: 'neu', popovertarget: 'moremenu', 'aria-haspopup': 'true', 'aria-expanded': false,
@@ -99,11 +125,19 @@ export function setupReplay(root, copyView) {
   hud.more.addEventListener('click', e => e.target.closest('[aria-controls=tracedeck]') && hud.more.hidePopover());  // the trace panel takes over
   dropUp(moreBtn, hud.more);
   hud.deck.append(
-    el('div', {class: 'deckgroup'}, ui.session, ui.play, ui.speeds),
-    el('div', {class: 'deckgroup grow'}, ui.scrub, ui.clock),
+    el('div', {class: 'deckgroup'}, ui.session, ui.play, ui.speeds, ui.reelBtn, ui.story.btn),
+    el('div', {class: 'deckgroup grow'}, (ui.marks = markLayer(ui.scrub, pickMark)).wrap, ui.clock),
     cams ?? '', el('div', {class: 'deckgroup'}, moreBtn, hud.more));  // no WebGL: no cameras
   setupDecks(ui.stage, hud, () => S, {togglePlay});  // pit wall, driver deck (under the tower), audio mixer, telemetry trace
 }
+
+// the command palette's way to the stage's keys
+export const stageCommands = {
+  drawer: () => toggleDrawer(),
+  sky: () => { if (ui.has3d) announce(`Sky: ${nextSky()}`); },
+  tier: () => { if (ui.has3d) announce(`Graphics: ${nextTier()}`); },
+  highlights: () => toggleHighlights(),
+};
 
 export function setCinematic(on = !ui.stage.classList.contains('cinematic')) {
   // the panels about to hide mustn't keep the focus: it would drop to the page
@@ -272,8 +306,12 @@ function liveRender() {
 
 function reset(extra) {
   clearTimeout(ui.hintTimer);
+  stopReel();
   S = {t: 0, playing: false, speed: ui.speed, selected: null, data: null, track: null, token: {}, cam: 'overview', tele: {}, ...extra};
   for (const c of [ui.session, ui.play, ui.speeds, ui.scrub]) c.hidden = !!S.live;  // live has no playback controls
+  ui.reelBtn.hidden = !!S.live || S.year < 2023;  // GPS races only
+  whyAvailable();
+  ui.story.reset();
   nextColumn(0);  // leaving live timing on its speed-trap column moves on to GAP
   if (ui.has3d) {
     setView('overview');
@@ -286,6 +324,7 @@ function reset(extra) {
   setRadar(null);
   ui.flag.textContent = ui.lap.textContent = ui.mode.textContent = ui.clock.textContent = '';
   ui.weather.replaceChildren();
+  ui.marks?.set();
   ui.scrub.max = 1;
   ui.scrub.value = 0;
   syncCommentary(S);
@@ -339,8 +378,10 @@ async function loadData(autoplay) {
     S.t = 0;
     ui.scrub.hidden = !!S.sim;
     prepare(data);
+    if (data.mode === 'gps' && data.intervals?.length) S.t = Math.max(0, lightsOut(data) - 6);  // a race opens on the grid, not a ~90 s formation lap
     if (S.selected && !S.byId[S.selected]) S.selected = null;  // not in this session
     setOverlay('');
+    if (S.sim && !S.selected && S.cam === 'overview' && S.drivers?.[0]) { S.selected = S.drivers[0].id; setMode('follow'); }  // in the overview the grid is a speck at the frame's edge
     useLink(!!early);
     if (autoplay || load.play) togglePlay();
     render(true);
@@ -422,6 +463,122 @@ function useLink(standIn) {
 // start the loaded race (app.js: the notice for a race new since the last visit)
 export const play = () => S && !S.playing && togglePlay();
 
+// [ and ]: the next driver up or down the order on screen, the camera and telemetry go with them
+function cycleDriver(step) {
+  const order = (S.board ?? []).map(b => b.d.id);
+  if (!order.length) return;
+  const i = order.indexOf(S.selected), next = i < 0 ? order[0] : order[(i + step + order.length) % order.length];  // nobody followed: the leader
+  if (next !== S.selected) select(next);
+}
+
+// , and . : the previous or next safety car, red flag or lead change, from a little before it
+function jumpMoment(dir) {
+  if (S.reel) return reelGo(Math.max(0, S.reel.i + dir));
+  const x = nextMoment(S.moments ?? [], S.t, dir);
+  if (!x) return ui.has3d && announce(dir > 0 ? 'No more key moments' : 'No earlier key moment');
+  S.t = Math.max(0, x.t - 3);
+  render(true);
+  if (ui.has3d) announce(x.label);
+}
+
+function showMarks(marks) {
+  S.moments = marks.pins;  // , and . step through them
+  ui.marks.set(marks, S.data.duration);
+}
+
+// a pin on the scrubber: that moment, on its car if the camera is following one
+function pickMark(m) {
+  if (!S?.data) return;
+  stopReel();
+  S.t = Math.max(0, m.seek ?? m.t);
+  if (m.id && S.byId[m.id] && S.cam !== 'overview') S.selected = m.id;
+  render(true);
+  if (ui.has3d) announce(m.label);
+}
+
+// the Why needs a real race's lap times, which start in 1996
+function whyAvailable() {
+  const off = !!S.live || !!S.sim || S.year < 1996;
+  ui.story.btn.hidden = off;
+  if (off) ui.story.closePanel();
+}
+
+// The Why's beats: a lap of the race from its start, or the last seconds of it for a pit stop, following the car
+async function openLap(lap, atEnd, {id, code}) {
+  if (!S || S.live || S.sim) return;
+  stopReel();
+  const token = S.token, say = text => (ui.has3d ? announce(text) : setOverlay(text));
+  if (ui.session.value !== 'Race') {
+    ui.session.value = 'Race';
+    await loadData(false);
+  } else if (S.loading) return say('Still loading: try again in a moment');
+  else if (!S.data) await loadData(false);
+  if (token !== S.token || !S.data) return;
+  const start = L => {
+    if (S.data.mode === 'gps') return Math.min(...Object.values(S.lapsBy).flatMap(a => a.filter(e => e[1] === L).map(e => e[0])));
+    return L <= 1 ? 0 : Math.min(...Object.values(S.data.cum).map(c => c[L - 2] ?? Infinity));
+  };
+  const end = start(lap + 1), at = atEnd ? (Number.isFinite(end) ? end : S.data.duration) - 20 : start(lap) - 3;
+  if (!Number.isFinite(at)) return say('That lap is not in this replay');
+  S.t = Math.min(S.data.duration, Math.max(0, at));
+  render(true);
+  S.selected = S.drivers.find(d => d.id === id || d.code === code)?.id ?? S.selected;
+  const cam = S.cam === 'overview' && S.selected ? 'chase' : S.cam;
+  if (ui.has3d && cam === S.cam) setView(cam);  // a cut: chase pans between cars otherwise, across the whole circuit
+  setMode(cam);
+  setSpeed(1);  // a moment to watch: the deck's 10x would be past it in seconds
+  if (!S.playing) togglePlay();
+}
+
+// Race Highlights (H): plays highlights.js's clips at 1x with the panels away, following each clip's car
+async function toggleHighlights() {
+  if (S?.reel) return stopReel();
+  if (!S || S.live || S.sim) return;
+  const say = text => (ui.has3d ? announce(text) : setOverlay(text));
+  if (S.loading) return say('Still loading: try again in a moment');
+  if (!S.data) await loadData(false);
+  if (!S.data) return;
+  if (S.data.mode !== 'gps' || !S.data.intervals?.length) return say(S.data.mode === 'laps' ? 'Highlights need the GPS replay, still loading' : 'Highlights are for races with GPS data');
+  count('highlights');
+  S.reel = {list: highlightReel(S.data, lightsOut(S.data)), i: -1, speed: ui.speed, cinematic: ui.stage.classList.contains('cinematic')};
+  setSpeed(1);
+  setCinematic(true);
+  ui.reelBtn.setAttribute('aria-pressed', true);
+  ui.reelBar.hidden = false;
+  reelGo(0);
+  if (!S.playing) togglePlay();
+}
+
+function reelGo(i) {
+  const r = S.reel, clip = r.list[i];
+  if (!clip) {
+    stopReel();
+    if (S.playing) togglePlay();
+    if (ui.has3d) announce('End of the highlights');
+    return;
+  }
+  const cut = Math.abs(S.t - clip.t0) > 0.5;  // a clip that runs straight on from the last keeps the shot
+  r.i = i;
+  S.t = clip.t0;
+  ui.reelCount.textContent = `${i + 1} / ${r.list.length} · ${clip.kind === 'start' ? 'Start' : `Lap ${clip.lap}`}`;
+  ui.reelText.textContent = clip.text;
+  render(true);  // the board at this moment, for a clip with no car of its own: the leader
+  S.selected = (S.byId[clip.id] && clip.id) || S.board?.[0]?.d.id || S.selected;
+  const cam = S.cam === 'overview' ? 'chase' : S.cam;
+  if (ui.has3d && cut && cam === S.cam) setView(cam);  // cut to it: chase pans between cars otherwise, across the whole circuit
+  setMode(cam);
+}
+
+function stopReel() {
+  const r = S?.reel;
+  if (!r) return;
+  S.reel = null;
+  ui.reelBar.hidden = true;
+  ui.reelBtn.setAttribute('aria-pressed', false);
+  setSpeed(r.speed);
+  setCinematic(r.cinematic);
+}
+
 function togglePlay() {
   if (!S || S.live || ui.play.disabled) return;
   if (!S.data) {
@@ -456,6 +613,7 @@ function tick(now) {
   if (S.sim) S.sim.advance(Math.min(dt, 2));  // the physics runs in race time; a stalled tab doesn't jump minutes ahead
   S.t = S.sim ? S.sim.t : Math.min(S.data.duration, S.t + dt);
   S.last = now;
+  if (S.reel && S.t >= S.reel.list[S.reel.i].t1) reelGo(S.reel.i + 1);
   render(false);
   if (S.sim ? S.sim.done : S.t >= S.data.duration) togglePlay();
   else S.raf = requestAnimationFrame(tick);
@@ -548,6 +706,11 @@ function prepare(data) {
   S.drsName = S.year >= 2026 ? 'OVERTAKE' : 'DRS';  // 2026 rules replaced DRS with the overtake mode energy boost
   setRadar(S.proj.pts, sectorCuts(), S.zones, S.drivers, S.year >= 2026 ? 'OVERTAKE' : 'DRS');
   ui.scrub.max = Math.floor(data.duration);
+  showMarks(data.mode === 'gps' ? gpsMarks(data, S.lightsOut) : NO_MARKS);
+  if (data.mode === 'laps') lapMarks(S.year, S.round, data.cum).then(m => { if (S?.data === data) showMarks(m); }, () => {});  // a timeline's still usable without them
+  ui.reelBtn.hidden = !(data.mode === 'gps' ? data.intervals?.length : data.mode === 'laps' && S.year >= 2023);
+  whyAvailable();
+  ui.story.refresh();
   ui.mode.textContent = data.mode === 'gps' ? `${data.session} · GPS replay` : data.mode === 'sim' ? 'Physics simulation'
                      : data.mode === 'live' ? ui.mode.textContent
                                             : 'Race · lap-timing replay (approximate positions)';
@@ -744,12 +907,15 @@ function render(force) {
     S.ahead = st.ahead ?? holdHeadings(st.cars, carsAt(Math.min(t + 0.5, S.data.duration)), t);
     const progress = S.live ? 1 : S.sim ? st.lap / S.data.total_laps : t / S.data.duration;
     const steer = updateCars(st.cars, S.ahead, S.selected, S.live ? 1 : S.playing ? S.speed : 0, progress, st.fx);
-    if (S.cam === 'onboard') setWheelAngle(steer);
+    if (S.cam === 'onboard') setWheelAngle(steer, hasCockpitWheel(S.selected));
   }
   S.board = st.board;
   syncCommentary(S);
   renderRadar(st.cars, S.selected);
-  ui.scrub.value = Math.floor(t);
+  if (+ui.scrub.value !== Math.floor(t) || !ui.scrub.style.getPropertyValue('--p')) {
+    ui.scrub.value = Math.floor(t);
+    ui.scrub.style.setProperty('--p', `${(t / (S.data.duration || 1) * 100).toFixed(2)}%`);
+  }
   const left = S.live && S.liveInfo.live ? liveClock(S.live) : null;
   ui.clock.textContent = S.live ? (left !== null ? `${fmtClock(left)} remaining` : '') : S.sim ? fmtClock(t) : `${fmtClock(t)} / ${fmtClock(S.data.duration)}`;
   const race = S.live ? S.data.race : S.sim || S.data.mode === 'laps' || S.data.intervals.length > 0;
@@ -778,6 +944,7 @@ function render(force) {
   }
   const f = S.selected ? focusFrame(S, t, st, status, {pos: S.data.mode === 'gps' ? gpsPos : lapPos, nearest}) : null;
   renderFocus(f);  // gauges every frame, so they move smoothly
+  updateDrawer(f, t);
   updateDecks(S, st, f);
 }
 

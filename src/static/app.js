@@ -2,18 +2,19 @@
 // real sessions, results, standings, live timing); Simulate drops the browser chrome for a full-window physics race
 // on the chosen circuit (circuit and car pickers on the stage, season = the cars' era).
 import {get, rows, el, flag, fmtDate, teamColor, count, failed, skeleton} from './util.js';
-import {setupReplay, showRace, showLive, setSessions, intro, setCinematic, play, replayKind, REPLAY_KINDS, moment, openMoment} from './replay.js';
+import {setupReplay, showRace, showLive, setSessions, intro, setCinematic, play, replayKind, REPLAY_KINDS, moment, openMoment, stageCommands} from './replay.js';
 import {renderResults, renderLapChart, renderStandings} from './charts.js';
 import {seasonTrends} from './seasonview.js';
 import {setupExplorer} from './explorer.js';
 import {renderStrategyLab} from './strategylab.js';
 import {renderDrivers, decided} from './drivers.js';
-import {showStream, noStream, upcoming, until, at} from './stream.js';
+import {showStream, noStream, upcoming, until, at, when} from './stream.js';
 import {setupGlass} from './glass.js';
 import {capturing} from './input.js';
 import {setupPalette, openPalette, openSheet, openCounts, copyLink} from './palette.js';
 import {parseHash, formatHash} from './share.js';
 import {resultLedgers} from './ledgers.js';
+import {setupDownloads, startDownload, canDownload} from './downloads.js';
 
 const $ = id => document.getElementById(id);
 const A = {year: null, round: null, races: [], mode: 'watch', section: 'analytics'};
@@ -126,7 +127,7 @@ function countdown(r) {
     const s = (start - Date.now()) / 1000;
     if (s <= 0) { clearInterval(timer); return box.replaceChildren(el('span', {class: 'muted'}, 'Race under way')); }
     const d = Math.floor(s / 86400), h = Math.floor(s / 3600) % 24, m = Math.floor(s / 60) % 60;
-    box.replaceChildren(el('small', {class: 'muted'}, 'LIGHTS OUT IN'), el('b', {}, `${d ? `${d}d ` : ''}${h}h ${String(m).padStart(2, '0')}m`));
+    box.replaceChildren(el('small', {class: 'muted'}, 'LIGHTS OUT IN'), el('b', {}, `${d ? `${d}d ` : ''}${h}h ${String(m).padStart(2, '0')}m`), el('small', {class: 'muted'}, when(start)));
   };
   clearInterval(timer);
   timer = setInterval(tick, 30000);
@@ -251,7 +252,8 @@ async function nextSession() {
     const s = upcoming(races)[0];
     btn.hidden = !s;  // shortcut: after the season's last race, nothing until next year's calendar is in this year's list
     if (!s) return;
-    btn.replaceChildren(el('span', {class: 'muted'}, 'NEXT'), ` ${s.name} · ${s.r['Circuit.Location.country']} `, el('b', {}, until(s.d)));
+    btn.replaceChildren(el('span', {class: 'muted'}, 'NEXT'), ` ${s.name}`, el('span', {class: 'nextwhere'}, ` · ${s.r['Circuit.Location.country']}`),
+      ` · ${s.d.toLocaleString(undefined, {weekday: 'short', hour: '2-digit', minute: '2-digit'})} `, el('b', {}, until(s.d)));
     btn.title = `${s.r.raceName}, ${s.name}: ${s.d.toLocaleString(undefined, {weekday: 'long', hour: '2-digit', minute: '2-digit'})}`;
     btn.onclick = async () => {
       if (A.year !== +today.slice(0, 4)) await loadSeason(+today.slice(0, 4), s.r.round);
@@ -284,7 +286,7 @@ async function loadSeason(year, round = null, sim = A.mode === 'sim') {
   A.round = null;  // until a race of this season opens: no tab or address pairs the old round with the new year
   $('year').value = year;
   const cal = $('calendar');
-  cal.replaceChildren(el('div', {class: 'loading'}, el('div', {class: 'spinner'}), 'Loading calendar…'));
+  cal.replaceChildren(skeleton());
   let races;
   try {
     races = await jol('races');
@@ -385,9 +387,14 @@ function commands() {
       A.bounced = false;
       activate(b.dataset.tab);
     }})) : []),
+    ...(canDownload() ? [{label: 'Download assets', hint: 'About 600 MB', run: startDownload}] : []),
     {label: 'Circuits', hint: 'Simulate', run: () => { setView('sim'); open('circuitdeck'); }},
     {label: 'Cars', hint: 'Simulate', run: () => { setView('sim'); open('carsdeck'); }},
-    ...(A.round ? [{label: 'Telemetry trace', hint: 'T', run: () => { stage(); open('tracedeck'); }},
+    ...(A.round ? [{label: 'Telemetry trace', hint: 'Shift T', run: () => { stage(); open('tracedeck'); }},
+      {label: 'Race highlights', hint: 'H', run: () => { stage(); stageCommands.highlights(); }},
+      {label: 'Telemetry drawer', hint: 'T', run: () => { stage(); stageCommands.drawer(); }},
+      {label: 'Next time of day', hint: 'L', run: () => { stage(); stageCommands.sky(); }},
+      {label: 'Next graphics quality', hint: 'G', run: () => { stage(); stageCommands.tier(); }},
       {label: 'Cinematic view', hint: 'Replay', run: () => { stage(); setCinematic(); }}] : []),
     {label: 'Switch theme', run: () => $('themebtn').click()},
     {label: 'Keyboard shortcuts', hint: '?', run: openSheet},
@@ -468,7 +475,13 @@ async function init() {
   if (last && new Date(last).toDateString() !== new Date(now).toDateString() && now - last < 7 * 864e5) count('return_7d');
   try { localStorage.setItem('f1visit', now); } catch (e) { /* storage blocked: no returns counted */ }
   setMode(stored('f1mode') === 'sim' ? 'sim' : 'watch', false);
-  setTheme(stored('f1theme') ?? 'auto');
+  setTheme(stored('f1theme') ?? 'dark');
+  $('skip').onclick = e => {  // not a #fragment: the hash is the app's route
+    e.preventDefault();
+    const to = document.body.dataset.section === 'stream' ? $('stream') : document.querySelector('main');
+    to.tabIndex = -1;
+    to.focus();
+  };
   $('themebtn').onclick = () => setTheme(THEMES[(THEMES.findIndex(x => x[0] === document.documentElement.dataset.theme) + 1) % THEMES.length][0]);
   document.addEventListener('click', e => { const th = e.target.closest('table.data th'); if (th) sortTable(th); });
   takeToken();
@@ -517,7 +530,9 @@ async function init() {
   };
   checkLive();
   setInterval(checkLive, 60000);
+  setupGlass();
   nextSession();
+  setupDownloads();
   // the circuit selector (circuitdeck.js): a simulation at that circuit's latest race, switching season if needed
   addEventListener('f1:circuit', ({detail: {year, round}}) => {
     setMode('sim', false);
@@ -549,5 +564,4 @@ async function checkLive() {
   } catch (e) { /* live timing unreachable: keep the button hidden */ }
 }
 
-setupGlass();
 init();

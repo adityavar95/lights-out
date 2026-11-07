@@ -92,7 +92,7 @@ const css = c => `#${new THREE.Color(c).getHexString()}`;
 export const GEAR = new THREE.MeshPhysicalMaterial({color: 0x121316, roughness: 0.4, clearcoat: 0.7, clearcoatRoughness: 0.15});
 // a smoked visor: a thin-film coating gives the blue-to-gold sheen of a real tinted one
 export const VISOR = new THREE.MeshPhysicalMaterial({color: 0x05070a, metalness: 0.6, roughness: 0.04, clearcoat: 1,
-                                                      iridescence: 1, iridescenceIOR: 1.8, iridescenceThicknessRange: [280, 720]});
+                                                      iridescence: 1, iridescenceIOR: 1.8, iridescenceThicknessMinimum: 280, iridescenceThicknessMaximum: 720});
 
 // The helmet's design on the shell's UVs (u = phi: 0 and 1 the back, 0.5 the front; v = theta over TH, crown at the top):
 // base colour, an accent swoosh from the visor's top edge round both sides to the back, edged in a pinstripe, a centre

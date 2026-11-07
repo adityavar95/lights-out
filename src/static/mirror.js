@@ -2,8 +2,17 @@
 // drawn as seen from the viewer's eye reflected through the mirror's plane, through a frustum fitted to the glass (its
 // near plane on the mirror, so nothing behind the glass shows), and that image is projected back onto the glass.
 import * as THREE from 'three';
+import {texture, uniform, vec2, vec4, positionGeometry, mrt, output} from 'three/tsl';
 
-let rendering = false; // a mirror seen in another mirror keeps its last image
+const active = new Set();  // the glasses showing their reflection; scene3d.js renders them once a frame
+// A mirror's one attachment named as the scene pass's: an effect's material writes only velocity (vfx.js noVelocity), which
+// alone matched nothing here and made an empty, invalid shader.
+const OUTPUTS = mrt({output});
+const mirrorTarget = (width, height) => {
+  const target = new THREE.RenderTarget(width, height, { type: THREE.HalfFloatType, samples: 4 });
+  target.texture.name = 'output';
+  return target;
+};
 
 // mesh: the (roughly flat) glass, front faces toward the viewer; width: render target pixels;
 // hide: objects left out of the mirror's image (e.g. the car's own rear wheels);
@@ -42,30 +51,22 @@ export function makeMirror(mesh, { width = 512, hide = [], tilt = 0.025, extend 
   { const nt = n.clone().multiplyScalar(Math.cos(tilt)).addScaledVector(v, Math.sin(tilt));
     v.multiplyScalar(Math.cos(tilt)).addScaledVector(n, -Math.sin(tilt)); n.copy(nt); }
 
-  const target = new THREE.WebGLRenderTarget(width, Math.max(16, Math.round(width * (v1 - v0) / (u1 - u0))), { type: THREE.HalfFloatType, samples: 4 });
-  const textureMatrix = new THREE.Matrix4(), mirrorCamera = new THREE.PerspectiveCamera();
+  const target = mirrorTarget(width, Math.max(16, Math.round(width * (v1 - v0) / (u1 - u0))));
+  const textureMatrix = uniform(new THREE.Matrix4()), mirrorCamera = new THREE.PerspectiveCamera();
   mirrorCamera.layers.enable(1);  // tree crowns and fences are on layer 1 (circuit3d.js)
-  const modelled = mesh.material, glass = new THREE.ShaderMaterial({
-    name: 'mirror',
-    uniforms: { map: { value: target.texture }, textureMatrix: { value: textureMatrix } },
-    vertexShader: `uniform mat4 textureMatrix; varying vec4 vMirror;
-      void main() { vMirror = textureMatrix * vec4(position, 1.0); gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
-    fragmentShader: `uniform sampler2D map; varying vec4 vMirror;
-      void main() { gl_FragColor = texture2DProj(map, vMirror);
-      #include <tonemapping_fragment>
-      #include <colorspace_fragment>
-      }`,
-  });
+  // Project the rendered image back onto the glass. Linear HDR like the scene: the post chain tone-maps it with everything else.
+  // NDC y is up and a node uv's y is down, hence the flip.
+  const modelled = mesh.material, glass = new THREE.MeshBasicNodeMaterial({ name: 'mirror', fog: false });
+  const clip = textureMatrix.mul(vec4(positionGeometry, 1)), ndc = clip.xy.div(clip.w);
+  glass.colorNode = texture(target.texture, vec2(ndc.x.mul(0.5).add(0.5), ndc.y.mul(-0.5).add(0.5))).rgb;
   // mesh.userData.mirror(on): the glass reflects (on) or goes back to its modelled material.
-  (mesh.userData.mirror = on => { mesh.material = on ? glass : modelled; if (!on) stretch(0); })(true);
-  mesh.userData.disposeMirror = () => { target.dispose(); glass.dispose(); };
+  (mesh.userData.mirror = on => { mesh.material = on ? glass : modelled; if (on) active.add(render); else { active.delete(render); stretch(0); } });
+  mesh.userData.disposeMirror = () => { active.delete(render); target.dispose(); glass.dispose(); };
 
   const q = new THREE.Vector3(), down = new THREE.Vector3(), size = new THREE.Vector2();
   const C = new THREE.Vector3(), N = new THREE.Vector3(), up = new THREE.Vector3(), eye = new THREE.Vector3(), p = new THREE.Vector3();
-  const bias = new THREE.Matrix4().set(0.5, 0, 0, 0.5, 0, 0.5, 0, 0.5, 0, 0, 0.5, 0.5, 0, 0, 0, 1);
-  mesh.onBeforeRender = (renderer, scene, camera) => {
-    // post.js's motion-vector pass draws the scene with an override material: the mirror would capture that
-    if (rendering || mesh.material !== glass || scene.overrideMaterial) return;
+  // From the master loop, not onBeforeRender: WebGPU can't start another render pass from inside one
+  const render = (renderer, scene, camera, shadows) => {
     C.copy(centre).applyMatrix4(mesh.matrixWorld);
     N.copy(n).transformDirection(mesh.matrixWorld); up.copy(v).transformDirection(mesh.matrixWorld);
     const dist = eye.setFromMatrixPosition(camera.matrixWorld).sub(C).dot(N);
@@ -84,17 +85,60 @@ export function makeMirror(mesh, { width = 512, hide = [], tilt = 0.025, extend 
       const x = p.x * dist / -p.z, y = p.y * dist / -p.z;
       l = Math.min(l, x); r = Math.max(r, x); bt = Math.min(bt, y); tp = Math.max(tp, y);
     }
-    mirrorCamera.projectionMatrix.makePerspective(l, r, tp, bt, dist, camera.far);
+    // the camera's conventions set first: the renderer rebuilds a mismatched projection, which would lose this fitted one
+    mirrorCamera.coordinateSystem = renderer.coordinateSystem;
+    mirrorCamera._reversedDepth = camera.reversedDepth;  // read-only in public; three only ever flips it from its own render()
+    mirrorCamera.projectionMatrix.makePerspective(l, r, tp, bt, dist, camera.far, renderer.coordinateSystem, camera.reversedDepth);
     mirrorCamera.projectionMatrixInverse.copy(mirrorCamera.projectionMatrix).invert();
-    textureMatrix.copy(bias).multiply(mirrorCamera.projectionMatrix).multiply(mirrorCamera.matrixWorldInverse).multiply(mesh.matrixWorld);
+    textureMatrix.value.copy(mirrorCamera.projectionMatrix).multiply(mirrorCamera.matrixWorldInverse).multiply(mesh.matrixWorld);
 
-    const previous = renderer.getRenderTarget(), shadows = renderer.shadowMap.autoUpdate;
+    const previous = renderer.getRenderTarget();
     const shown = hide.map(o => o.visible);
-    rendering = true; mesh.visible = false; renderer.shadowMap.autoUpdate = false; hide.forEach(o => { o.visible = false; });
+    mesh.visible = false; hide.forEach(o => { o.visible = false; });
+    shadows(false);  // the cascades drawn for the main view are good enough at mirror size
+    renderer.setMRT(OUTPUTS);
     renderer.setRenderTarget(target); renderer.clear(); renderer.render(scene, mirrorCamera);
     renderer.setRenderTarget(previous);
+    renderer.setMRT(null);
+    shadows(true);
     hide.forEach((o, i) => { o.visible = shown[i]; });
-    renderer.shadowMap.autoUpdate = shadows; mesh.visible = true; rendering = false;
+    mesh.visible = true;
   };
   return mesh;
+}
+
+// Rendering the scene into a mirror for the first time builds every material's shader again for that target: it took ~2 s on the
+// switch to the cockpit. So they are built ahead, a few at a time, into a target of the same format.
+export async function warmMirrors(renderer, scene, meshes, stillWanted) {
+  const target = mirrorTarget(16, 16);
+  await warmFor(renderer, scene, meshes, target, OUTPUTS, stillWanted);
+  target.dispose();
+}
+
+// Builds each mesh's pipeline for `target` off the GPU process's main thread. A render builds a pipeline it lacks synchronously,
+// and DXC holds that thread (and so the whole page): a car's close-up parts took ~2 s the first time a camera got near one.
+export async function warmFor(renderer, scene, meshes, target, outputs, stillWanted) {
+  const camera = new THREE.PerspectiveCamera(), previous = renderer.getRenderTarget();
+  camera.layers.enableAll();
+  let slice = performance.now();
+  for (const mesh of meshes) {
+    if (!stillWanted()) break;
+    const culled = mesh.frustumCulled, was = renderer.getRenderTarget();
+    mesh.frustumCulled = false;
+    renderer.setMRT(outputs);
+    renderer.setRenderTarget(target);
+    const done = renderer.compileAsync(mesh, camera, scene);  // its synchronous part picks up the target
+    renderer.setRenderTarget(was);
+    renderer.setMRT(null);
+    mesh.frustumCulled = culled;
+    await done;
+    if (performance.now() - slice > 8) { await new Promise(r => setTimeout(r)); slice = performance.now(); }  // a frame gets a turn
+  }
+  renderer.setRenderTarget(previous);
+  renderer.setMRT(null);
+}
+
+// shadows(on): switches the sun's cascades on or off around a mirror's render
+export function renderMirrors(renderer, scene, camera, shadows) {
+  for (const render of active) render(renderer, scene, camera, shadows);
 }

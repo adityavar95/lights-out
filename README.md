@@ -163,7 +163,7 @@ The **Simulate** view runs a full physics race on the real circuit, with a grid 
 <table>
 <tr>
 <td width="50%"><img src="docs/screenshots/circuit-selector.jpg" alt="Circuit selector with a card per circuit: outline, sectors, DRS zones, elevation profile and lap record"></td>
-<td width="50%"><img src="docs/screenshots/car-showroom.jpg" alt="Car showroom of constructors' champions from the turbo-hybrid era with a 3D preview and spec card"></td>
+<td width="50%"><img src="docs/screenshots/car-showroom.jpg" alt="Car showroom of constructors' champions by era: the 2026 Red Bull RB22 in 3D with its spec card"></td>
 </tr>
 <tr>
 <td align="center"><sub><b>CIRCUITS:</b> sectors, DRS zones, elevation and lap records; one click starts a race there</sub></td>
@@ -174,7 +174,7 @@ The **Simulate** view runs a full physics race on the real circuit, with a grid 
 **Telemetry trace (`T`):** speed, throttle, brake, rpm and gear for any two cars against track distance, with Δt, sector zoom, a saved reference lap that outlives the race (compare eras!), CSV/JSON export, and a race engineer that tells you where the time went.
 
 <p align="center">
-<img src="docs/screenshots/telemetry-trace.jpg" alt="Telemetry trace comparing two cars at Monaco with delta time, speed, throttle, brake and rpm channels and race-engineer insights" width="100%">
+<img src="docs/screenshots/telemetry-trace.jpg" alt="Telemetry trace comparing two cars at Austin with delta time, speed, throttle, brake and rpm channels and race-engineer insights" width="100%">
 </p>
 
 ### 📊 Races
@@ -352,7 +352,7 @@ uv sync
 uv run python src/server.py
 ```
 
-Open **http://127.0.0.1:8086**. Other devices on the same network can open **http://&lt;this-computer-ip&gt;:8086** (the server prints the address). If Windows Firewall asks, allow access on private networks.
+Open **http://127.0.0.1:8086**. The first load fetches the page's libraries, so it needs internet. The **Download assets** button at the top right fetches every 4K sky and texture and the satellite ground (about 600 MB, ~45 min, resumes if interrupted), so nothing has to load later. Without it the 3D view streams lighter versions. The exe ships with all of this, so there the button just reads **Assets ready**. Other devices on the same network can open **http://&lt;this-computer-ip&gt;:8086** (the server prints the address). If Windows Firewall asks, allow access on private networks.
 
 > [!NOTE]
 > On start-up the server builds the GPS replays of the season's last 3 races in the background. The first replay of any other GPS session downloads every car's trace from OpenF1 (20–60 s); the lap-timing replay plays meanwhile and the GPS replay takes over when it's ready. Finished sessions are cached in `.cache/replay/`.
@@ -397,7 +397,7 @@ On Windows 10/11, with the Quick start prerequisites:
    dist/LightsOut/LightsOut.exe
    ```
 
-4. Zip the whole folder to share it (about 450 MB unzipped). The exe needs the `_internal` folder beside it, so share the folder, not the exe alone:
+4. Zip the whole folder to share it (about 1.1 GB unzipped). The exe needs the `_internal` folder beside it, so share the folder, not the exe alone:
 
    ```powershell
    Compress-Archive -Path dist\LightsOut -DestinationPath dist\LightsOut-windows-x64.zip -Force

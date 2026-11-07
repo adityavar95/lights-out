@@ -1,6 +1,6 @@
 // Drivers tab: everyone who raced in the header's season (1950 on), with Wikipedia's portrait and the season's numbers
 // worked out from its race results; a click opens the driver's whole career, season by season (/api/driver).
-import {get, rows, el, teamColor, th} from './util.js';
+import {get, rows, el, teamColor, th, skeleton} from './util.js';
 import {teammates, qualiRounds, h2hLine, fmtGap} from './season.js';
 
 const id = r => r['Driver.driverId'] ?? r.Driver?.driverId;  // season tables come flattened, /api/driver rows nested
@@ -85,33 +85,39 @@ export function renderDrivers(root, year, standings, results, drivers, over, qua
     const teams = uniq(res.map(r => team(r)[1])).map(n => team(res.find(r => team(r)[1] === n)));
     if (!teams.length && s?.Constructors?.length) teams.push(...s.Constructors.map(c => [c.constructorId, c.name]));
     const age = d.dob ? year - +d.dob.slice(0, 4) : null, pts = s ? +s.points : t.points, pic = photo(d), line = el('div', {class: 'dh2h'});
-    h2h.then(m => { line.textContent = line.title = h2hLine(m.get(x), family); });
+    h2h.then(m => { line.title = h2hLine(m.get(x), family); line.replaceChildren(...line.title.split(' · ').flatMap((part, i) => [i ? ' · ' : '', el('span', {}, part)])); });  // wraps between facts, never inside '11-8'
     const card = el('button', {class: 'dcard', onclick: () => career(d, h2h, year, family)},
       pic, s?.position && el('span', {class: `dpos ${over && s.position === '1' ? 'champ' : ''}`}, `P${s.position}`),
       el('div', {class: 'dname'}, el('small', {}, d.given), el('b', {}, d.family)),
       el('div', {class: 'dmeta'}, [d.num && `#${d.num}`, d.code, d.nat, age && `age ${age}`].filter(Boolean).join(' · ')),
-      el('div', {class: 'dteam'}, teams.map(tm => [chip(tm), tm[1]]).flatMap((x, i) => i ? [' / ', ...x] : x)),
+      el('div', {class: 'dteam'}, el('span', {}, teams.map(tm => [chip(tm), tm[1]]).flatMap((x, i) => i ? [' / ', ...x] : x)), el('span', {class: 'dstarts'}, `${t.starts} ${t.starts === 1 ? 'start' : 'starts'}`)),
       el('div', {class: 'dstats'}, stat('PTS', pts), stat('WINS', t.wins), stat('PODIUMS', t.podiums), stat('POLES', t.poles, 'Started from P1'),
-        stat('FASTEST', year >= 2004 ? t.fastest : null, 'Fastest laps (Jolpica has them from 2004)'), stat('DNF', t.dnfs, 'Retired'), stat('STARTS', t.starts)), line);
+        stat('FASTEST', year >= 2004 ? t.fastest : null, 'Fastest laps (Jolpica has them from 2004)'), stat('DNF', t.dnfs, 'Retired')), line);
     const text = `${d.given} ${d.family} ${d.code ?? ''} ${d.nat ?? ''} ${teams.map(x => x[1]).join(' ')}`.toLowerCase();
-    return {card, pic, text, k: {champ: +s?.position || 999, wins: -t.wins, podiums: -t.podiums, poles: -t.poles, points: -pts, starts: -t.starts,
+    return {card, pic, text, reserve: !t.starts && !pts, k: {champ: +s?.position || 999, wins: -t.wins, podiums: -t.podiums, poles: -t.poles, points: -pts, starts: -t.starts,
       age: age ?? 999, name: d.family}};
   });
-  const grid = el('div', {class: 'dgrid'}, cards.map(c => c.card));
+  const grid = el('div', {class: 'dgrid'});
+  let showAll = false;
   const search = el('input', {type: 'search', placeholder: 'Find a driver, team or nationality', 'aria-label': 'Find a driver'});
   const sort = el('select', {'aria-label': 'Sort drivers'}, [['champ', 'Championship'], ['points', 'Points'], ['wins', 'Wins'], ['podiums', 'Podiums'],
     ['poles', 'Poles'], ['starts', 'Starts'], ['age', 'Youngest'], ['name', 'Name']].map(([v, l]) => new Option(l, v)));
   const show = () => {
     const q = search.value.trim().toLowerCase(), k = sort.value;
-    const found = cards.filter(c => !q || c.text.includes(q))
+    const found = cards.filter(c => (q ? c.text.includes(q) : !c.reserve || showAll))
       .sort((a, b) => (k === 'name' ? a.k.name.localeCompare(b.k.name) : a.k[k] - b.k[k]) || a.k.champ - b.k.champ).map(c => c.card);
     grid.replaceChildren(...(found.length ? found : [el('p', {class: 'empty'}, `No drivers match “${search.value.trim()}”.`)]));
   };
   search.oninput = sort.onchange = show;
+  const reserves = cards.filter(c => c.reserve).length, ran = ids.length - reserves;
+  showAll = !ran;  // before a season's first race, the entry list is all there is
+  const moreText = () => `${showAll ? 'Hide' : 'Show'} ${reserves} entered without a start`;
+  const more = el('button', {class: 'pill dmore', hidden: !reserves || !ran, onclick: () => { showAll = !showAll; show(); more.textContent = moreText(); }}, moreText());
+  show();
   const champ = ids.find(x => place.get(x)?.position === '1');
   root.replaceChildren(el('div', {class: 'dhead'},
-    el('h2', {}, `${year} · ${ids.length} drivers`, champ && el('span', {class: 'muted'}, ` · ${over ? 'Champion' : 'Leader'}: ${info.get(champ).given} ${info.get(champ).family}`)),
-    search, sort), grid);
+    el('h2', {}, `${year} · ${ran || ids.length} drivers`, champ && el('span', {class: 'muted'}, ` · ${over ? 'Champion' : 'Leader'}: ${info.get(champ).given} ${info.get(champ).family}`)),
+    search, sort), grid, more);
   portraits([...info.values()]).then(() => cards.forEach(c => c.pic.put()));
 }
 
@@ -131,7 +137,7 @@ function h2hTable(records, year, family) {
 
 // a driver's whole career in a dialog: totals, teams, then every season
 async function career(d, h2h, year, family) {
-  const body = el('div', {class: 'loading'}, el('div', {class: 'spinner'}), 'Loading career…');
+  const body = el('div', {}, skeleton());
   const dlg = el('dialog', {class: 'dcareer', 'aria-labelledby': 'dcareer-name', 'aria-label': `${d.given} ${d.family}`, onclose: () => dlg.remove(), onclick: e => e.target === dlg && dlg.close()},
     el('button', {class: 'dclose', 'aria-label': 'Close', onclick: () => dlg.close()}, '✕'), body);
   document.body.append(dlg);
@@ -163,7 +169,7 @@ async function career(d, h2h, year, family) {
       el('h2', {id: 'dcareer-name'}, `${d.given} ${d.family}`),
       el('p', {class: 'muted'}, [d.dob && `Born ${new Date(d.dob + 'T00:00:00').toLocaleDateString(undefined, {day: 'numeric', month: 'long', year: 'numeric'})}`,
         seasons.length && `${seasons.length} season${seasons.length === 1 ? '' : 's'} · ${seasons[0].y}–${seasons.at(-1).y}`].filter(Boolean).join(' · ')),
-      champs.length > 0 && el('p', {class: 'ctitles'}, `🏆 World Champion ${champs.join(', ')}`),
+      champs.length > 0 && el('p', {class: 'ctitles'}, `World Champion ${champs.join(', ')}`),
       w.extract && el('p', {class: 'cbio'}, w.extract),
       d.url && el('a', {href: d.url, target: '_blank', rel: 'noopener'}, 'Wikipedia ↗'))),
     el('div', {class: 'dstats big'}, stat('TITLES', champs.length), stat('BEST CHAMP.', bestChamp < 999 ? `P${bestChamp}` : null), stat('STARTS', t.starts),

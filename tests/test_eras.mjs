@@ -41,7 +41,7 @@ assert.equal(instant[0], 1, 'MGU-H: no lag');
 // 2026: the MGU-K fades past 290 km/h (the override holds it longer), and straight mode sheds drag and downforce
 const c26 = carSpec(2026);
 assert.equal(kLimit(c26, 250 / 3.6, false), 350e3);
-assert.ok(kLimit(c26, 330 / 3.6, false) < 250e3 && kLimit(c26, 330 / 3.6, true) === 350e3, 'super clipping taper vs override');
+assert.ok(kLimit(c26, 330 / 3.6, false) === 150e3 && kLimit(c26, 330 / 3.6, true) === 350e3, 'taper vs override');
 const flaps = mode => {
   const car = {v: 80, z: 0, zv: 0, aeroX: mode === 'X_MODE_STRAIGHT' ? 1 : 0, seal: 1};
   return aero(car, c26, {...control(), aeroMode: mode, throttle: 1, brake: 0}, 1 / 120, {mult: 1, drag: 1, vertical: 0, kerb: 0, bump: 0, drsCut: 0});

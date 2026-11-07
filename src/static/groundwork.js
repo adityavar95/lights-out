@@ -13,7 +13,7 @@ onmessage = async ({data: {url, pts, map, box: [x0, x1, z0, z1], L, maxPx}}) => 
     if (fit.rms > 15) return postMessage({rms: fit.rms});
     const kx = 111320 * Math.cos(geo.lat * Math.PI / 180);  // local metres -> degrees, as the server's GeoJSON projection
     const lonLat = (X, Z) => { const [e, n] = fit.map([X / map.k + map.cx, Z / map.k + map.cy]); return [geo.lng + e / kx, geo.lat + n / 110570]; };
-    const img = await satellite([[x0, z0], [x1, z0], [x0, z1], [x1, z1]].map(p => lonLat(...p)), maxPx);
+    const img = await satellite([[x0, z0], [x1, z0], [x0, z1], [x1, z1]].map(p => lonLat(...p)), maxPx, progress => postMessage({progress}));
     const uv = (X, Z) => { const [px, py] = mercator(lonLat(X, Z), img.z); return [(px - img.x0) / img.canvas.width, (py - img.y0) / img.canvas.height]; };
     const o = uv(0, 0), ux = uv(L, 0), uz = uv(0, L);
     // vegetation: green beats red and blue, on a 512 px copy (reading the full image would be ~50 MB)

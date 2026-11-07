@@ -83,7 +83,7 @@ export function raceModel(laps, pits) {
           pitLoss: losses.length ? Math.max(5, median(losses)) : 22};
 }
 
-function tyre(fits, stops, L) {
+export function tyre(fits, stops, L) {
   const [k, age] = stintAt(stops, L), f = fits[Math.min(k, fits.length - 1)];
   return f.a + f.b * age;
 }

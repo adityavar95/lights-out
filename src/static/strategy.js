@@ -4,7 +4,7 @@ import {COMPOUNDS, DRY, isWetTyre, stintLife, blankets} from './tyres.js';
 import {trackWetness} from './weather.js';
 import {neutralised, vscDelta, safetyCar} from './racecontrol.js';
 
-export const PIT_LIMIT = 80 / 3.6;  // pit lane speed limiter, m/s
+export const PIT_LIMIT = 80 / 3.6;  // pit lane speed limiter, m/s (R.pit.limit: 60 km/h at the tightest lanes, circuits.js)
 
 // R.pit, the race's pit lane, in metres of progress x from the commit point (lap distance AT), where a car that has
 // been called in leaves the racing line: it joins the lane's path by JOIN, has braked to the limiter by ENTRY, stops
@@ -106,9 +106,9 @@ export function pitPath(L, x) {
 }
 
 // The lane length that reproduces a circuit's real green-flag pit loss (MultiViewer's figure), from the loss model
-// below with ~65 m/s racing pace past the pits: loss = L / v_limit + 13 - (L + 300) / 65, solved for L.
-export const laneFor = loss => Math.min(650, Math.max(250, (loss - 8.4) / 0.0297));
-const OVERHEAD = 13;  // s, see pitLoss
+// below with ~65 m/s racing pace past the pits: loss = L / v_limit + OVERHEAD - (L + 300) / 65, solved for L.
+export const laneFor = (loss, limit = PIT_LIMIT) => Math.min(650, Math.max(250, (loss - OVERHEAD + 300 / 65) / (1 / limit - 1 / 65)));
+const OVERHEAD = 10.5;  // s, see pitLoss
 export const pitOffset = T => -(T.half + 6.5);  // made-up lane's centre: left of the track, inside the barrier
 
 // A real pit lane, from one car's GPS trace round a pit stop. trace: map points (null where there are none); pts: the
@@ -161,7 +161,7 @@ export const createPit = compound => ({state: 'RACING', box: null, start: 0, tim
 export const ease = f => f * f * (3 - 2 * f);
 export function pitControl(R, car, h, line) {
   const P = car.pit, L = R.T.len, lapS = ((car.s % L) + L) % L;
-  const {JOIN, ENTRY, EXIT, OUT, REJOIN} = R.pit, BOX = R.pit.BOX + (car.boxAt ?? 0), path = x => pitPath(R.pit, x);
+  const {JOIN, ENTRY, EXIT, OUT, REJOIN, limit} = R.pit, BOX = R.pit.BOX + (car.boxAt ?? 0), path = x => pitPath(R.pit, x);
   if (P.state === 'RACING') {
     const past = ((lapS - R.pit.AT) % L + L) % L;  // metres past the commit point
     segmentTiming(R, car, past);
@@ -174,13 +174,13 @@ export function pitControl(R, car, h, line) {
   const x = car.s - P.start;
   if (P.state === 'ENTRY') {
     if (x >= ENTRY) P.state = 'LANE';
-    return {vCap: Math.sqrt(PIT_LIMIT ** 2 + 2 * 20 * Math.max(0, ENTRY - x)),  // brake to 80 km/h by the line
+    return {vCap: Math.sqrt(limit ** 2 + 2 * 20 * Math.max(0, ENTRY - x)),  // brake to the limit by the line
             d: P.d0 + (path(x) - P.d0) * ease(Math.min(1, x / JOIN))};
   }
   if (P.state === 'LANE' && !P.changed) {
     // crews vary by a few tenths; changing a broken front wing as well takes ~7 s more
     if (x >= BOX - 0.5) { P.state = 'STOPPED'; P.timer = 2.2 + Math.random() * 0.8 + (car.damage > 0.05 ? 7 : 0); }
-    return {vCap: Math.min(PIT_LIMIT, Math.sqrt(2 * 10 * Math.max(0, BOX - x)) + 0.3), d: path(x)};  // ~1 g into the box
+    return {vCap: Math.min(limit, Math.sqrt(2 * 10 * Math.max(0, BOX - x)) + 0.3), d: path(x)};  // ~1 g into the box
   }
   if (P.state === 'STOPPED') {
     P.timer -= h;
@@ -200,7 +200,7 @@ export function pitControl(R, car, h, line) {
   }
   if (P.state === 'LANE') {
     if (x >= EXIT) P.state = 'EXIT';
-    return {vCap: PIT_LIMIT, d: path(x)};
+    return {vCap: limit, d: path(x)};
   }
   // EXIT: accelerate from the exit line along the lane's path, then from OUT merge back to the racing line
   if (x >= REJOIN) { P.state = 'RACING'; P.changed = false; return null; }
@@ -274,15 +274,15 @@ function segmentTiming(R, car, past) {  // past: metres past the commit point
 }
 
 // Time lost by pitting this lap. The stop covers lane + 300 m (commit to rejoin): e.g. 400 m of pit lane at 80 km/h (18 s), plus
-// an overhead of ~13 s (braking to and accelerating from the limiter, stopping in and leaving the box, ~2.6 s
+// an overhead of ~10.5 s (braking to and accelerating from the limiter, stopping in and leaving the box, ~2.6 s
 // stationary, and an out-lap on tyres still coming up to temperature; calibrated against simulated stops), against
 // the time the same 700 m takes at this car's racing pace, which a VSC slows by 1/0.65 and a Safety Car by ~1/0.6
-// for everyone else too:   loss = 400 / v_limit + 13 - t_racing / slowdown
+// for everyone else too:   loss = 400 / v_limit + OVERHEAD - t_racing / slowdown
 // Green flag: about 20-24 s; under a VSC or Safety Car the same stop costs about 12 s, the "cheap stop".
 export function pitLoss(R, car) {
   const {REJOIN, LANE} = R.pit, racing = car?.segT ?? REJOIN / 65;  // until timed, assume ~235 km/h down the pit straight
   const slow = safetyCar(R.control) ? 0.6 : vscDelta(R.control);
-  return LANE / PIT_LIMIT + OVERHEAD - racing / slow;
+  return LANE / R.pit.limit + OVERHEAD - racing / slow;
 }
 
 // Where the car would come out if it boxed this lap: `loss` seconds further back. Its ghost is where the car itself

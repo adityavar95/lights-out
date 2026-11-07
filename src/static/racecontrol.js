@@ -4,11 +4,11 @@
 //                  GREEN --deploy SC---> SC  --green--> SC IN (until the leader next crosses the line) --> GREEN
 // VSC: every car must keep to a delta 35 % slower than racing pace, so the field slows together and time gaps hold.
 // SC:  the leader follows the safety car's pace, everyone else closes up behind and may not overtake.
-// DRS is enabled only under green, on a dry track (<= 20 % wetness), from lap 3 and from the second lap after a
-// safety car restart; it is disabled the moment any of those stops holding.
+// DRS is enabled only under green, on a dry track (<= 20 % wetness), and drsLaps laps after the start or a safety car
+// restart (2 until 2023, 1 from 2024); it is disabled the moment any of those stops holding.
 // drsName: what the messages call it ('OVERTAKE' from 2026, when the overtake mode replaced DRS)
-export const createControl = (drsName = 'DRS') => ({state: 'GREEN', since: 0, request: null, drs: false, restartLap: -Infinity,
-                                                    slippery: false, messages: [], windowStint: null, drsName});
+export const createControl = (drsName = 'DRS', drsLaps = 2) => ({state: 'GREEN', since: 0, request: null, drs: false, restartLap: -Infinity,
+                                                    slippery: false, messages: [], windowStint: null, drsName, drsLaps});
 
 // messages in the replay's race-control feed format: [time, category, flag, text]
 const say = (C, t, text, flag = null) => C.messages.push([Math.round(t * 10) / 10, 'Race Control', flag, text]);
@@ -33,7 +33,7 @@ export function controlStep(C, dt, t, leader, wetness) {
   }
   if (wetness > 0.2 && !C.slippery) { C.slippery = true; say(C, t, 'TRACK SURFACE SLIPPERY'); }
   if (wetness < 0.15) C.slippery = false;  // hysteresis, so a track hovering at 20 % doesn't spam messages
-  const drs = C.state === 'GREEN' && leader.lapsDone >= 2 && leader.lapsDone >= C.restartLap + 2 && wetness <= 0.2;
+  const drs = C.state === 'GREEN' && leader.lapsDone >= C.drsLaps && leader.lapsDone >= C.restartLap + C.drsLaps && wetness <= 0.2;
   if (drs !== C.drs) say(C, t, `${C.drsName} ${drs ? 'ENABLED' : 'DISABLED'}`);
   C.drs = drs;
   // pit window: called once per leader stint, when the leader's tyres are past half life

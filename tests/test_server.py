@@ -624,6 +624,11 @@ try:
     newest = []
     server._elevation_at = lambda c, y: newest.append(y) or {"x": []}
     assert client.get("/api/elevation/2010/1").status_code == 200 and newest == [this]
+    # only the page's own origin may start the resources download
+    started = []
+    server.assets.start = lambda: started.append(1)
+    assert client.post("/api/assets/download", headers={"Origin": "https://evil.example"}).status_code == 403 and not started
+    assert client.post("/api/assets/download", headers={"Origin": "http://testserver"}).status_code == 202 and started
     # S-L3: only the page's own origin may count
     assert client.post("/api/count/visit", headers={"Origin": "https://evil.example"}).status_code == 403
     assert client.post("/api/count/nope", headers={"Origin": "http://testserver"}).status_code == 404  # past the origin check
