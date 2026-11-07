@@ -2,92 +2,71 @@
 // simulated in real seconds; `vfx.mps` (metres per scene unit) converts physical speeds and gravity.
 import * as THREE from 'three';
 import {mergeGeometries} from 'three/addons/utils/BufferGeometryUtils.js';
-import {dataTex, normalTex} from './cars3d.js';
+import {Fn, If, Discard, uniform, attribute, instancedBufferAttribute, instancedDynamicBufferAttribute, uv, time, vec2, vec3, vec4, float, length, dot, max, pow, sqrt, clamp, smoothstep, normalize, cross,
+        screenUV, viewportSharedTexture, viewportDepthTexture, viewportLinearDepth, linearDepth, positionView, cameraPosition, cameraFar, cameraNear, mrt} from 'three/tsl';
+import {noise} from './track3d.js';
 
 const MAX_SPARKS = 2000, MAX_SMOKE = 600, MAX_SPRAY = 1500, MAX_RAIN = 4000;
 const rnd = (a, b) => a + Math.random() * (b - a);
-const fract = x => x - Math.floor(x);
-
-// periodic value noise on an n x n lattice (tiles seamlessly)
-function vnoise(u, v, n) {
-  const h = (i, j) => fract(Math.sin((((i % n) + n) % n) * 127.1 + (((j % n) + n) % n) * 311.7) * 43758.5453);
-  const x = u * n, y = v * n, i = Math.floor(x), j = Math.floor(y), sx = (x - i) ** 2 * (3 - 2 * (x - i)), sy = (y - j) ** 2 * (3 - 2 * (y - j));
-  const a = h(i, j) + (h(i + 1, j) - h(i, j)) * sx, b = h(i, j + 1) + (h(i + 1, j + 1) - h(i, j + 1)) * sx;
-  return a + (b - a) * sy;
-}
+const noVelocity = {velocity: vec4(0)};  // see post.js: an effect has no motion vector of its own
 
 // ---------- heat haze ----------
 
-// three.js draws the opaque scene into a mip-mapped buffer before transmissive surfaces, which then sample it along the
-// refracted view ray: the screen offset is ~ thickness * (refract(v, n, 1 / ior) - v). Real hot air has ior ~1.0003, far
-// too little to see, so ior is exaggerated; the normal is two octaves of noise scrolling upwards, so what is behind the
-// exhaust wobbles like rising turbulent air. alphaMap fades the edges so the distortion has no visible border, and
-// specularIntensity 0 stops the "glass" reflecting anything.
-const hazeMat = new THREE.MeshPhysicalMaterial({
-  transmission: 1, roughness: 0, ior: 1.2, thickness: 0.8, specularIntensity: 0, transparent: true, depthWrite: false,
-  side: THREE.DoubleSide,
-  normalMap: normalTex(128, (u, v) => vnoise(u, v, 6) + 0.5 * vnoise(u, v, 12), 0.05),
-  alphaMap: dataTex(64, (u, v) => { const r = Math.min(1, Math.hypot(u - 0.5, v - 0.5) * 2); return Array(4).fill((1 - r * r) ** 2); }, false),
-});
+// A transparent sheet showing what's behind it through a wobbling screen offset: rising hot air bends light by far too
+// little to compute, so it's two octaves of noise scrolling upwards. Cheaper than a transmission material, which rendered the
+// scene a second time per frame. viewportSharedTexture copies the frame once however many cars use it.
+const hazeMat = new THREE.MeshBasicNodeMaterial({transparent: true, depthWrite: false, side: THREE.DoubleSide, fog: false});
+hazeMat.mrtNode = mrt(noVelocity);
+{
+  const p = uv().mul(vec2(7, 4)).add(vec2(0, time.mul(-1.8)));
+  const wobble = vec2(noise(p).add(noise(p.mul(2).add(11)).mul(0.5)), noise(p.add(5)).add(noise(p.mul(2).add(23)).mul(0.5))).sub(0.75);
+  const r = length(uv().sub(0.5)).mul(2).min(1), edge = float(1).sub(r.mul(r));
+  hazeMat.backdropNode = viewportSharedTexture(screenUV.add(wobble.mul(0.006).mul(edge)));
+  hazeMat.userData.readsViewport = true;  // scene3d.js warmCockpit: copies the frame, which only works inside a pass
+  hazeMat.opacityNode = edge.mul(edge).mul(0.65);
+}
 
 // plume from the exhaust exit (car metres): one sheet along the car, one across it, so it reads from the side and behind
 export function haze(exhaust) {
   const mesh = new THREE.Mesh(mergeGeometries([new THREE.PlaneGeometry(1.4, 0.6).translate(-0.7, 0.15, 0),
                                                new THREE.PlaneGeometry(0.7, 0.6).rotateY(Math.PI / 2).translate(-0.35, 0.15, 0)]), hazeMat);
   mesh.position.copy(exhaust);
-  mesh.layers.set(1);  // not in the motion-vector pass
+  mesh.layers.set(1);  // effects stay on layer 1, away from what casts shadows
   return mesh;
 }
 
 // ---------- particles ----------
 
-// Tyre smoke as lit sphere impostors: each point sprite is shaded as if it were a ball of smoke. The normal comes from the
-// sprite coordinate (z = sqrt(1 - r^2) towards the viewer); half-Lambert wrap lets light bleed through the thin edges, and
-// a Henyey-Greenstein phase function adds the bright silver lining when looking towards the sun through the smoke:
+// Tyre smoke as lit sphere impostors: each sprite is shaded as if it were a ball of smoke. The normal comes from the sprite
+// coordinate (z = sqrt(1 - r^2) towards the viewer); half-Lambert wrap lets light bleed through the thin edges, and a
+// Henyey-Greenstein phase function adds the bright silver lining when looking towards the sun through the smoke:
 //   p(theta) = (1 - g^2) / (1 + g^2 - 2 g cos theta)^1.5   (normalised so isotropic scattering is 1)
 // with theta between the light's travel direction (-L) and the direction to the eye (+z in view space): cos theta = -L.z.
-const smokeShader = {
-  vertexShader: /* glsl */`
-    attribute float aSize, aAlpha, aSeed;
-    uniform float uScale;
-    varying float vAlpha, vSeed;
-    #include <common>
-    #include <logdepthbuf_pars_vertex>
-    void main() {
-      vec4 mv = modelViewMatrix * vec4(position, 1.0);
-      gl_Position = projectionMatrix * mv;
-      // a ball of diameter aSize at depth -mv.z spans aSize * P[1][1] * (viewport height / 2) / -mv.z pixels
-      gl_PointSize = min(aSize * uScale / -mv.z, 1024.0);
-      vAlpha = aAlpha;
-      vSeed = aSeed;
-      #include <logdepthbuf_vertex>
-    }`,
-  fragmentShader: /* glsl */`
-    uniform vec3 uSun, uSunColor, uAmbient;
-    uniform float uAlbedo;
-    varying float vAlpha, vSeed;
-    #include <logdepthbuf_pars_fragment>
-    float hash(vec2 p) { vec3 q = fract(vec3(p.xyx) * 0.1031); q += dot(q, q.yzx + 33.33); return fract((q.x + q.y) * q.z); }
-    float noise(vec2 p) {
-      vec2 i = floor(p), f = fract(p);
-      f = f * f * (3.0 - 2.0 * f);
-      return mix(mix(hash(i), hash(i + vec2(1, 0)), f.x), mix(hash(i + vec2(0, 1)), hash(i + 1.0), f.x), f.y);
-    }
-    void main() {
-      #include <logdepthbuf_fragment>
-      vec2 p = gl_PointCoord * 2.0 - 1.0;
-      p.y = -p.y;  // gl_PointCoord runs downwards
-      float r2 = dot(p, p);
-      if (r2 > 1.0) discard;
-      vec3 n = vec3(p, sqrt(1.0 - r2));
-      // optical depth through a sphere ~ its chord length (1 - r^2), broken up by noise so puffs don't read as discs
-      float density = (1.0 - r2) * (0.45 + 0.55 * noise(p * 2.5 + vSeed * 31.0)) * (0.6 + 0.4 * noise(p * 6.0 - vSeed * 17.0));
-      float wrap = dot(n, uSun) * 0.5 + 0.5;
-      float g = 0.6, phase = (1.0 - g * g) / pow(1.0 + g * g + 2.0 * g * uSun.z, 1.5);
-      vec3 light = uAmbient + uSunColor * (0.7 * wrap + 0.3 * phase);
-      gl_FragColor = vec4(vec3(uAlbedo) * light, density * vAlpha);
-    }`,
-};
+// Where a puff meets the road or a car it fades out by the depth left between them, or the disc's hard intersection shows.
+function smokeMaterial(uniforms, albedo, pos, size, alphaAttr, seedAttr) {
+  const m = new THREE.PointsNodeMaterial({transparent: true, depthWrite: false, sizeAttenuation: false, fog: false});
+  m.mrtNode = mrt(noVelocity);
+  // a ball of diameter aSize at depth -z spans aSize * P[1][1] * (viewport height / 2) / -z pixels
+  m.positionNode = instancedDynamicBufferAttribute(pos, 'vec3');
+  m.sizeNode = instancedDynamicBufferAttribute(size, 'float').mul(uniforms.scale).div(positionView.z.negate()).min(1024);
+  const seed = instancedBufferAttribute(seedAttr, 'float'), alpha = instancedDynamicBufferAttribute(alphaAttr, 'float');
+  const p = uv().mul(2).sub(1), r2 = dot(p, p);
+  const density = Fn(() => {
+    If(r2.greaterThan(1), () => { Discard(); });
+    // optical depth through a sphere ~ its chord length (1 - r^2), broken up by noise so puffs don't read as discs
+    return float(1).sub(r2).mul(noise(p.mul(2.5).add(seed.mul(31))).mul(0.55).add(0.45)).mul(noise(p.mul(6).sub(seed.mul(17))).mul(0.4).add(0.6));
+  })();
+  const n = vec3(p.x, p.y.negate(), sqrt(max(float(1).sub(r2), 0)));
+  const wrap = dot(n, uniforms.sun).mul(0.5).add(0.5);
+  const phase = float(0.64).div(pow(float(1.36).add(uniforms.sun.z.mul(1.2)), 1.5));  // g = 0.6
+  m.colorNode = float(albedo).mul(uniforms.ambient.add(uniforms.sunColor.mul(wrap.mul(0.7).add(phase.mul(0.3)))));
+  // reversed depth renders to depth32float, and the viewport depth copy must match or WebGPU refuses it
+  viewportDepthTexture().value.type = THREE.FloatType;
+  const range = cameraFar.sub(cameraNear);
+  m.opacityNode = density.mul(alpha).mul(clamp(viewportLinearDepth.sub(linearDepth()).mul(range).div(uniforms.soft), 0, 1));
+  m.userData.readsViewport = true;
+  return m;
+}
 
 // fixed-size pool reused as a ring: the newest particle overwrites the oldest. clock / end: pool time now and when its
 // last particle dies, so a pool with nothing alive costs nothing per frame (see idle)
@@ -119,16 +98,13 @@ function spawn(p, origin, vel) {
 // Puffs: soft lit sphere impostors (smokeShader) in a ring-buffer pool. albedo: grey of the medium (smoke ~0.78,
 // water spray ~0.92); buoy: upward drift in m/s^2 (hot smoke rises, spray mist sinks back); fade: peak opacity.
 function puffs(scene, max, albedo, buoy, fade, uniforms) {
-  const p = pool(max, {size: new Float32Array(max)}), geo = new THREE.BufferGeometry();
-  const pos = new THREE.BufferAttribute(new Float32Array(max * 3), 3).setUsage(THREE.DynamicDrawUsage);
-  const size = new THREE.BufferAttribute(new Float32Array(max), 1).setUsage(THREE.DynamicDrawUsage);
-  const alpha = new THREE.BufferAttribute(new Float32Array(max), 1).setUsage(THREE.DynamicDrawUsage);
-  geo.setAttribute('position', pos);
-  geo.setAttribute('aSize', size);
-  geo.setAttribute('aAlpha', alpha);
-  geo.setAttribute('aSeed', new THREE.BufferAttribute(Float32Array.from({length: max}, Math.random), 1));
-  const points = new THREE.Points(geo, new THREE.ShaderMaterial({...smokeShader, transparent: true, depthWrite: false,
-                                                                 uniforms: {...uniforms, uAlbedo: {value: albedo}}}));
+  const p = pool(max, {size: new Float32Array(max)});
+  // Instanced per sprite rather than per point: WebGPU has no point size, so three only sizes these on a Sprite with a count
+  const inst = (n, k = 1) => new THREE.InstancedBufferAttribute(new Float32Array(n * k), k).setUsage(THREE.DynamicDrawUsage);
+  const pos = inst(max, 3), size = inst(max), alpha = inst(max);
+  const seed = new THREE.InstancedBufferAttribute(Float32Array.from({length: max}, Math.random), 1);
+  const points = new THREE.Sprite(smokeMaterial(uniforms, albedo, pos, size, alpha, seed));
+  points.count = max;
   points.frustumCulled = false;
   points.layers.set(1);
   scene.add(points);
@@ -157,22 +133,54 @@ function puffs(scene, max, albedo, buoy, fade, uniforms) {
   };
 }
 
+// Black-body colour of a cooling titanium spark, 3800 K to 1800 K and on to a dull ember. Radiated power goes with T^4, so
+// its brightness falls ~20x over that range, and the HDR start is what the bloom catches. Rec. 709 from Planck's law, fitted
+// as a table: this runs per spark per frame.
+const BLACKBODY = [[3800, 1, 0.56, 0.2], [3000, 1, 0.42, 0.08], [2400, 1, 0.3, 0.03], [1800, 1, 0.18, 0.004]];
+const rgb = [0, 0, 0];
+function cooling(t) {
+  const T = t < 0.75 ? 3800 - (t / 0.75) * 2000 : 1800 - (t - 0.75) * 2400;  // the last quarter is the ember
+  const heat = 16 * (T / 3800) ** 4 * (t < 0.75 ? 1 : (1 - t) * 4);
+  const b = BLACKBODY.findIndex(([K]) => K <= T), hi = BLACKBODY[Math.max(0, b - 1)], lo = BLACKBODY[b < 0 ? 3 : b];
+  const f = hi === lo ? 0 : (hi[0] - T) / (hi[0] - lo[0]);
+  for (let c = 0; c < 3; c++) rgb[c] = (hi[c + 1] + (lo[c + 1] - hi[c + 1]) * f) * heat;
+  return rgb;
+}
+
 export function createVfx(scene) {
   const self = {mps: 1, rain: 0};
 
-  // sparks: line segments from where the spark is to where it was 15 ms ago, i.e. its motion during a camera exposure,
-  // so each one is its own motion blur (particles are left out of the motion-vector pass)
-  const sp = pool(MAX_SPARKS, {});
-  const sGeo = new THREE.BufferGeometry();
-  const sPos = new THREE.BufferAttribute(new Float32Array(MAX_SPARKS * 6), 3).setUsage(THREE.DynamicDrawUsage);
-  const sCol = new THREE.BufferAttribute(new Float32Array(MAX_SPARKS * 6), 3).setUsage(THREE.DynamicDrawUsage);
-  sGeo.setAttribute('position', sPos);
-  sGeo.setAttribute('color', sCol);
-  const sparks = new THREE.LineSegments(sGeo, new THREE.LineBasicMaterial({vertexColors: true, blending: THREE.AdditiveBlending,
-                                                                          transparent: true, depthWrite: false}));
+  // Sparks: one quad per spark, stretched along its velocity over a camera exposure and turned to face the camera about
+  // that axis, so each is its own motion blur and a slow one is a dot rather than a line. Instanced, so ~2000 of them are
+  // one draw call, whatever their colour. The geometry's instance count stays 0 until there's something to draw.
+  const sp = pool(MAX_SPARKS, {floor: new Float32Array(MAX_SPARKS)});
+  const sGeo = new THREE.InstancedBufferGeometry();
+  sGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array([-0.5, -0.5, 0, 0.5, -0.5, 0, 0.5, 0.5, 0, -0.5, 0.5, 0]), 3));
+  sGeo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array([0, 0, 1, 0, 1, 1, 0, 1]), 2));
+  sGeo.setIndex([0, 1, 2, 0, 2, 3]);
+  const sPos = new THREE.InstancedBufferAttribute(new Float32Array(MAX_SPARKS * 3), 3).setUsage(THREE.DynamicDrawUsage);
+  const sVel = new THREE.InstancedBufferAttribute(new Float32Array(MAX_SPARKS * 3), 3).setUsage(THREE.DynamicDrawUsage);
+  const sCol = new THREE.InstancedBufferAttribute(new Float32Array(MAX_SPARKS * 3), 3).setUsage(THREE.DynamicDrawUsage);
+  sGeo.setAttribute('aPos', sPos);
+  sGeo.setAttribute('aVel', sVel);
+  sGeo.setAttribute('aCol', sCol);
+  sGeo.instanceCount = MAX_SPARKS;
+  const uSparkWidth = uniform(0.004);
+  const sMat = new THREE.MeshBasicNodeMaterial({blending: THREE.AdditiveBlending, transparent: true, depthWrite: false, side: THREE.DoubleSide, fog: false});
+  {
+    const at = attribute('aPos', 'vec3'), v = attribute('aVel', 'vec3'), corner = attribute('position', 'vec3');
+    const along = v.mul(0.015), side = normalize(cross(along.add(vec3(1e-5, 0, 0)), cameraPosition.sub(at))).mul(uSparkWidth);
+    sMat.positionNode = at.add(along.mul(corner.x)).add(side.mul(corner.y));
+    const col = attribute('aCol', 'vec3');
+    // brightest down the middle of the streak, fading at its ends
+    const soft = smoothstep(0.5, 0.2, uv().sub(0.5).abs().y).mul(smoothstep(0.5, 0.3, uv().sub(0.5).abs().x));
+    sMat.colorNode = col.mul(soft);
+    sMat.mrtNode = mrt({...noVelocity, emissive: col.mul(soft)});  // straight into the bloom, whatever the threshold
+  }
+  const sparks = new THREE.Mesh(sGeo, sMat);
 
-  const uniforms = {uScale: {value: 1}, uSun: {value: new THREE.Vector3()}, uSunColor: {value: new THREE.Color(0xfff1dc).multiplyScalar(0.8)},
-                    uAmbient: {value: new THREE.Color(0.28, 0.31, 0.36)}};
+  const uniforms = {scale: uniform(1), sun: uniform(new THREE.Vector3()), sunColor: uniform(new THREE.Color(0xfff1dc).multiplyScalar(0.8)),
+                    ambient: uniform(new THREE.Color(0.28, 0.31, 0.36)), soft: uniform(1)};
   const smoke = puffs(scene, MAX_SMOKE, 0.78, 0.5, 0.7, uniforms);
   const spray = puffs(scene, MAX_SPRAY, 0.92, -0.6, 0.38, uniforms);
 
@@ -182,12 +190,12 @@ export function createVfx(scene) {
   const rGeo = new THREE.BufferGeometry(), rPos = new Float32Array(MAX_RAIN * 3), rDraw = new Float32Array(MAX_RAIN * 6);
   const rAttr = new THREE.BufferAttribute(rDraw, 3).setUsage(THREE.DynamicDrawUsage);
   rGeo.setAttribute('position', rAttr);
-  const rain = new THREE.LineSegments(rGeo, new THREE.LineBasicMaterial({color: 0xbfd4e6, transparent: true, opacity: 0.22, depthWrite: false}));
+  const rain = new THREE.LineSegments(rGeo, Object.assign(new THREE.LineBasicNodeMaterial({color: 0xbfd4e6, transparent: true, opacity: 0.22, depthWrite: false}), {mrtNode: mrt(noVelocity)}));
   let lastCam = null, drops = 0;
 
   for (const o of [sparks, rain]) {
     o.frustumCulled = false;
-    o.layers.set(1);
+    o.layers.set(o === sparks ? 2 : 1);  // sparks write bloom through MRT: a target without it, like the mirror, can't compile them
     scene.add(o);
   }
 
@@ -197,7 +205,9 @@ export function createVfx(scene) {
     const v = carVel.clone().multiplyScalar(rnd(0.55, 0.95))         // scraped off moving with the car, then dragged back
       .addScaledVector(back, -rnd(0, 6) * k)
       .add(new THREE.Vector3(rnd(-3, 3) * k, rnd(0.3, 2.5) * k, rnd(-3, 3) * k));
-    born(sp, spawn(sp, origin, v), rnd(0.2, 0.55));
+    const i = spawn(sp, origin, v);
+    sp.floor[i] = origin.y;  // the road under it: the circuit's height varies by tens of metres
+    born(sp, i, rnd(0.25, 0.7));
   };
   self.smoke = (origin, carVel) => {
     const k = 1 / self.mps;
@@ -214,7 +224,7 @@ export function createVfx(scene) {
     spray.spawn(origin, v, rnd(0.8, 1.6), rnd(1.5, 4) * k);
   };
 
-  // sun: unit vector towards the sun (world); heightPx: drawing-buffer height, for point sizes
+  // sun: unit vector towards the sun (world); heightPx: viewport height in CSS pixels, for sprite sizes (three applies the DPR)
   // Racing-line ribbon: a strip hovering over the line ahead of the player, one quad per sample, coloured per point.
   // The colours are HDR (above 1) and additively blended, so the bloom pass gives it a holographic glow.
   const RIB = 60, ribPos = new Float32Array(RIB * 2 * 3), ribCol = new Float32Array(RIB * 2 * 3), ribGeo = new THREE.BufferGeometry();
@@ -248,30 +258,30 @@ export function createVfx(scene) {
   self.busy = () => !sp.clean || smoke.busy() || spray.busy() || drops > 0 || ribbon.visible;
 
   self.update = (dt, camera, sun, heightPx) => {
-    hazeMat.normalMap.offset.y -= dt * 0.9;  // the haze rises
-    const k = 1 / self.mps, g = 9.81 * k, P = sp.pos, Vl = sp.vel, out = sPos.array, col = sCol.array, quiet = idle(sp, dt);
+    const k = 1 / self.mps, g = 9.81 * k, P = sp.pos, Vl = sp.vel, at = sPos.array, vs = sVel.array, col = sCol.array, quiet = idle(sp, dt);
+    uSparkWidth.value = 0.012 * k;
+    uniforms.soft.value = 0.5 * k;  // half a metre of depth to fade over
     for (let i = 0; i < (quiet ? 0 : sp.n); i++) {
-      const j = i * 3, o = i * 6;
+      const j = i * 3;
       sp.age[i] += dt;
       const t = sp.age[i] / sp.life[i];
-      if (t >= 1) { col.fill(0, o, o + 6); continue; }  // additive black draws nothing
+      if (t >= 1) { col.fill(0, j, j + 3); continue; }  // additive black draws nothing
       const drag = Math.exp(-2.5 * dt);  // tiny hot particles lose speed fast
       Vl[j] *= drag; Vl[j + 2] *= drag; Vl[j + 1] = Vl[j + 1] * drag - g * dt;
       P[j] += Vl[j] * dt; P[j + 1] += Vl[j + 1] * dt; P[j + 2] += Vl[j + 2] * dt;
-      if (P[j + 1] < 0) { P[j + 1] = 0; Vl[j + 1] *= -0.3; Vl[j] *= 0.7; Vl[j + 2] *= 0.7; }  // skip off the asphalt
-      out.set([P[j], P[j + 1], P[j + 2], P[j] - Vl[j] * 0.015, P[j + 1] - Vl[j + 1] * 0.015, P[j + 2] - Vl[j + 2] * 0.015], o);
-      // cooling titanium: white-yellow (HDR, so bloom catches it) fading through orange to dull red
-      const heat = (1 - t) ** 2 * 14;
-      col.set([heat, heat * (0.85 - 0.6 * t), heat * (0.5 - 0.47 * t)], o);
-      col.copyWithin(o + 3, o, o + 3);
+      if (P[j + 1] < sp.floor[i]) { P[j + 1] = sp.floor[i]; Vl[j + 1] *= -0.45; Vl[j] *= 0.7; Vl[j + 2] *= 0.7; }  // skip off the asphalt
+      at.set([P[j], P[j + 1], P[j + 2]], j);
+      vs.set([Vl[j], Vl[j + 1], Vl[j + 2]], j);
+      col.set(cooling(t), j);
     }
-    if (!quiet) sPos.needsUpdate = sCol.needsUpdate = true;
+    if (!quiet) sPos.needsUpdate = sVel.needsUpdate = sCol.needsUpdate = true;
     smoke.update(dt, k);
     spray.update(dt, k);
 
     // rain: only the first rain x MAX_RAIN drops are drawn; the rest collapse to a point
     const cam = camera.position, box = 30 * k, n = Math.round(self.rain * MAX_RAIN);
-    const camVel = lastCam && dt > 0 ? cam.clone().sub(lastCam).divideScalar(dt) : new THREE.Vector3();
+    // capped near an F1 car's top speed: at 10x the camera covers ~800 m/s, and the streaks crossed the whole sky
+    const camVel = (lastCam && dt > 0 ? cam.clone().sub(lastCam).divideScalar(dt) : new THREE.Vector3()).clampLength(0, 100 * k);
     lastCam = cam.clone();
     const fall = [1.5 * k, -9 * k, 0.8 * k], ex = 1 / 30, dry = !n && !drops;  // dry: no rain now or last frame
     drops = n;
@@ -287,8 +297,8 @@ export function createVfx(scene) {
                  rPos[j + 2] - (fall[2] - camVel.z) * ex], o);
     }
     if (!dry) rAttr.needsUpdate = true;
-    uniforms.uScale.value = camera.projectionMatrix.elements[5] * heightPx / 2;
-    uniforms.uSun.value.copy(sun).transformDirection(camera.matrixWorldInverse);
+    uniforms.scale.value = camera.projectionMatrix.elements[5] * heightPx / 2;
+    uniforms.sun.value.copy(sun).transformDirection(camera.matrixWorldInverse);
   };
   return self;
 }

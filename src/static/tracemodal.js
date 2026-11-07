@@ -100,7 +100,7 @@ export function setupTrace(stage, deck, getState, controls) {
     zoom(f - (f - M.x0) * k, f + (M.x1 - f) * k);
   }, {passive: false});
   document.addEventListener('keydown', e => {
-    if (e.code !== 'KeyT' || e.ctrlKey || e.metaKey || e.altKey || ['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName) || !stage.offsetParent) return;
+    if (e.code !== 'KeyT' || !e.shiftKey || e.ctrlKey || e.metaKey || e.altKey || ['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName) || !stage.offsetParent) return;
     toggle();
   });
   // the wanted driver goes in before opening, so a replay doesn't first fetch the default comparison's telemetry

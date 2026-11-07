@@ -1,11 +1,12 @@
-// Stream: F1 TV as a browse page. A billboard (the session on air, else the latest weekend's race), the coming
+// Stream: F1 TV as a browse page. A billboard (the session on air, else the next session to come, else the latest race), the coming
 // weekends' schedule, then one row of videos per race weekend, newest first; a card plays in the multiviewer.
 // The season's rows all load, three weekends at a time: one season is ~24 F1 TV searches, while a few hundred in
 // minutes get the IP 403'd. (Loading rows as they scroll near missed rows: IntersectionObserver never fires in a
 // browser that isn't painting, e.g. the desktop app's hidden pane.)
-import {get, el, flag, tvHeaders, count, failed, plain} from './util.js';
+import {get, el, flag, tvHeaders, count, failed, plain, skeleton} from './util.js';
 import {openViewer, loadShaka, connectPanel, watched} from './multiviewer.js';
 import {icon} from './tvcontrols.js';
+import {fetchTile} from './satellite.js';
 
 const $ = id => document.getElementById(id);
 const S = {year: null, races: [], linked: false};
@@ -15,7 +16,7 @@ const SESSIONS = [['FirstPractice', 'Practice 1'], ['SecondPractice', 'Practice 
 export const at = (r, k) => { const d = r[k ? `${k}.date` : 'date']; return d ? new Date(`${d}T${r[k ? `${k}.time` : 'time'] || '00:00:00Z'}`) : null; };
 const weekendStart = r => at(r, 'FirstPractice') ?? at(r, '');
 const pic = (v, w) => v.img && `${v.img}?w=${w}&h=${Math.round(w * 9 / 16)}&q=HI&o=L`;
-const when = d => d.toLocaleString(undefined, {weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'});
+export const when = d => d.toLocaleString(undefined, {weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'});
 const dur = s => s >= 3600 ? `${Math.floor(s / 3600)}h ${String(Math.floor(s / 60) % 60).padStart(2, '0')}m` : `${Math.ceil(s / 60)} min`;
 export const until = d => { const s = (d - Date.now()) / 1000, h = Math.floor(s / 3600); return h >= 24 ? `in ${Math.floor(h / 24)}d ${h % 24}h` : h ? `in ${h}h ${Math.floor(s / 60) % 60}m` : `in ${Math.ceil(s / 60)} min`; };
 // the sessions still to come in the next two race weekends, in order (the Coming up row; the header counts down to the first)
@@ -23,7 +24,7 @@ export const upcoming = (races, now = new Date()) => races.filter(r => at(r, '')
   .flatMap(r => SESSIONS.map(([k, name]) => ({r, name, d: at(r, k)})).filter(s => s.d && s.d > now));
 // shortcut: live = within the scheduled session times + 30 min for overruns; F1 TV's own state field reads "Pre-Live" long after
 // (F1 TV's shows can carry a placeholder end decades ahead, e.g. a 2025 Cooldown Room ending in 2061: no session runs 12 h)
-const live = v => v.start && v.start <= Date.now() && Date.now() <= v.end + 1800e3 && v.end - v.start < 12 * 3600e3;
+export const live = v => v.start && v.start <= Date.now() && Date.now() <= v.end + 1800e3 && v.end - v.start < 12 * 3600e3;
 
 // what an F1 TV video is, in plain words: F1 TV files every session and the studio shows round it as REPLAY
 export function tvLabel(v) {
@@ -36,7 +37,7 @@ export function tvLabel(v) {
 // F1 TV's image resizer drops some of a season's ~500 thumbnails when they're asked for at once; they load on a retry
 const retry = ({target: i}) => {
   const n = +(i.dataset.tries ?? 0);
-  if (n < 3) setTimeout(() => { i.dataset.tries = n + 1; i.src = `${i.src.replace(/&try=\d+$/, '')}&try=${n + 1}`; }, 2000 * (n + 1));
+  if (n < 3) setTimeout(() => { i.removeAttribute('srcset'); i.dataset.tries = n + 1; i.src = `${i.src.replace(/&try=\d+$/, '')}&try=${n + 1}`; }, 2000 * (n + 1));
 };
 // a caption line's parts with quiet dots between them
 const dots = parts => parts.filter(Boolean).flatMap((x, i) => i ? [el('i', {class: 'sdot', 'aria-hidden': 'true'}), x] : [x]);
@@ -53,10 +54,10 @@ const span = r => { const a = weekendStart(r), b = at(r, ''); return a && b && d
 // a replay you've started (the viewer keeps where you are: multiviewer.js remember) resumes there, like a TV app
 const saved = v => watched().find(e => e.id === v.id);
 const resumable = e => e && e.pos >= 30 && e.pos < e.len * .95;
-const watch = (v, r) => {
+const watch = (v, r, fresh = false) => {
   count(S.linked ? 'video_here' : 'video_f1tv');
   const e = saved(v);
-  return S.linked ? openViewer({...v, label: tvLabel(v), year: v.year ?? S.year, round: v.round ?? r.round, resumeAt: resumable(e) ? e.pos : undefined})
+  return S.linked ? openViewer({...v, label: tvLabel(v), year: v.year ?? S.year, round: v.round ?? r.round, resumeAt: !fresh && resumable(e) ? e.pos : undefined})
     : open(v.url, '_blank', 'noopener');
 };
 
@@ -65,15 +66,16 @@ const watch = (v, r) => {
 // resume: a Continue watching card, titled with its grand prix and saying how long is left instead of when it was
 function card(v, r, resume = false) {
   const e = resume ? v : saved(v);
-  const name = resume ? [v.title.replace(/^\d{4}\s+/, ''), named(v), `${dur(v.len - v.pos)} left`]
+  const gp = v.title.replace(/^\d{4}\s+/, '').replace(/\s+-\s.*$/, '');  // F1 TV's "United States GP - Qualifying": the session has its own line
+  const name = resume ? [gp, named(v), `${dur(v.len - v.pos)} left`]
     : [r.raceName, named(v), v.start && new Date(v.start).toLocaleDateString(undefined, {weekday: 'long', day: 'numeric', month: 'long'}), v.duration > 0 && dur(v.duration)];
   return el('button', {class: 'scard', 'data-id': v.id, 'aria-label': name.filter(Boolean).join(', '), title: `${S.linked ? 'Watch here' : 'Opens on F1 TV'}: ${v.title}`, onclick: () => watch(v, r)},
-    el('div', {class: 'sthumb'}, v.img && el('img', {src: pic(v, 480), alt: '', decoding: 'async', loading: 'lazy', onerror: retry}),
+    el('div', {class: 'sthumb'}, v.img && el('img', {src: pic(v, 480), srcset: `${pic(v, 480)} 480w, ${pic(v, 960)} 960w`, sizes: '(max-width: 520px) 80vw, 25vw', alt: '', decoding: 'async', loading: 'lazy', onerror: retry}),
       live(v) && el('span', {class: 'slive'}, 'LIVE'),
       el('span', {class: 'sext', title: 'Opens on F1 TV'}, icon('ext')),
       el('span', {class: 'splay', 'aria-hidden': 'true'}, icon('play')),
       bar(e)),
-    el('b', {}, resume ? v.title.replace(/^\d{4}\s+/, '') : named(v)),
+    el('b', {}, resume ? gp : named(v)),
     el('small', {}, ...dots(resume ? [named(v), `${dur(v.len - v.pos)} left`]
       : [v.start && weekday(new Date(v.start)), v.duration > 0 && dur(v.duration)])));
 }
@@ -93,6 +95,7 @@ function continueRow() {
 function refreshWatched() {
   if (!S.year) return;
   continueRow();
+  if (S.bill) billboard(...S.bill);  // its button is Play or Resume by this
   for (const c of document.querySelectorAll('.scard[data-id]:not(#srow-continue .scard)')) c.querySelector('.sprog')?.replaceWith(bar(saved({id: +c.dataset.id})));
 }
 
@@ -108,7 +111,47 @@ function row(title, id, cards, sub = '') {
     track);
 }
 
-// the billboard: the session on air (else the latest weekend's race) as a premiere: its artwork full-bleed under a deep
+// What the billboard leads with, as billboard()'s arguments: the session on air; else the next one to come; else (a finished
+// season) the race of the newest weekend with videos, once every newer one has answered.
+export function lead(answers, weekends, next, nextVideos = []) {
+  const on = nextVideos.find(live);
+  if (on) return [on, next.r, nextVideos];
+  const k = answers.findIndex(a => a?.videos.some(live));
+  if (k >= 0) return [answers[k].videos.find(live), weekends[k], answers[k].videos];
+  if (next) return [null, next.r, nextVideos, next];
+  for (let i = 0; answers[i]; i++) {
+    const v = answers[i].videos;
+    if (v.length) return [v.find(x => tvLabel(x) === 'Race') ?? v[0], weekends[i], v];
+  }
+  return null;
+}
+// An aerial photo of the circuit (the imagery the 3D ground uses) for a weekend F1 TV has no artwork for yet: the tiles
+// round it stitched, since Esri's own export of one big picture takes 2-23 s and a tile ~0.3 s. Tile x, y and where to draw it.
+const TILE = 256, ART = [1920, 1080];
+export const ZOOM = 16;
+export function aerialTiles(lat, long, [w, h] = ART) {
+  const n = 2 ** ZOOM, fx = (long + 180) / 360 * n, fy = (1 - Math.asinh(Math.tan(lat * Math.PI / 180)) / Math.PI) / 2 * n, out = [];
+  for (let y = Math.floor(fy - h / 2 / TILE); y < fy + h / 2 / TILE; y++) for (let x = Math.floor(fx - w / 2 / TILE); x < fx + w / 2 / TILE; x++)
+    out.push({x, y, dx: Math.round(w / 2 + (x - fx) * TILE), dy: Math.round(h / 2 + (y - fy) * TILE)});
+  return out;
+}
+const aerials = new Map();  // round -> Promise of a picture's url, or null
+function aerial(r) {
+  const lat = +r['Circuit.Location.lat'], long = +r['Circuit.Location.long'], key = `${lat},${long}`;
+  if (!Number.isFinite(lat) || !Number.isFinite(long)) return Promise.resolve(null);
+  if (!aerials.has(key)) aerials.set(key, (async () => {
+    const canvas = Object.assign(document.createElement('canvas'), {width: ART[0], height: ART[1]}), ctx = canvas.getContext('2d');
+    await Promise.all(aerialTiles(lat, long).map(async ({x, y, dx, dy}) => {
+      const tile = await fetchTile(ZOOM, y, x);
+      if (tile.ok) ctx.drawImage(await createImageBitmap(await tile.blob()), dx, dy);
+    }));
+    const blob = await new Promise(done => canvas.toBlob(done, 'image/jpeg', .85));
+    return blob && URL.createObjectURL(blob);
+  })().catch(() => null));
+  return aerials.get(key);
+}
+
+// the billboard: the session on air (else the next to come) as a premiere: its artwork full-bleed under a deep
 // vignette, a kicker (LIVE, pulsing; else the round), the title, what it is, and a white Play beside a glass F1 TV link
 // the weekend's sessions (practice, sprint, qualifying, race), oldest first, each as a short name: FP1, Qualifying…
 export const short = v => { const m = v.title.match(/practice\s*(\d)/i); return m ? `FP${m[1]}` : /sprint (qualifying|shootout)/i.test(v.title) ? 'Sprint quali'
@@ -116,34 +159,58 @@ export const short = v => { const m = v.title.match(/practice\s*(\d)/i); return 
 export const sessionsOf = videos => videos.filter(v => ['Practice', 'Sprint quali', 'Sprint', 'Qualifying', 'Race', 'Live'].includes(tvLabel(v))
   && /\bGP\b|grand prix/i.test(v.title) && !/highlights|show|warm-up|press|kids/i.test(v.title)).sort((a, b) => (a.start ?? 0) - (b.start ?? 0));
 
-function billboard(v, r, videos = []) {
-  S.bill = [v, r, videos];
-  const bill = $('sbill'), weekend = sessionsOf(videos);
-  bill.style.setProperty('--art', v.img ? `url("${pic(v, 1920)}")` : 'none');
-  bill.classList.remove('swap');
-  void bill.offsetWidth;  // restart the artwork's fade-in for the session picked
-  bill.classList.add('swap');
-  bill.replaceChildren(el('div', {class: 'sbilltext'},
-    live(v) ? el('span', {class: 'skicker live'}, 'Live now') : el('span', {class: 'skicker'}, `Round ${r.round}`),
+// the billboard's art layer (style.css: its parallax)
+const artLayer = () => el('div', {class: 'sbillart', 'aria-hidden': 'true'}, el('i'));
+
+function billboard(v, r, videos = [], next = null) {
+  S.bill = [v, r, videos, next];
+  const bill = $('sbill'), weekend = sessionsOf(videos), e = v && saved(v), back = resumable(e);
+  // a session to come has no artwork of its own: the weekend's if F1 TV has any, else the circuit from the air
+  const art = v ?? [...weekend].reverse().find(x => x.img) ?? videos.find(x => x.kind === 'REPLAY' && x.img);
+  const setArt = url => $('stream').style.setProperty('--art', url ? `url("${url}")` : 'none');
+  setArt(art?.img && pic(art, Math.min(3840, Math.max(1920, Math.ceil(innerWidth * devicePixelRatio)))));
+  if (!art?.img && !v) aerial(r).then(url => { if (url && S.bill?.[1] === r && !S.bill[0]) setArt(url); });
+  const coming = upcoming(S.races).find(s => s.r === r);  // the chip back to it, after picking a session that has run
+  bill.replaceChildren(artLayer(), el('div', {class: 'sbilltext'},
+    v && live(v) ? el('span', {class: 'skicker live'}, 'Live now') : el('span', {class: 'skicker'}, next ? `Next up · Round ${r.round}` : `Round ${r.round}`),
     el('h1', {}, r.raceName),
-    el('p', {}, ...dots([named(v), v.start && when(new Date(v.start)), v.duration > 0 && dur(v.duration)])),
+    next ? el('p', {}, ...dots([next.name, when(next.d), el('span', {class: 'sbillcount', 'data-at': +next.d}, until(next.d))]))
+      : el('p', {}, ...dots([named(v), v.start && when(new Date(v.start)), back ? `${dur(e.len - e.pos)} left` : v.duration > 0 && dur(v.duration)])),
     // not connected: the main button connects (watching here), not a trip to F1 TV's site that rarely comes back; the
     // F1 TV link is only for then
     el('div', {class: 'sbillbtns'},
-      S.linked ? el('button', {class: 'sprimary', onclick: () => watch(v, r)}, icon('play'), 'Play')
-        : el('button', {class: 'sprimary', popovertarget: 'sconnectpanel'}, icon('link'), 'Connect to watch'),
-      !S.linked && el('a', {class: 'sghost', href: v.url, target: '_blank', rel: 'noopener', onclick: () => count('video_f1tv')}, 'Open on F1 TV', icon('ext'))),
+      v && S.linked && el('button', {class: 'sprimary', onclick: () => watch(v, r)}, icon('play'), back ? 'Resume' : 'Play'),
+      !S.linked && el('button', {class: 'sprimary', popovertarget: 'sconnectpanel'}, icon('link'), 'Connect to watch'),
+      v && S.linked && back && el('button', {class: 'sghost', onclick: () => watch(v, r, true)}, 'Start over'),
+      v && !S.linked && el('a', {class: 'sghost', href: v.url, target: '_blank', rel: 'noopener', onclick: () => count('video_f1tv')}, 'Open on F1 TV', icon('ext'))),
     // the weekend at a glance: a chip per session puts it on the billboard
-    weekend.length > 1 && el('div', {class: 'sweek', role: 'group', 'aria-label': 'This weekend'},
-      ...weekend.map(x => el('button', {class: 'swchip', 'aria-pressed': String(x === v), onclick: () => billboard(x, r, videos)},
-        live(x) && el('i', {class: 'swlive', 'aria-hidden': 'true'}), short(x))))));
+    weekend.length + (coming ? 1 : 0) > 1 && el('div', {class: 'sweek', role: 'group', 'aria-label': 'This weekend'},
+      ...weekend.map(x => el('button', {class: 'swchip', 'aria-pressed': String(x === v), onclick: () => { S.picked = true; billboard(x, r, videos); }},
+        live(x) && el('i', {class: 'swlive', 'aria-hidden': 'true'}), short(x))),
+      coming && el('button', {class: 'swchip', 'aria-pressed': String(!v), onclick: () => { S.picked = false; billboard(null, r, videos, coming); }}, coming.name))));
+}
+
+// puts what should lead on the billboard, unless a chip chose something else or it's already there
+function refreshLead() {
+  if (S.picked) return;
+  const b = lead(S.answers, S.weekends, upcoming(S.races)[0], S.nextVideos);
+  if (!b) return;
+  const key = v => v && `${v[0]?.id}|${+v[3]?.d}|${v[2].length}`;
+  if (key(b) !== key(S.bill)) billboard(...b);
+}
+// the coming weekend's videos, for its artwork and to notice a session going on air (the server refreshes them every 5 min)
+async function loadNext(year) {
+  const next = upcoming(S.races)[0];
+  if (!next) return;
+  const videos = await fetch(`/api/f1tv/${year}/${next.r.round}`).then(r => r.ok ? r.json() : []).catch(() => []);
+  if (S.year === year) { S.nextVideos = videos; refreshLead(); }
 }
 
 // the billboard with a message for a headline (no artwork, no session)
 function headline(year, ...body) {
   S.bill = null;
-  $('sbill').style.setProperty('--art', 'none');
-  $('sbill').replaceChildren(el('div', {class: 'sbilltext'}, year && el('span', {class: 'skicker'}, `${year} season`), ...body));
+  $('stream').style.setProperty('--art', 'none');
+  $('sbill').replaceChildren(artLayer(), el('div', {class: 'sbilltext'}, year && el('span', {class: 'skicker'}, `${year} season`), ...body));
 }
 // no season to browse (its calendar didn't load, or is empty); the next showStream builds afresh
 export function noStream(year, message) {
@@ -171,26 +238,23 @@ async function fill(rowEl, r, settle) {
 }
 
 function build(year, races) {
-  Object.assign(S, {year, races, bill: null});
+  Object.assign(S, {year, races, bill: null, picked: false, answers: [], weekends: [], nextVideos: []});
   const now = new Date();
   // Coming up: a schedule card per session, the grand prix and flag above, the session large, then when and how long until
   const sched = upcoming(races, now).map(({r, name, d}) => el('div', {class: 'sched'},
     el('div', {class: 'schedtop'}, flag(r['Circuit.Location.country'], 40), el('span', {}, r.raceName.replace(/ Grand Prix$/, ' GP'))),
     el('b', {}, name),
-    el('div', {class: 'schedbot'}, el('span', {}, when(d)), el('span', {class: 'scount'}, until(d)))));
+    el('div', {class: 'schedbot'}, el('span', {}, when(d)), el('span', {class: 'scount', 'data-at': +d}, until(d)))));
   const weekends = races.filter(r => weekendStart(r) <= now).reverse();
   const rows = weekends.map(r => row([flag(r['Circuit.Location.country'], 40), r.raceName], `srow-${r.round}`,
     Array.from({length: 5}, () => el('div', {class: 'scard skel'}, el('div', {class: 'sthumb'}), el('b', {}), el('small', {}))), `Round ${r.round} · ${span(r)}`));
   const queue = rows.map((x, i) => [x, weekends[i]]);
-  const answers = [], again = () => build(year, races);
-  // the newest weekend with videos takes the billboard, once every newer one has answered; a season without any says so.
-  // However many rows fail, one message: on the billboard when nothing loaded, else above the rows
+  const answers = S.answers, again = () => build(year, races);
+  S.weekends = weekends;
+  // a season without any videos says so. However many rows fail, one message: on the billboard when nothing loaded, else above the rows
   const settle = (i, videos, err) => {
     answers[i] = {videos, err};
-    for (let k = 0; !S.bill && answers[k]; k++) {
-      const v = answers[k].videos;
-      if (v.length) billboard(v.find(live) ?? v.find(x => tvLabel(x) === 'Race') ?? v[0], weekends[k], v);
-    }
+    refreshLead();
     const errs = answers.filter(a => a?.err), over = answers.filter(Boolean).length === rows.length;
     $('sfail')?.remove();
     if (S.bill) { if (errs.length) $('srows').prepend(el('div', {id: 'sfail'}, failed(`${errs.length} of ${rows.length} weekends didn't load. ${plain(errs[0].err)}`, again))); }
@@ -198,9 +262,11 @@ function build(year, races) {
     else if (over) headline(year, el('h1', {}, `No F1 TV videos for ${year} yet`));
   };
   const next = () => { const [x, r] = queue.shift() ?? []; return x?.isConnected && fill(x, r, (v, e) => settle(rows.indexOf(x), v, e)).then(next); };  // stops once the season changes
-  headline(year, el('h1', {}, weekends.length ? 'Loading F1 TV…' : 'No race weekends yet'));
+  headline(year, weekends.length ? skeleton(3) : el('h1', {}, 'No race weekends yet'));
   $('srows').replaceChildren(...(sched.length ? [row(['Coming up'], 'srow-next', sched)] : []), ...rows);
   continueRow();
+  refreshLead();  // a session to come leads at once, without waiting for F1 TV
+  loadNext(year);
   for (let i = 0; i < 3; i++) next();
 }
 
@@ -223,7 +289,16 @@ async function connection() {
 // open the Stream page on a season; round: scroll to that weekend's row (or the schedule, for one still to come)
 export async function showStream(year, races, round = null) {
   loadShaka().catch(() => {});  // the video player downloads while you browse, not after the click
-  if (!S.listening) { S.listening = true; addEventListener('f1:watched', refreshWatched); }
+  if (!S.listening) {
+    S.listening = true;
+    addEventListener('f1:watched', refreshWatched);
+    setInterval(() => {  // Coming up stays true however long the page is open
+      for (const c of document.querySelectorAll('.scount[data-at]')) +c.dataset.at > Date.now() ? c.textContent = until(+c.dataset.at) : c.closest('.sched').remove();
+      for (const c of document.querySelectorAll('.sbillcount[data-at]')) if (+c.dataset.at > Date.now()) c.textContent = until(+c.dataset.at);
+      if (S.year) refreshLead();  // a session started or ended
+    }, 30e3);
+    setInterval(() => { if (S.year) loadNext(S.year); }, 300e3);
+  }
   await connection();  // before the cards: they open here or on F1 TV by it
   if (S.year !== year || S.races !== races) build(year, races);
   if (round) ($(`srow-${round}`) ?? $('srow-next'))?.scrollIntoView({block: 'center'});

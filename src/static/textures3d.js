@@ -3,7 +3,7 @@
 import * as THREE from 'three';
 import {normalTex} from './cars3d.js';
 
-const PH = 'https://dl.polyhaven.org/file/ph-assets/Textures/jpg';
+const PH = '/static/assets/textures';  // Poly Haven's, downloaded by scripts/fetch_assets.py
 
 let seed = 1;
 const rand = () => (seed = (seed * 16807) % 2147483647) / 2147483647;  // seeded so textures don't change between loads
@@ -42,12 +42,13 @@ function photo(name, metres, tile, fallback, res = '1k') {
     set[k].anisotropy = 16;  // the road is mostly seen at grazing angles; three clamps this to what the GPU supports
     // decoded off the main thread (an <img> decoded inside the texture upload: ~80 ms per 4k photo, at the first frame).
     // An ImageBitmap ignores the texture's flipY, so it comes flipped as the upload would have flipped the <img>.
-    new THREE.ImageBitmapLoader().setCrossOrigin('anonymous').setOptions({imageOrientation: 'flipY', premultiplyAlpha: 'none', colorSpaceConversion: 'none'})
+    new THREE.ImageBitmapLoader().setOptions({imageOrientation: 'flipY', premultiplyAlpha: 'none', colorSpaceConversion: 'none'})
       .load(`${PH}/${res}/${name}/${name}_${file}_${res}.jpg`, img => {
         const t = set[k];
         t.dispose();
         t.image = img;
         if (tile) t.repeat.setScalar(tile / metres);  // tile 0: the user sets the repeat (the terrain, per circuit)
+        t.flipY = false;  // WebGPU would honour it and undo the flip the loader already made
         t.needsUpdate = true;
         t.onUpdate = () => img.close();  // decoded photos (up to 64 MB each at 4k) aren't needed once on the GPU
       }, undefined, () => {});

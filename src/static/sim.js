@@ -71,6 +71,14 @@ function envelope(T, c, plan, s0, n) {
   return {v, vmax};
 }
 
+// The envelope reads the track per sample, so it only moves when the car crosses a sample (every ~4 steps at speed) or its
+// grip shifts. It was a quarter of the page's CPU at 10x, recomputed for every car every step.
+function planned(T, car, c, plan, look) {
+  const i = idx(T, car.s), e = car.env;
+  if (e?.i === i && e.look >= look && Math.abs(plan.mu - e.mu) < 0.003 * e.mu && Math.abs(plan.ClA - e.ClA) < 0.005 * e.ClA) return e;
+  return (car.env = {...envelope(T, c, plan, car.s, look), i, look, mu: plan.mu, ClA: plan.ClA});
+}
+
 const CORNERS = ['FL', 'FR', 'RL', 'RR'];
 
 // entry list in grid order, one car per driver: a shared drive lists its driver once per car (Moss, Britain 1957)
@@ -236,7 +244,7 @@ export function createRace({year, mapPts, mpu, width, drivers, laps, compounds, 
     // corner-mode aero (the 2026 flaps shut the moment the driver lifts) at the settled ride height.
     const look = Math.min(140, Math.ceil((v * v / 16 + 80) / T.ds));
     car.plan = {mu: muPlan, ClA: A.ClAplan, CdA: A.CdA};  // also for the racing-line ribbon
-    const env = envelope(T, c, car.plan, car.s, look);
+    const env = planned(T, car, c, car.plan, look);
     let vAllow = env.v[0], brakeAhead = Infinity, turn = 1, slowest = 150;
     for (let j = 1; j <= look; j++) {
       if (env.vmax[j] < v - 8 && j * T.ds < brakeAhead) brakeAhead = j * T.ds;
@@ -404,7 +412,8 @@ export function createRace({year, mapPts, mpu, width, drivers, laps, compounds, 
     const order = cars.slice().sort((x, y) => (y.finished && x.finished ? y.finishLaps - x.finishLaps || x.finishT - y.finishT : y.s - x.s));
     return order.map((car, i) => {
       const lapsDown = car.finished && order[0].finished ? order[0].finishLaps - car.finishLaps : Math.floor((order[0].s - car.s) / T.len);
-      const pass = R.leaderPass[Math.floor(car.s / 20)];
+      const at = car.s / 20, b = Math.floor(at), from = R.leaderPass[b], to = R.leaderPass[b + 1] ?? from;
+      const pass = from === undefined ? undefined : from + (to - from) * (at - b);  // between the 20 m marks, or cars inside one show one gap
       const gap = i === 0 || car.s < 0 ? null : car.finished && order[0].finished && !lapsDown ? car.finishT - order[0].finishT
                 : pass !== undefined ? R.t - pass : null;
       return {car, pos: i + 1, lap: clamp(car.lapsDone + 1, 1, total), gap, lapsDown};

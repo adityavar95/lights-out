@@ -4,10 +4,11 @@
 // feed or driver, as many as you like. The selected tile has the sound and is what Sync lines the others up with.
 // Each tile picks its video quality and audio track from every rendition in the stream, and can carry a see-through
 // telemetry overlay (speed, gear, RPM, throttle, brake, DRS) from OpenF1 car data (2023+ sessions).
-import {get, el, tvHeaders, count} from './util.js';
+import {get, el, tvHeaders, count, skeleton} from './util.js';
 import {controls, icon} from './tvcontrols.js';
+import {sessionMarks} from './scrubmarks.js';
 
-const SHAKA = 'https://cdn.jsdelivr.net/npm/shaka-player@4.12.6/dist/';
+const SHAKA = '/static/assets/shaka/';
 const FIRST = ['INTERNATIONAL', 'F1 LIVE', 'TRACKER', 'DATA'];  // feed order in the picker
 const FEEDS = {INTERNATIONAL: 'International broadcast', 'F1 LIVE': 'F1 Live studio', TRACKER: 'Driver tracker', DATA: 'Data channel'};
 const AUDIO = {fx: 'Track sound, no commentary', tea: 'Team radio'};  // F1 TV's own audio codes
@@ -109,7 +110,7 @@ export function connectPanel(id, onChange) {
   const mark = `javascript:(()=>{const m=document.cookie.match(/login-session=([^;]+)/),t=m&&JSON.parse(decodeURIComponent(m[1])).data?.subscriptionToken;if(t)location.href=${back}+t;else alert('Sign in on formula1.com with an F1 TV subscription first, then click this bookmark again.')})()`;
   const stash = () => { try { sessionStorage.setItem('f1tv-back', location.hash); } catch (e) {} };
   const steps = el('ol', {},
-    el('li', {}, 'Drag this to your bookmarks bar: ', el('a', {class: 'mvmark', href: mark, onclick: e => e.preventDefault()}, 'F1 TV → this app')),
+    el('li', {}, 'Drag this to your bookmarks bar (Ctrl/⌘+Shift+B shows it): ', el('a', {class: 'mvmark', href: mark, onclick: e => e.preventDefault()}, 'F1 TV → this app')),
     el('li', {}, el('a', {href: 'https://account.formula1.com/#/en/login', onclick: stash}, 'Sign in at formula1.com'), " (skip if you're signed in there)."),
     el('li', {}, 'On formula1.com, click the bookmark: it brings you back here, connected.'));
   const signin = el('button', {class: 'mvbtn', hidden: true, onclick: async () => {
@@ -200,13 +201,16 @@ function setup() {
   M.more.replaceChildren(M.playBtn, M.lights, M.uhdBtn,
     M.syncRow = el('div', {class: 'mvmisync'}, el('span', {}, 'Telemetry sync', el('small', {}, 'Move the data to match the video')), M.datasync),
     el('hr', {}), M.account);
-  M.dlg = el('dialog', {class: 'mv', 'aria-label': 'F1 TV multiviewer', onclose: () => {
+  M.dlg = el('dialog', {class: 'mv', 'aria-label': 'F1 TV multiviewer',
+    // focus starts on the grid and returns to header buttons: the tile keys (k, m, f, arrows) go to the stream you hear
+    onkeydown: e => { if (!e.target.closest('.mvtile, select, input, summary, [popover]') && !(e.key === ' ' && e.target.closest('button')) && !e.ctrlKey && !e.metaKey && !e.altKey) lead()?.root.dispatchEvent(new KeyboardEvent('keydown', {key: e.key, bubbles: true})); },
+    onclose: () => {
     remember(true);
     // the close event comes a task later: if the viewer was reopened meanwhile, its new tiles stay
     if (!M.dlg.open) for (const t of M.tiles.splice(0)) drop(t);
   }},
     el('header', {class: 'mvhead'},
-      el('button', {class: 'mvbtn mvicon', title: 'Close (Esc)', 'aria-label': 'Close', onclick: () => M.dlg.close()}, icon('close')),
+      el('button', {class: 'mvbtn mvback', title: 'Back (Esc)', onclick: () => M.dlg.close()}, icon('left'), 'Back'),
       el('div', {class: 'mvtitle'}, M.title),
       el('div', {class: 'mvtools'}, M.layout, M.teamBtn, M.syncBtn, M.addBtn, M.moreBtn)),
     M.grid, M.picker, M.teams, M.more, M.connect);
@@ -244,6 +248,7 @@ function remember(closing = false) {
 // the video's data offset, kept per video in this browser
 function setOffset(s) {
   M.offset = s;
+  M.tiles?.forEach(placeMarks);
   M.syncOut.value = `${s >= 0 ? '+' : '−'}${Math.abs(s).toFixed(1)}s`;
   saveOffset(M.video.id, s);
 }
@@ -254,6 +259,16 @@ export function saveOffset(id, s) {
 // the wall clock (s since epoch) at a video's 0 s; also the commentary's clock in the 3D replay (commentary.js)
 export const videoZero = (video, offset) => video.start / 1000 - LEAD + offset;
 const videoT0 = () => videoZero(M.video, M.offset);
+// the session's events on a tile's seek bar, by the same clock as the telemetry overlay, so a sync moves them too
+function placeMarks(t) {
+  const asked = M.events;
+  asked?.then(ev => {
+    if (!ev || asked !== M.events) return;
+    const shift = Date.parse(ev.start) / 1000 - videoT0();
+    t.ctl.setMarks({pins: ev.pins.map(m => ({...m, t: m.t + shift, seek: Math.max(0, m.t + shift - 10)})),
+                    bands: ev.bands.map(b => ({...b, t: b.t + shift, end: b.end + shift}))});
+  });
+}
 
 // 4K on/off for every tile, each reloaded where it is
 function toggleUhd() {
@@ -284,10 +299,18 @@ async function lightsOut(e) {
 function markLightsOut() {
   const l = lead(), t = [l, ...M.tiles].find(x => x?.tel), at = t && launchAt(t.tel, M.video.start / 1000);
   if (at == null) return void (M.syncOut.value = 'pick a driver');
-  const shift = at - (videoT0() + l.video.currentTime);
-  // a press away from the start moves the data by many minutes: ask first
-  if (Math.abs(shift) > 300 && !confirm(`That moves the data ${Math.round(Math.abs(shift) / 60)} min ${shift < 0 ? 'earlier' : 'later'}. Are the lights going out right now?`)) return;
-  setOffset(M.offset + shift);
+  const shiftNow = () => at - (videoT0() + l.video.currentTime), shift = shiftNow();
+  if (Math.abs(shift) <= 300) return setOffset(M.offset + shift);
+  // a press away from the start moves the data by many minutes: ask first, on screen, with the video still playing; the answer's moment is the one used
+  const close = () => { clearTimeout(M.askTimer); M.ask?.remove(); M.ask = null; };
+  close();
+  const cancel = el('button', {onclick: close}, 'Cancel');
+  M.ask = el('div', {class: 'mvask', role: 'alertdialog', 'aria-label': 'Set lights out here?'},
+    el('span', {}, `That moves the data ${Math.round(Math.abs(shift) / 60)} min ${shift < 0 ? 'earlier' : 'later'}. Are the lights going out right now?`),
+    el('button', {class: 'yes', onclick: () => { setOffset(M.offset + shiftNow()); close(); }}, 'Lights out now'), cancel);
+  M.dlg.append(M.ask);
+  cancel.focus();
+  M.askTimer = setTimeout(close, 15000);
 }
 
 // open the viewer on an F1 TV video ({id, title} from /api/f1tv/{year}/{round}, label: what it is, e.g. Qualifying)
@@ -299,14 +322,16 @@ export async function openViewer(video) {
   M.video = video;
   M.session = video.start && video.year >= 2023 ? sessionName(video) : null;
   M.syncRow.hidden = !M.session;
+  M.events = M.session ? get(`/api/events/${video.year}/${video.round}?session=${encodeURIComponent(M.session)}`).then(ev => ({start: ev.start, ...sessionMarks(ev)}), () => null) : null;
   M.lights.hidden = !['Race', 'Sprint'].includes(M.session);
   M.addBtn.disabled = true;
   M.teamBtn.hidden = true;
   setOffset(savedOffset(video.id));
+  M.dlg.style.setProperty('--poster', video.img ? `url("${video.img}?w=1920&h=1080&q=HI&o=L")` : 'none');  // behind a tile until its first frame
   M.dlg.showModal();
   dispatchEvent(new CustomEvent('f1:panel', {detail: M.dlg}));  // the circuits / cars / trace panels close (and stop drawing)
   M.raf ||= requestAnimationFrame(drawTelemetry);
-  M.grid.replaceChildren(el('div', {class: 'loading'}, el('div', {class: 'spinner'}), 'Loading channels…'));
+  M.grid.replaceChildren(skeleton());
   showAccount();
   const first = json(playUrl(''));  // the main feed's play request goes out with the channel list, not after it
   first.catch(() => {});
@@ -491,6 +516,7 @@ function tile(s) {
     el('span', {class: 'mvsound', title: 'You hear this stream; Sync lines the others up with it'}, icon('vol')), t.msg);
   t.ctl = controls(t.video, t.root, () => t.player);
   t.root.append(t.ctl.bar);
+  placeMarks(t);
   if (s.type === 'obc' && s.number) drv.value = s.number;
   telemetry(t);
   return t;
@@ -617,6 +643,7 @@ async function load(t, at) {
       });
       t.player.addEventListener('variantchanged', () => showNow(t));
       t.player.addEventListener('adaptation', () => showNow(t));
+      t.player.addEventListener('buffering', e => t.root.classList.toggle('buffering', e.buffering));  // top quality never steps down: say why the picture froze
     }
     t.ent = p.entitlementToken;
     t.drm = !!p.laURL;  // live streams; replays carry no DRM

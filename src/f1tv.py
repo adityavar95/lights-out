@@ -26,6 +26,10 @@ def _search(**filters) -> list:
     return (r.json().get("resultObj") or {}).get("containers") or []
 
 
+# Jolpica's name -> F1 TV's, where they share no stem and the catalogue's season search (capped at ~30 results) can't find it
+MEETING_ALIASES = {"Brazilian Grand Prix": "São Paulo Grand Prix"}
+
+
 def _stem(name: str) -> str:
     """'Malaysian Grand Prix' and F1 TV's 'Malaysia Grand Prix' (or 'São Paulo' / 'Sao Paulo') both give 'malays'."""
     return unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode().lower().replace(" ", "")[:6]
@@ -52,6 +56,8 @@ def videos(year: int, race_name: str) -> list:
     if _fresh(hit, year):
         return hit[1]
     items = _search(filter_season=year, filter_Meeting_Name=race_name)
+    if not items and race_name in MEETING_ALIASES:
+        items = _search(filter_season=year, filter_Meeting_Name=MEETING_ALIASES[race_name])
     if not items:  # F1 TV names the meeting differently: find its name in the season's catalogue
         match = next((n for n in _meeting_names(year) if n and _stem(n) == _stem(race_name)), None)
         items = _search(filter_season=year, filter_Meeting_Name=match) if match else []

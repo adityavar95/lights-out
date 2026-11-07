@@ -3,6 +3,7 @@
 __pycache__/
 dist/
 build/
+src/static/assets/
 
 # local tools and editor settings: kept on disk, not in the repo
 .idea/

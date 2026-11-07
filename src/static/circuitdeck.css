@@ -1,23 +1,23 @@
 /* circuit selector (circuitdeck.js): a glass deck over the 3D stage, a grid of circuit cards */
 .circuitdeck { position: absolute; z-index: 4; inset: 64px 24px calc(var(--deck-h, 64px) + 18px); display: flex; flex-direction: column;
-  gap: 8px; padding: 10px 12px; color: var(--hud-ink); animation: cdin var(--panel-t); }
+  gap: 8px; padding: 8px 12px; color: var(--hud-ink); animation: cdin var(--panel-t); }
 .circuitdeck[hidden] { display: none; }
 @keyframes cdin { from { transform: translateY(-14px) scale(.98); opacity: 0; } }
 .circuitdeck .pwhead .phead { margin: 0; }
 .cdsub { flex: 1; color: var(--hud-muted); font-size: 12px; }
-.cdclose { padding: 4px 9px; }
-.cdgrid { flex: 1; min-height: 0; overflow-y: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px;
-  padding: 2px 4px 6px 2px; }
-.cdcard { appearance: none; border: 0; text-align: left; display: flex; flex-direction: column; gap: 6px; padding: 10px; border-radius: 12px;
+.cdclose { padding: 4px 8px; }
+.cdgrid { flex: 1; min-height: 0; overflow-y: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px;
+  padding: 2px 4px 8px 2px; }
+.cdcard { appearance: none; border: 0; text-align: left; display: flex; flex-direction: column; gap: 8px; padding: 8px; border-radius: var(--dp-radius-panel);
   color: inherit; background: rgb(255 255 255 / .04); box-shadow: var(--neu-raise); cursor: pointer; transition: transform .2s var(--spring), box-shadow .15s; }
 .cdcard:hover:not(:disabled) { transform: translateY(-2px); }
 .cdcard:active:not(:disabled) { box-shadow: var(--neu-press); transform: none; }
 .cdcard:disabled { cursor: progress; }
-.cdcard.preset { background: linear-gradient(160deg, rgb(225 6 0 / .16), rgb(255 255 255 / .03) 60%); }
+.cdcard.preset { background: var(--panel-2); }
 .cdcard[aria-current=true] { outline: 2px solid var(--f1-green); outline-offset: -2px; }
-.cdtitle { display: flex; align-items: center; justify-content: space-between; gap: 6px; font-size: 15px; }
-.cdtag { font-size: var(--text-1); font-weight: 900; letter-spacing: .12em; padding: 2px 6px; border-radius: 5px; background: var(--accent); color: #fff; }
-.cdname { font-size: 11px; color: var(--hud-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cdtitle { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 15px; }
+.cdtag { font-size: var(--text-1); font-weight: 500; letter-spacing: .12em; padding: 2px 8px; border-radius: 4px; background: var(--accent); color: var(--accent-ink); }
+.cdname { font-size: 12px; color: var(--hud-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cdmap { height: 120px; display: grid; place-items: center; }
 .cdmap svg { width: 100%; height: 100%; }
 .cdmap .sector { fill: none; stroke-width: 3; vector-effect: non-scaling-stroke; stroke-linejoin: round; }
@@ -28,70 +28,137 @@
 .cdelev .cdfill { fill: rgb(56 182 255 / .18); }
 .cdelev .cdline { fill: none; stroke: #38b6ff; stroke-width: 1.5; vector-effect: non-scaling-stroke; }
 .cdbadges { display: flex; flex-wrap: wrap; gap: 4px; }
-.cdbadge { display: flex; flex-direction: column; padding: 3px 6px; border-radius: 7px; box-shadow: var(--neu-press); line-height: 1.2; }
+.cdbadge { display: flex; flex-direction: column; padding: 4px 8px; border-radius: var(--dp-radius-panel); box-shadow: var(--neu-press); line-height: 1.2; }
 .cdbadge small { font-size: var(--text-1); letter-spacing: .1em; color: var(--hud-muted); }
-.cdbadge b { font-size: 11px; }
+.cdbadge b { font-size: 12px; }
 @media (max-width: 900px) { .circuitdeck { position: fixed; inset: 12px; } }
 @media (prefers-reduced-motion: reduce) { .circuitdeck { animation: none; } .cdcard { transition: none; } }
 
 /* car showroom (carsdeck.js): the same deck, era chips, season cards on the left, preview and spec card on the right */
-.csera { display: flex; flex-wrap: wrap; gap: 6px; }
-.csera button { padding: 4px 10px; font-size: 11px; }
+.csera { display: flex; flex-wrap: wrap; gap: 8px; }
+.csera button { padding: 4px 8px; font-size: 12px; }
 .csera button[aria-pressed=true] { box-shadow: var(--neu-press); color: var(--f1-green); }
-.csbody { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 420px); gap: 12px; }
+.csbody { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(190px, 260px) minmax(0, 1fr); gap: 12px; }
 .csgrid { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); align-content: start; }
 .cscard { border-left: 4px solid var(--team); }
-.csdetail { min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding: 2px 4px 6px; }
+.csdetail { min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding: 2px 4px 8px; }
 .cstitle { font-size: 18px; }
 .cstitle small { color: var(--hud-muted); font-size: 12px; }
-.csview { height: 220px; flex-shrink: 0; border-radius: 12px; box-shadow: var(--neu-press); overflow: hidden; cursor: grab; }
+/* TELEMETRY drawer (T): beside the timing tower, above the deck */
+.teledrawer { position: absolute; left: 276px; right: 14px; bottom: calc(var(--deck-h, 64px) + 18px); z-index: 6; padding: 8px 12px 8px; color: #eef0f4; font-size: 12px; }
+.tdhead { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+.tdhead > b:first-child { font-size: 13px; min-width: 44px; }
+.tdleds { display: flex; gap: 4px; flex: 1; justify-content: center; }
+.tdleds i { width: 12px; height: 12px; border-radius: 50%; background: rgb(255 255 255 / .1); }
+.tdleds i[data-on][data-z=g] { background: #2fd06f; box-shadow: 0 0 8px #2fd06f; }
+.tdleds i[data-on][data-z=r] { background: #ff4048; box-shadow: 0 0 8px #ff4048; }
+.tdleds i[data-on][data-z=b] { background: #5a8cff; box-shadow: 0 0 8px #5a8cff; }
+.tdgear { font-size: 22px; font-weight: 500; min-width: 22px; text-align: center; }
+.tdbody { display: grid; grid-template-columns: minmax(280px, 1fr) 150px 190px 170px; gap: 12px; }
+.tdchart { width: 100%; height: 190px; display: block; }
+.tdside { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.tdgg { width: 150px; height: 150px; }
+.tdg, .tdstat { display: grid; gap: 4px; }
+.tdrow { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.tdrow small { color: #aab0bc; font-size: 12px; letter-spacing: .03em; }
+.tdtyres { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.tdtyre { display: flex; gap: 8px; align-items: stretch; }
+.tdtyre > i { width: 16px; border-radius: 4px; min-height: 56px; }
+.tdtyre > span { display: flex; flex-direction: column; line-height: 1.2; }
+.tdtyre em { font-style: normal; color: #aab0bc; font-size: 12px; }
+.tdtyre small { color: #aab0bc; font-size: 12px; }
+/* the stage's panels stack under the picture there, so the drawer joins them */
+@media (max-width: 1100px) { .tdbody { grid-template-columns: 1fr 150px; } .teledrawer { position: static; order: 1; } }
+
+/* what the stage is still fetching */
+.loadstage { position: absolute; top: 60px; left: 50%; transform: translateX(-50%); z-index: 7; padding: 8px 12px; min-width: 300px; color: #eef0f4; font-size: 12px; pointer-events: none; }
+.lsrow { display: grid; grid-template-columns: 1fr 90px auto; gap: 8px; align-items: center; padding: 2px 0; }
+.lsrow i { height: 3px; border-radius: 2px; background: rgb(255 255 255 / .14); overflow: hidden; }
+.lsrow b { display: block; height: 100%; background: #fff; }
+.lsrow[data-state=offline] b { background: #e6a23c; }
+.lsrow small { color: #aab0bc; }
+
+.trow .chg { margin-left: 4px; font-size: 12px; font-weight: 500; color: #ff6b70; }
+.trow .chg[data-up=true] { color: #2fd06f; }
+.trow .badge[data-k=stops]:not(:empty) { background: rgb(255 255 255 / .16); color: var(--hud-ink); }
+.radar { cursor: crosshair; }
+.radarinfo { font-size: 12px; color: #cfd3dc; min-height: 0; font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.radarprobe { fill: none; stroke: #fff; stroke-width: 2; vector-effect: non-scaling-stroke; }
+
+.csview { position: relative; height: min(46vh, 420px); flex-shrink: 0; border-radius: var(--dp-radius-panel); box-shadow: var(--neu-press); overflow: hidden; cursor: grab; }
+.cspins { position: absolute; inset: 0; pointer-events: none; }
+.cspin { position: absolute; left: -11px; top: -11px; width: 22px; height: 22px; border-radius: 50%; border: 1px solid rgb(255 255 255 / .7); background: rgb(10 12 16 / .78);
+  color: #fff; font-weight: 500; line-height: 1; cursor: pointer; pointer-events: auto; transition: opacity .2s, background .15s; }
+.cspin:hover, .cspin[aria-pressed=true] { background: var(--accent); }
+.csnote { position: absolute; left: 10px; top: 10px; width: min(300px, 70%); padding: 8px 12px; font-size: 12px; line-height: 1.45; color: var(--hud-ink); }
+.csnote p { margin: 4px 0 0; color: var(--hud-muted); }
+.csbar { position: absolute; left: 10px; right: 10px; bottom: 10px; display: flex; justify-content: space-between; gap: 8px; pointer-events: none; }
+.csbar button { pointer-events: auto; }
 .csview canvas { display: block; width: 100%; height: 100%; }
 .csteam { display: flex; align-items: center; gap: 8px; font-size: 12px; }
 .csteam small { font-size: var(--text-1); letter-spacing: .1em; color: var(--hud-muted); }
 .csteam select { flex: 1; }
 .csstats { display: flex; flex-wrap: wrap; gap: 4px; }
-.csdrivers { width: 100%; font-size: 11px; color: var(--hud-muted); }
+.csdrivers { width: 100%; font-size: 12px; color: var(--hud-muted); }
 @media (max-width: 900px) { .csbody { grid-template-columns: 1fr; overflow-y: auto; } .csgrid { overflow: visible; } }
 
 /* telemetry trace (tracemodal.js): the same deck on carbon-slate glass, leaving the HUD's right column (circuit radar) visible */
 .tracedeck { position: absolute; z-index: 4; inset: 64px 296px calc(var(--deck-h, 64px) + 18px) 24px; display: flex; flex-direction: column;
-  gap: 8px; padding: 10px 12px; color: var(--hud-ink); animation: cdin var(--panel-t);
-  background: linear-gradient(150deg, rgb(30 33 41 / .88), rgb(9 10 14 / .84)); backdrop-filter: blur(20px) saturate(180%);
-  -webkit-backdrop-filter: blur(20px) saturate(180%); }
+  gap: 8px; padding: 8px 12px; color: var(--hud-ink); animation: cdin var(--panel-t);
+  background: rgb(14 14 14 / .86); -webkit-backdrop-filter: blur(20px) saturate(180%); backdrop-filter: blur(20px) saturate(180%);
+ }
 .tracedeck[hidden] { display: none; }
 .tracedeck .pwhead .phead { margin: 0; }
 .trctl { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; }
-.trpick { display: flex; align-items: center; gap: 6px; padding: 4px 6px; border-radius: 12px; box-shadow: var(--neu-press); }
-.trpick small { font-size: var(--text-1); font-weight: 900; letter-spacing: .1em; color: var(--hud-muted); max-width: 64px; line-height: 1.1; }
+.trpick { display: flex; align-items: center; gap: 8px; padding: 4px 8px; border-radius: var(--dp-radius-panel); box-shadow: var(--neu-press); }
+.trpick small { font-size: var(--text-1); font-weight: 500; letter-spacing: .1em; color: var(--hud-muted); max-width: 64px; line-height: 1.1; }
 .trpick.a { border-left: 3px solid #fff; }
 .trpick.b { border-left: 3px dashed #38f0ff; }
 .trpick select { max-width: 190px; }
 .trzoom { align-self: start; }
 .trbody { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 250px; gap: 12px; }
 .trmain { min-height: 0; display: flex; flex-direction: column; }
-.trplot { position: relative; flex: 1; min-height: 0; border-radius: 12px; box-shadow: var(--neu-press); overflow: hidden; }
+.trplot { position: relative; flex: 1; min-height: 0; border-radius: var(--dp-radius-panel); box-shadow: var(--neu-press); overflow: hidden; }
 .trplot canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
 .trover { cursor: crosshair; touch-action: none; }
-.trread { position: absolute; top: 30px; display: grid; grid-template-columns: auto repeat(3, minmax(52px, auto)); gap: 1px 10px; padding: 6px 9px;
-  border-radius: 9px; background: rgb(8 9 13 / .88); box-shadow: 0 6px 18px rgb(0 0 0 / .5); font-size: 11px; pointer-events: none;
-  font-variant-numeric: tabular-nums; }
+.trread { position: absolute; top: 30px; display: grid; grid-template-columns: auto repeat(3, minmax(52px, auto)); gap: 1px 8px; padding: 8px 8px;
+  border-radius: var(--dp-radius-panel); background: rgb(8 9 13 / .88); box-shadow: 0 6px 18px rgb(0 0 0 / .5); font-size: 12px; pointer-events: none;
+  font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .trread[hidden] { display: none; }
 .trread span { color: var(--hud-muted); }
 .trread b { text-align: right; }
-.trmsg { margin: 6px 2px 0; font-size: 12px; }
+.trmsg { margin: 8px 2px 0; font-size: 12px; }
 .trmsg[hidden] { display: none; }
 .trside { min-height: 0; display: flex; flex-direction: column; gap: 8px; overflow-y: auto; }
-.trmap { width: 100%; height: 170px; flex: none; border-radius: 12px; box-shadow: var(--neu-press); }
+.trmap { width: 100%; height: 170px; flex: none; border-radius: var(--dp-radius-panel); box-shadow: var(--neu-press); }
 .trmap .trline { fill: none; stroke: rgb(255 255 255 / .55); stroke-width: 2.5; vector-effect: non-scaling-stroke; stroke-linejoin: round; }
 .trdot.a { fill: #fff; filter: drop-shadow(0 0 4px #fff); }
 .trdot.b { fill: #38f0ff; filter: drop-shadow(0 0 4px #38f0ff); }
-.trnotes { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
-.trnotes li { padding: 7px 9px; border-radius: 10px; font-size: 12px; line-height: 1.35; box-shadow: var(--neu-raise); cursor: zoom-in;
-  background: rgb(255 255 255 / .03); font-variant-numeric: tabular-nums; }
-.trnotes small { display: block; font-size: var(--text-1); font-weight: 900; letter-spacing: .12em; color: var(--f1-green); }
+.trnotes { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.trnotes li { padding: 8px 8px; border-radius: var(--dp-radius-panel); font-size: 12px; line-height: 1.35; box-shadow: var(--neu-raise); cursor: zoom-in;
+  background: rgb(255 255 255 / .03); font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.trnotes small { display: block; font-size: var(--text-1); font-weight: 500; letter-spacing: .12em; color: var(--f1-green); }
 .trow .trcmp { appearance: none; border: 0; background: none; padding: 0; color: var(--hud-muted); cursor: pointer; font-size: 13px; line-height: 1; }
 .trow .trcmp:hover, .trow .trcmp:focus-visible { color: #38f0ff; }
 .radar .trcursor { fill: #ff3c50; stroke: #fff; stroke-width: 1.5; vector-effect: non-scaling-stroke; filter: drop-shadow(0 0 3px #ff3c50); }
 @media (max-width: 1100px) { .trbody { grid-template-columns: 1fr; overflow-y: auto; } .trplot { min-height: 320px; } .trside { overflow: visible; } }
 @media (max-width: 900px) { .tracedeck { position: fixed; inset: 12px; } }
 @media (prefers-reduced-motion: reduce) { .tracedeck { animation: none; } }
+
+/* The Why (storypanel.js) */
+.storypanel { position: absolute; z-index: 4; top: 64px; right: 24px; bottom: calc(var(--deck-h, 64px) + 18px); width: min(400px, calc(100% - 48px)); display: flex; flex-direction: column;
+  gap: 8px; padding: 8px 12px; color: var(--hud-ink); font-family: var(--face); animation: cdin var(--panel-t); border-radius: var(--dp-radius-panel);
+  background: rgb(14 14 14 / .86); -webkit-backdrop-filter: blur(20px) saturate(180%); backdrop-filter: blur(20px) saturate(180%); }
+.storypanel[hidden] { display: none; }
+.storypanel .pwhead { display: flex; justify-content: space-between; align-items: center; }
+.storypanel .phead { margin: 0; }
+.storybody { overflow-y: auto; min-height: 0; }
+.storyhead { margin: 4px 0 12px; font-size: 17px; font-weight: 500; line-height: 1.3; }
+.storybeats { list-style: none; margin: 0 0 12px; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.storybeat { width: 100%; display: flex; gap: 12px; padding: 8px; border: 0; border-radius: var(--dp-radius-panel); background: none; color: inherit; font: inherit; font-size: 13px; line-height: 1.4; text-align: left; cursor: pointer; }
+.storybeat:hover, .storybeat:focus-visible { background: rgb(255 255 255 / .1); }
+.storylap { flex: none; width: 32px; color: var(--hud-muted); font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.storytag { margin-left: 8px; padding: 0 4px; border: 1px solid var(--hud-muted); border-radius: 4px; color: var(--hud-muted); font-size: 12px; }
+.storynote { margin: 0 0 8px; color: var(--hud-muted); font-size: 12px; line-height: 1.4; }
+@media (max-width: 900px) { .storypanel { position: fixed; inset: 12px; width: auto; } }
+@media (prefers-reduced-motion: reduce) { .storypanel { animation: none; } }

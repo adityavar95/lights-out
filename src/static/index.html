@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="theme-color" content="#08080c" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#050505" media="(prefers-color-scheme: dark)">
 <meta name="theme-color" content="#eef0f5" media="(prefers-color-scheme: light)">
 <title>Lights Out</title>
 <meta name="description" content="Relive every Formula 1 race in 3D, follow live timing, simulate any era and test race strategies. Free, with no account.">
@@ -12,17 +12,15 @@
 <meta property="og:description" content="Relive every Formula 1 race in 3D, follow live timing, simulate any era and test race strategies. Free, with no account.">
 <meta property="og:type" content="website">
 <link rel="icon" href="/static/lightsout.ico">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<!-- three.js, the video player and F1 TV's video CDN: connections open before the first request needs them -->
-<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+<!-- F1 TV's video CDN: the connection opens before the first request needs it -->
 <link rel="preconnect" href="https://ott-video-fer-cf.formula1.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Titillium+Web:ital,wght@0,400;0,600;0,700;0,900;1,900&display=swap">
+<link rel="stylesheet" href="/static/assets/fonts/fonts.css">
 <link rel="stylesheet" href="/static/style.css">
 <link rel="stylesheet" href="/static/circuitdeck.css">
 <link rel="stylesheet" href="/static/analytics.css">
 </head>
 <body>
+<a class="skip" id="skip" href="#">Skip to content</a>
 <header class="topbar">
   <a id="home" class="brand" href="/" aria-label="Lights Out, back to the races"><span class="logo" title="Lights Out">LO</span><span class="title">Lights Out</span></a>
   <div class="modeswitch viewswitch" role="group" aria-label="View">
@@ -52,7 +50,7 @@
   <button role="tab" id="tabbtn-standings" aria-controls="tab-standings" data-tab="standings" tabindex="-1">Standings</button>
   <button role="tab" id="tabbtn-explorer" aria-controls="tab-explorer" data-tab="explorer" tabindex="-1" class="rawtab" title="Every Jolpica, OpenF1 and live timing table, raw">Raw data</button>
 </div>
-<main>
+<main tabindex="-1">
   <section id="tab-replay" role="tabpanel" aria-labelledby="tabbtn-replay"></section>
   <section id="tab-results" role="tabpanel" aria-labelledby="tabbtn-results" hidden></section>
   <section id="tab-lapchart" role="tabpanel" aria-labelledby="tabbtn-lapchart" hidden></section>
@@ -63,38 +61,10 @@
 </main>
 <footer class="foot">Data: livef1 · Jolpica · OpenF1 · MultiViewer track maps · imagery Esri, Maxar, Earthstar Geographics. Unofficial, not associated with Formula 1.</footer>
 <script type="importmap">
-{"imports": {"three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
-             "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"},
- "integrity": {
-    "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js": "sha384-qOubuRxWZ0I7rXTjcuhcKNHKvPM7q0ztN8/82sJnxnyKS0OXTeB5FsIcysc2T9EY",
-    "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/controls/OrbitControls.js": "sha384-aJoe4qqS/DgF2jh9njAuvA6QIveJYoCuYOfYjdFY8P3eawzmc9bEQ40jq2TvOyuP",
-    "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/csm/CSM.js": "sha384-VkzCk5cjO02OBzVJv8HtXV0dOap4oTyHCiUdywoUQJwF5lSnk8jOMn23gr09TH9u",
-    "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/csm/CSMFrustum.js": "sha384-2bHwwZ1t7cLWM4je5d0WajDoA/Zggn8T79kFf8aLjUUC4X9T41K8n0XFL1QmGrtS",
-    "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/csm/CSMShader.js": "sha384-+uQ2L7i618UrpX2E7FqbPDX/QiB1Tr6JIFanDBUs5CjdQbopk669pnAI2B4Stm4O",
-    "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/environments/RoomEnvironment.js": "sha384-9ItPPH2vgKbkvgrqTKq7ptGYe+WuAnqlZtlqleJW4/CJjnM5R7C+efD6iS7ADPJ9",
-    "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/libs/meshopt_decoder.module.js": "sha384-zhZjnxc+3j2IeX2itXt+5CnnC0YleVRvu5EOaj733tRp38E9hBPnZjweEWX2kN7y",
-    "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/loaders/GLTFLoader.js": "sha384-VoIGt4hjsBN2DcfqRsMnLLSUBl1bpLaVmkZ4MO/qESaCNDuISU6ScEtXt1/j3IyF",
-    "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/loaders/RGBELoader.js": "sha384-df8Ij6+muzecLENB3U9Z40GSfTjNV/TbniF7LQdZiYn4nHS5Javsoo5xFTWG0EJE",
-    "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/math/SimplexNoise.js": "sha384-oIjfHQjy3zQoYUu3Y1vAmxY/ctwrSlPYUHMXC2gS8TZrPBepAFWa/YQ1C6skFznv",
-    "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/objects/Sky.js": "sha384-wuDrkXs4/6ZP+utdQQ7XggxDVg1Lt50OuvF4p/Ac5chibUcyJqnBdJqACclm1Hea",
-    "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/postprocessing/EffectComposer.js": "sha384-L+Ns9skCAqjab7aG8LH5VLknBCoENW7p37sOj39jnITwlWZFabWc29JwzgYf6ygy",
-    "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/postprocessing/GTAOPass.js": "sha384-edLjyhB5F43zh4EO7rUkxkUzFoT3qa42ZVLqK8JwDeieeOEua8z1tTiAQF5fmly3",
-    "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/postprocessing/MaskPass.js": "sha384-SDM80tiGflO8UDV/QzR/mASjcc/+wF7KfRVFNHJUIPcTctwoPI8GoWVTlccZw7V4",
-    "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/postprocessing/OutputPass.js": "sha384-pAQ55aG4oXjA92n2goVLMWU14Ik/bNUs29MfxOM6meGyGzTJoFm7WxEU0D0SqsNI",
-    "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/postprocessing/Pass.js": "sha384-gSqIFh8vMmp1veyOysIS3KPVUl/A5JPefYvW4b89OeYeW0bwkrjN7qcC1h0XJK/K",
-    "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/postprocessing/RenderPass.js": "sha384-JBzMcXwTgF2e9tw3AU4+jg+nVDdl7hTHlT0C5qZVa/1DUUe/KIm4L3e2jorIH28/",
-    "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/postprocessing/SMAAPass.js": "sha384-KMSgC3atgu0arTMGveWOKuCxZdEbhymfjmW5QAg5Mocen0rPsHjqeHzl+YvV5HzJ",
-    "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/postprocessing/ShaderPass.js": "sha384-zetU6HhR/vTtgSvnS9DE+GQPZhVT/ZOSLa/1+DSM6rkM9hvBgQWr9bCEosZt93ch",
-    "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/postprocessing/UnrealBloomPass.js": "sha384-NLbvCtTvm5zjFCKW1mFWUjcnFLVOn258z3hKOAoYCXJ1DtQO54I+x5LPquFbIig+",
-    "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/renderers/CSS2DRenderer.js": "sha384-vp2ywxkL+goEwgyQLfo/AYopp2aaZOSEN+z0uvTTdu1g/jT/XvzI9kegupXyObT0",
-    "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/shaders/CopyShader.js": "sha384-kzVlcj2amFaRNIWZ5zE0PmIN+QTNWWvrgKk31S8N/7w0nf7Qq3xqxHRLbD2UPPSl",
-    "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/shaders/GTAOShader.js": "sha384-MeCX0JF6U49Em8+Vfk2HF1RUz9bbhxG4wu4j7HGVeiozSSYvpfRgFEE6MbPFuz2M",
-    "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/shaders/LuminosityHighPassShader.js": "sha384-a6qrIDfNt1Ss7Z4VtgMalz9gq8H/Up3lSSf1Agc4HRaDMvNd9eP9k7DckAv5JxQF",
-    "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/shaders/OutputShader.js": "sha384-CdpJL3xlIkjJQAbzgyazSoOx+/oBcwUCsBVSU25SKy8/PEdYEn24U+4mnmx3R4YX",
-    "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/shaders/PoissonDenoiseShader.js": "sha384-HG2Z3MfIRgZp03Kun8oE6+/yL4nDXDoYV06b9eYYwLeTEkMaWmBuFCq3Ll1drtF0",
-    "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/shaders/SMAAShader.js": "sha384-gKkT3VUEC3lcM7aeYOfRRpYwB11FQYcpoV7hTu9c8E+Trmmzd1oOO5iwFoGFMKv/",
-    "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/utils/BufferGeometryUtils.js": "sha384-wOjwauvHlJO7K6APr7FmMGH2nupQa3Ndzas9bJZhsAMOK055efJud8ns4aYmASKv"
- }}
+{"imports": {"three": "/static/assets/three/build/three.webgpu.js",
+             "three/webgpu": "/static/assets/three/build/three.webgpu.js",
+             "three/tsl": "/static/assets/three/build/three.tsl.js",
+             "three/addons/": "/static/assets/three/examples/jsm/"}}
 </script>
 <div id="bootfail" class="card" role="alert" hidden>
   <p>Lights Out couldn't load. Part of it comes from cdn.jsdelivr.net, which isn't answering or sent a file that doesn't match. Check your connection and try again.</p>

@@ -1,9 +1,6 @@
 // Camera deck (neumorphic switches with status LEDs) and the cockpit steering wheel overlay.
 import {el, led, dropUp} from './util.js';
-
-const LEDS = 15, RPM_LOW = 9500, RPM_HIGH = 12300;  // shift lights start at RPM_LOW and are all lit at RPM_HIGH
-const TYRE = {SOFT: ['S', '#ff2d2d'], MEDIUM: ['M', '#ffd400'], HARD: ['H', '#f2f2f2'], INTERMEDIATE: ['I', '#3ec455'], WET: ['W', '#2b8cff']};
-const FLAG = {GREEN: '#2fd06f', YELLOW: '#ffd400', SC: '#ffd400', 'SC IN': '#ffd400', VSC: '#ffd400', 'VSC ENDING': '#ffd400', RED: '#ff2020'};
+import {LEDS, TYRE, FLAG, ledsLit, drawDash} from './dash.js';
 
 let w;  // DOM handles
 
@@ -77,19 +74,27 @@ function wheelSvg() {
   return s;
 }
 
+// the overlay is for cars without a wheel of their own (before 2026, or while the RB22 model hasn't loaded)
+const overlay = {mode: 'overview', show: true, modelled: false};
+const placeWheel = () => { w.wheel.hidden = overlay.mode !== 'onboard' || !overlay.show || overlay.modelled; };
+
 export function setCameraUi(mode, showWheel) {
   for (const b of w.modes.children) b.setAttribute('aria-pressed', b.dataset.mode === mode);
   w.name.textContent = CAMERAS.find(c => c[0] === mode)?.[1] ?? '';
   w.parts.hidden = mode !== 'onboard';
-  w.wheel.hidden = mode !== 'onboard' || !showWheel;
+  Object.assign(overlay, {mode, show: showWheel});
+  placeWheel();
 }
 
-export function setWheelAngle(deg) {
+export function setWheelAngle(deg, modelled) {
+  if (modelled !== overlay.modelled) { overlay.modelled = modelled; placeWheel(); }
   w.wheel.style.transform = `translateX(-50%) rotate(${-deg}deg)`;  // + = left turn = anticlockwise
 }
 
 // d: {speed, gear, rpm, throttle, brake, drs, lap, total, pos, gap, tyre, status, estimated}
 export function updateWheel(d) {
+  drawDash(d);
+  if (w.wheel.hidden) return;
   const dash = v => (v === null || v === undefined ? '–' : v);
   w.speed.textContent = dash(d.speed === null ? null : Math.round(d.speed));
   w.gear.textContent = d.gear === 0 ? 'N' : dash(d.gear);
@@ -103,7 +108,7 @@ export function updateWheel(d) {
   w.drs.className = `drs ${d.drs >= 10 ? 'open' : d.drs === 8 ? 'armed' : ''}`;  // OpenF1: 10/12/14 open, 8 eligible
   w.thr.style.height = `${d.throttle ?? 0}%`;
   w.brk.style.height = `${d.brake ? 100 : 0}%`;
-  const lit = d.rpm ? Math.round(Math.min(1, Math.max(0, (d.rpm - RPM_LOW) / (RPM_HIGH - RPM_LOW))) * LEDS) : 0;
+  const lit = ledsLit(d.rpm);
   w.leds.forEach((led, i) => led.classList.toggle('on', i < lit));
   for (const f of w.flags) f.style.background = FLAG[d.status] || 'transparent';
 }

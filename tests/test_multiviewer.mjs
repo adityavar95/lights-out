@@ -1,6 +1,6 @@
 // Run: node tests/test_multiviewer.mjs  — checks the F1 TV multiviewer's telemetry timing (multiviewer.js).
 import assert from 'node:assert/strict';
-import {short, sessionsOf} from '../src/static/stream.js';
+import {short, sessionsOf, lead, aerialTiles} from '../src/static/stream.js';
 import {sessionName, telAt, launchAt, sessionStart, renditions, playError, radioList, arrange} from '../src/static/multiviewer.js';
 import {broadcastAt, pickVideo} from '../src/static/commentary.js';
 
@@ -99,4 +99,24 @@ const wk = [
   {title: '2026 Mexico City GP - F1 Kids', kind: 'REPLAY', start: 5.1},  // the race again, for children: not a session of its own
 ];
 assert.deepEqual(sessionsOf(wk).map(short), ['FP1', 'FP2', 'Sprint quali', 'Qualifying', 'Race']);
+// the Stream billboard: on air, else what's next, else (a finished season) the latest race
+{
+  const now = Date.now(), H = 3600e3, race = {id: 1, title: '2026 Mexico GP - Race', kind: 'REPLAY', start: now - 200 * H, end: now - 198 * H};
+  const onAir = {id: 2, title: '2026 Sao Paulo GP - Practice 1', kind: 'LIVE', start: now - H / 2, end: now + H / 2};
+  const a = {round: 19}, b = {round: 20}, next = {r: b, name: 'Practice 2', d: new Date(now + 4 * H)};
+  assert.equal(lead([{videos: [onAir]}, {videos: [race]}], [b, a], next)[0], onAir);
+  assert.equal(lead([{videos: [race]}], [a], {...next, r: b}, [onAir])[0], onAir, 'the coming weekend may be the one on air');
+  assert.deepEqual(lead([{videos: [race]}], [a], next).slice(0, 2), [null, b], 'a session to come beats a replay');
+  assert.equal(lead([], [], next)[3], next, 'no waiting for F1 TV');
+  assert.equal(lead([{videos: []}, {videos: [race]}], [b, a], undefined)[0], race, 'finished season: the newest weekend with videos');
+  assert.equal(lead([undefined, {videos: [race]}], [b, a], undefined), null, 'a newer weekend is still to answer');
+  assert.equal(lead([], [], undefined), null);
+  // the picture is covered edge to edge, the circuit at its centre
+  const tiles = aerialTiles(-23.7036, -46.6997, [1920, 1080]);
+  assert.ok(tiles.every(a => Number.isInteger(a.x) && Number.isInteger(a.y)));
+  assert.ok(Math.min(...tiles.map(a => a.dx)) <= 0 && Math.min(...tiles.map(a => a.dy)) <= 0);
+  assert.ok(Math.max(...tiles.map(a => a.dx + 256)) >= 1920 && Math.max(...tiles.map(a => a.dy + 256)) >= 1080);
+  assert.equal(new Set(tiles.map(a => `${a.x},${a.y}`)).size, tiles.length);
+  assert.equal(tiles.find(a => a.dx <= 960 && a.dx + 256 > 960 && a.dy <= 540 && a.dy + 256 > 540).x, Math.floor((-46.6997 + 180) / 360 * 65536));
+}
 console.log('multiviewer renditions ok');

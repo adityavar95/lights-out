@@ -3,9 +3,11 @@
 // ground plane (scene x, z); heights become scene y. One instance per track; dispose() frees it on a circuit switch.
 import * as THREE from 'three';
 import {CSS2DObject} from 'three/addons/renderers/CSS2DRenderer.js';
-import {asphalt, NOISE} from './track3d.js';
+import {Fn, uniform, texture, vec2, vec3, positionGeometry, normalViewGeometry, mix, smoothstep, clamp, dot, min} from 'three/tsl';
+import {asphalt, noise} from './track3d.js';
 import {racingLine} from './sim.js';
 import {garages} from './pit3d.js';
+import {buildTrackside} from './trackside.js';
 
 const UP = new THREE.Vector3(0, 1, 0);
 let seed = 1;
@@ -83,22 +85,30 @@ function strip(F, a, b, y, material, closed, tileM, mps, height = 0) {
   return mesh;
 }
 
-// runs of consecutive outline points that are part of a corner (radius under ~130 m), for kerbs and gravel traps
+// stands in for the satellite image until it loads: a node material's textures must exist when it compiles
+const BLANK = Object.assign(new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1), {colorSpace: THREE.SRGBColorSpace, needsUpdate: true});
+
+// runs of consecutive outline points that are part of a corner (radius under ~130 m), for kerbs and gravel traps. A run
+// must turn at least ~20 degrees in all: a wobble in the outline on a straight clears the radius test for a few metres,
+// which painted stray kerb patches along it.
 function cornerRuns(F, mps) {
-  const n = F.length, hot = F.map((f, i) => {
+  const n = F.length, turn = F.map((f, i) => {
     const a = F[(i - 1 + n) % n].P, b = f.P, c = F[(i + 1) % n].P;
-    const d = Math.atan2(c.z - b.z, c.x - b.x) - Math.atan2(b.z - a.z, b.x - a.x), turn = Math.abs(Math.atan2(Math.sin(d), Math.cos(d)));
-    const seg = (a.distanceTo(b) + b.distanceTo(c)) / 2 * mps;
-    return seg > 0 && turn / seg > 1 / 130;
+    const d = Math.atan2(c.z - b.z, c.x - b.x) - Math.atan2(b.z - a.z, b.x - a.x);
+    return Math.abs(Math.atan2(Math.sin(d), Math.cos(d)));
+  }), hot = F.map((f, i) => {
+    const seg = (F[(i - 1 + n) % n].P.distanceTo(f.P) + f.P.distanceTo(F[(i + 1) % n].P)) / 2 * mps;
+    return seg > 0 && turn[i] / seg > 1 / 130;
   });
   const runs = [];
-  let run = [];
+  let run = [], sum = 0;
+  const close = () => { if (run.length > 1 && sum >= 0.35) runs.push(run); run = []; sum = 0; };
   for (let i = 0; i < n; i++) {
-    if (hot[i] || hot[(i + 1) % n] || hot[(i - 1 + n) % n]) run.push(F[i]);
-    else if (run.length) { runs.push(run); run = []; }
+    if (hot[i] || hot[(i + 1) % n] || hot[(i - 1 + n) % n]) { run.push(F[i]); sum += turn[i]; }
+    else close();
   }
-  if (run.length) runs.push(run);
-  return runs.filter(r => r.length > 1);
+  close();
+  return runs;
 }
 
 // opts: {pts (map coords), map {k, cx, cy, mps}, tex, width (m), startKnown, ann (circuits.js annotate), corners:
@@ -111,7 +121,7 @@ export function buildCircuit(world, {pts, map, tex, width, startKnown, ann, corn
   const F = frames(p3, ann.bank), owned = [], wettable = [], every = Math.max(1, Math.round(F.length / pts.length));
   // maps: {map, normalMap, roughnessMap} or null
   const mat = (maps, color = 0xffffff, extra = {}) => {
-    const x = new THREE.MeshStandardMaterial({...maps, color, roughness: 0.9, side: THREE.DoubleSide, ...extra});
+    const x = new THREE.MeshStandardNodeMaterial({...maps, color, roughness: 0.9, side: THREE.DoubleSide, ...extra});
     wettable.push(x);
     return x;
   };
@@ -178,25 +188,19 @@ export function buildCircuit(world, {pts, map, tex, width, startKnown, ann, corn
   // tufts and soil in the light from a photographed ground's normal and roughness (textures3d.js ground), under any colour
   const grass = mat({map: tex.grass, normalMap: tex.ground.normalMap, roughnessMap: tex.ground.roughnessMap},
                     0xffffff, {normalScale: new THREE.Vector2(0.9, 0.9)});
-  Object.assign(grass.userData, {sat: {value: null}, satM: {value: new THREE.Matrix3()}, satOn: {value: 0}, satMean: {value: new THREE.Color()}});
-  grass.onBeforeCompile = sh => {
-    Object.assign(sh.uniforms, {uMps: {value: map.mps}, uSat: grass.userData.sat, uSatM: grass.userData.satM, uSatOn: grass.userData.satOn,
-                              uSatMean: grass.userData.satMean});
-    sh.vertexShader = 'varying vec2 vGround;\n' + sh.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\nvGround = position.xz;');
-    sh.fragmentShader = `uniform float uMps, uSatOn;\nuniform sampler2D uSat;\nuniform mat3 uSatM;\nuniform vec3 uSatMean;\nvarying vec2 vGround;\n${NOISE}\n`
-      + sh.fragmentShader.replace('#include <map_fragment>', `#include <map_fragment>
-      vec2 gm = vGround * uMps;  // metres
-      float patches = 0.7 * noise(gm / 160.0) + 0.3 * noise(gm / 40.0 + 17.0);
-      vec3 patchTint = mix(vec3(0.84, 0.88, 0.84), vec3(1.08, 1.04, 0.86), smoothstep(0.15, 0.85, patches));
-      diffuseColor.rgb *= patchTint;
-      vec2 suv = (uSatM * vec3(vGround, 1.0)).xy;
-      vec3 sat = texture2D(uSat, suv).rgb;  // outside any branch: mip selection needs derivatives
-      float grain = clamp(dot(sampledDiffuseColor.rgb, vec3(0.2126, 0.7152, 0.0722)) / 0.16, 0.8, 1.2);
-      float cover = uSatOn * smoothstep(0.0, 0.08, min(min(suv.x, 1.0 - suv.x), min(suv.y, 1.0 - suv.y)));
-      vec3 around = mix(diffuseColor.rgb, uSatMean * grain * patchTint, uSatOn);  // beyond the image: its mean colour
-      diffuseColor.rgb = mix(around, sat * grain, cover);`);
-  };
-  grass.customProgramCacheKey = () => 'grass';
+  // The satellite image swaps in by changing this node's texture, so the material needn't recompile when it lands
+  const satM = uniform(new THREE.Matrix3()), suv = satM.mul(vec3(positionGeometry.xz, 1)).xy, satNode = texture(BLANK, suv), satOn = uniform(0), satMean = uniform(new THREE.Color());
+  Object.assign(grass.userData, {sat: satNode, satM, satOn, satMean});
+  grass.colorNode = Fn(() => {
+    const g = positionGeometry.xz, gm = g.mul(map.mps);  // metres
+    const patches = noise(gm.div(160)).mul(0.7).add(noise(gm.div(40).add(17)).mul(0.3));
+    const patchTint = mix(vec3(0.84, 0.88, 0.84), vec3(1.08, 1.04, 0.86), smoothstep(0.15, 0.85, patches));
+    const tile = texture(tex.grass).setUpdateMatrix(true);
+    const grain = clamp(dot(tile.rgb, vec3(0.2126, 0.7152, 0.0722)).div(0.16), 0.8, 1.2);
+    const cover = satOn.mul(smoothstep(0, 0.08, min(min(suv.x, suv.x.oneMinus()), min(suv.y, suv.y.oneMinus()))));
+    const around = mix(tile.rgb.mul(patchTint), satMean.mul(grain).mul(patchTint), satOn);  // beyond the image: its mean colour
+    return mix(around, satNode.rgb.mul(grain), cover);
+  })();
   add(new THREE.Mesh(ground, grass)).receiveShadow = true;
   // height of the terrain mesh under scene (x, z): bilinear between the grid vertices (row j = z, column i = x)
   const groundAt = (x, z) => {
@@ -215,9 +219,16 @@ export function buildCircuit(world, {pts, map, tex, width, startKnown, ann, corn
   const coarse = racingLine(pts.map(p => { const q = flat(p); return [q.x * map.mps, q.z * map.mps]; }), width / 2);
   const line = dense.src.map(([i, f]) => -(coarse[i] + (coarse[(i + 1) % coarse.length] - coarse[i]) * f));
   track.geometry.setAttribute('line', new THREE.Float32BufferAttribute([...line, line[0]].flatMap(l => [l, l]), 1));
+  // Tyres leave rubber on paint too: the lines and kerbs darken in streaks along the road, more than the asphalt shows it
+  const transfer = () => {
+    const g = positionGeometry.xz.mul(map.mps);
+    return mix(vec3(1), vec3(0.42), smoothstep(0.5, 0.78, noise(g.mul(0.9))).mul(smoothstep(0.35, 0.7, noise(g.mul(0.06).add(31)))));
+  };
   const white = mat(null, 0xf4f4f4);
+  white.colorNode = vec3(0.9).mul(transfer());
   for (const s of [-1, 1]) add(strip(F, s * (half - m(0.6)), s * (half - m(0.25)), 0.03, white, true, 50, map.mps));
   const kerb = mat({map: tex.kerb, normalMap: tex.kerbRidges}), gravel = mat(tex.gravel);
+  kerb.colorNode = texture(tex.kerb).setUpdateMatrix(true).rgb.mul(transfer());
   for (const run of cornerRuns(F, map.mps)) {
     // the outside of the corner: the side away from the chord between the run's ends
     const i = run.length >> 1, mid = run[i].P, a = run[0].P, b = run.at(-1).P;
@@ -252,7 +263,11 @@ export function buildCircuit(world, {pts, map, tex, width, startKnown, ann, corn
       return runs.flatMap(r => wallAndFence(r.map(i => F[i]), r.map(i => o[i]), false));
     });
   };
-  barriers([-1, 1].map(s => F.map(() => s * (half + wall))));
+  const side = buildTrackside({F, runs: cornerRuns(F, map.mps), half, wall, m, armco: ann.preset?.runoff === 'armco'});
+  for (const o of side.meshes) world.add(o);
+  const barrierOffs = [-1, 1].map(s => F.map(() => s * (half + wall)));
+  barriers(barrierOffs);
+  side.stanchions(world, barrierOffs);
 
   // --- sausage kerbs: rows of raised yellow humps at the chicane apexes they guard ---
   const humps = F.map((f, i) => [f, i]).filter(([, i]) => ann.kerb[i] === 'sausage');
@@ -292,12 +307,10 @@ export function buildCircuit(world, {pts, map, tex, width, startKnown, ann, corn
   const coneGeo = conifer(m), leafGeo = broadleaf(m);
   const N = 1500, mtx = new THREE.Matrix4();
   const trunks = new THREE.InstancedMesh(trunkGeo, new THREE.MeshStandardMaterial({color: 0x4a3a2a, roughness: 1}), N);
-  const crownMat = new THREE.MeshStandardMaterial({map: tex.foliage, alphaTest: 0.5, alphaToCoverage: true, side: THREE.DoubleSide,
+  const crownMat = new THREE.MeshStandardNodeMaterial({map: tex.foliage, alphaTest: 0.5, alphaToCoverage: true, side: THREE.DoubleSide,
                                                    roughness: 0.8, vertexColors: true});
   // a card's back face keeps the crown's outward normal: three flips it for back faces, which lit half the leaves from inside
-  crownMat.onBeforeCompile = sh => {
-    sh.fragmentShader = sh.fragmentShader.replace('#include <normal_fragment_begin>', '#include <normal_fragment_begin>\nnormal *= faceDirection;');
-  };
+  crownMat.normalNode = normalViewGeometry;
   const cones = new THREE.InstancedMesh(coneGeo, crownMat, N), leaves = new THREE.InstancedMesh(leafGeo, crownMat, N);
   // Layer 1: left out of the motion-vector and ambient-occlusion passes, which draw with one override material and no
   // alpha cut-out, so every card came out a solid square there (dark AO boxes, smeared blur round the crowns)
@@ -377,7 +390,7 @@ export function buildCircuit(world, {pts, map, tex, width, startKnown, ann, corn
   let laneMeshes = [], laneMat, laneLine;
 
   return {
-    trackMat, wettable, surface, groundAt, pts, half,
+    trackMat, wettable, surface, groundAt, pts, half, night: side.night,
     lights: n => start?.userData.lights(n),  // the start gantry's red lamps lit, 0-5
     // Pit lane (map points of its centre line, entry road to exit road): a strip on the ground beside the track,
     // replacing any earlier one, with a line along each edge. The barrier on its side moves in to become the pit wall
@@ -423,12 +436,14 @@ export function buildCircuit(world, {pts, map, tex, width, startKnown, ann, corn
         const l0 = latOf(a), l1 = latOf(b);
         for (let j = 0; j <= steps; j++) lat[(a.i + j) % n] = l0 + (l1 - l0) * (steps ? j / steps : 1);
       });
-      barriers([-1, 1].map(side => F.map((_, i) => {
+      const offs = [-1, 1].map(side => F.map((_, i) => {
         const l = lat[i], line = side * (half + wall);
         if (l === null || Math.sign(l) !== side) return line;
         const pitWall = Math.abs(l) - laneHalf - m(1);
         return pitWall < half + m(1) ? null : side * Math.min(half + wall, pitWall);
-      })));
+      }));
+      barriers(offs);
+      side.stanchions(world, offs);
       const sheds = bays.map(b => b.P.clone().addScaledVector(b.out, m(12)));  // the middle of each garage
       fell((x, z) => !lp.some(q => (q.x - x) ** 2 + (q.z - z) ** 2 < (laneHalf + m(6)) ** 2)
                      && !sheds.some(q => (q.x - x) ** 2 + (q.z - z) ** 2 < m(14) ** 2));
@@ -436,7 +451,7 @@ export function buildCircuit(world, {pts, map, tex, width, startKnown, ann, corn
     // satellite ground: texture, uv = M (scene x, z, 1) over the terrain, keep(x, z): whether a tree there stands on
     // vegetation in the image (the others go), mean: the image's mean colour, for the land beyond it
     satellite(texture, M, keep, mean) {
-      grass.userData.sat.value?.dispose();  // the coarse first image, when the sharp one replaces it
+      if (grass.userData.sat.value !== BLANK) grass.userData.sat.value.dispose();  // the coarse first image, when the sharp one replaces it
       grass.userData.sat.value = texture;
       grass.userData.satMean.value.copy(mean);
       grass.userData.satM.value.copy(M);
@@ -447,8 +462,9 @@ export function buildCircuit(world, {pts, map, tex, width, startKnown, ann, corn
     inTunnel: v => !!tunnelPts?.some(q => (q.x - v.x) ** 2 + (q.z - v.z) ** 2 < (half + m(2)) ** 2 && v.y < q.y + m(6.5)),
     // free every geometry and material this circuit created (textures are shared and kept)
     dispose() {
-      grass.userData.sat.value?.dispose();  // the satellite image is this circuit's own
+      if (grass.userData.sat.value !== BLANK) grass.userData.sat.value.dispose();  // the satellite image is this circuit's own
       for (const mt of start?.userData.mats ?? []) mt.dispose();
+      side.dispose(world);
       for (const o of owned) {
         world.remove(o);
         o.traverse?.(x => {

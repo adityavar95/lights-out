@@ -1,5 +1,7 @@
 // Procedural F1 cars in real metres (+x forward, y up, wheels on y = 0), shaped after each era's regulations.
 import * as THREE from 'three';
+import {Fn, uniform, texture, uv, vec3, vec4, float, fract as nFract, floor, sin, dot, mix, smoothstep as nSmooth, fwidth, abs, max, length, normalize, mod,
+        positionGeometry, normalViewGeometry} from 'three/tsl';
 import {mergeGeometries} from 'three/addons/utils/BufferGeometryUtils.js';
 import {buildRB22, rb22Ready, inkFor} from './rb22.js';
 import {helmetGeometry, helmetMaterial, GEAR, VISOR} from './driver.js';
@@ -131,58 +133,70 @@ function liveryFrame(box, toCar = new THREE.Matrix4()) {
   return new THREE.Matrix4().makeScale(1 / s.x, 1 / s.y, 1 / w).multiply(new THREE.Matrix4().makeTranslation(-box.min.x, -box.min.y, 0)).multiply(toCar);
 }
 
+// 2x2 twill: each tow passes over two and under two, shifted one per row, which gives carbon its diagonal stair-steps. The
+// tow on top is resin-rich and glossier (roughness 0.22), the one going under sits in shadow and scatters more (0.45), and
+// the clear resin over the weave stays smooth, so the clearcoat lobe keeps its sharp highlight above the weave's anisotropic one.
+function twillCarbon() {
+  const m = new THREE.MeshPhysicalNodeMaterial({color: 0x16171b, clearcoat: 0.8, clearcoatRoughness: 0.08, normalMap: carbonNormal, anisotropy: 0.65, anisotropyMap: carbonDir});
+  const p = uv().mul(uniform(carbonNormal.repeat)).mul(8), cell = floor(p);
+  const over = mod(cell.x.add(cell.y), 4).lessThan(2);
+  m.roughnessNode = over.select(float(0.22), float(0.45));
+  m.colorNode = over.select(vec3(0.0085, 0.009, 0.011), vec3(0.005, 0.0052, 0.0062));
+  return m;
+}
+
 // liv: livery(), painted in livery space (userData.toCar: mesh-local -> livery space, set by the car's builder). A map's
 // alpha marks what's painted on top (the RB22's race number) in its own colour.
 function paintMat(color, year, bare = year >= 2022, liv = livery(null, color, year)) {
   const satin = year >= 2016;
-  const m = new THREE.MeshPhysicalMaterial(satin ? {color, metalness: 0.1, roughness: 0.5, clearcoat: 0.5, clearcoatRoughness: 0.3}
-                                                 : {color, metalness: 0.45, roughness: 0.38, clearcoat: 1, clearcoatRoughness: 0.03});
-  const u = m.userData = {livery: true, toCar: {value: new THREE.Matrix4()}, uBase: {value: liv.base}, uSecond: {value: liv.second},
-                          uAccent: {value: liv.accent}, uNoseCol: {value: liv.nose}, uSplit: {value: liv.split}, uStripe: {value: liv.stripe},
-                          uNoseAt: {value: liv.noseAt}};
-  m.onBeforeCompile = s => {
-    s.uniforms.uBare = {value: bare ? 0.24 : -1};
-    Object.assign(s.uniforms, {uToCar: u.toCar, uBase: u.uBase, uSecond: u.uSecond, uAccent: u.uAccent, uNoseCol: u.uNoseCol,
-                               uSplit: u.uSplit, uStripe: u.uStripe, uNoseAt: u.uNoseAt});
-    s.vertexShader = 'varying vec3 vObj;\n' + s.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\nvObj = position;');
-    s.fragmentShader = `uniform float uBare, uNoseAt;\nuniform vec3 uBase, uSecond, uAccent, uNoseCol;\nuniform vec4 uSplit, uStripe;
-      uniform mat4 uToCar;\nvarying vec3 vObj;\n` + s.fragmentShader
-      .replace('#include <map_fragment>', `
-        vec3 lp = (uToCar * vec4(vObj, 1.0)).xyz;
-        float aa = fwidth(lp.x) + fwidth(lp.y);  // a pixel in livery space: edges anti-aliased, not stair-stepped
-        vec3 liv = mix(uBase, uSecond, max(smoothstep(aa, -aa, lp.y - uSplit.x - uSplit.y * lp.x), smoothstep(aa, -aa, lp.x - uSplit.z)));
-        float band = smoothstep(aa, -aa, abs(lp.y - uStripe.x - uStripe.y * lp.x) - uStripe.z)
-                   * smoothstep(-aa, aa, lp.x - uStripe.w) * smoothstep(aa, -aa, lp.x - uStripe.w - 0.5);
-        liv = mix(mix(liv, uAccent, band), uNoseCol, smoothstep(-aa, aa, lp.x - uNoseAt));
-        #ifdef USE_MAP
-          vec4 painted = texture2D(map, vMapUv);
-          liv = mix(liv, painted.rgb, painted.a);
-        #endif
-        diffuseColor.rgb = liv;
-        float bare = 1.0 - smoothstep(uBare - 0.004, uBare + 0.004, vObj.y);
-        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.008, 0.0085, 0.01), bare);`)
-      .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = mix(roughnessFactor, 0.32, bare);')
-      .replace('#include <metalnessmap_fragment>', '#include <metalnessmap_fragment>\nmetalnessFactor = mix(metalnessFactor, 0.0, bare);')
-      .replace('#include <normal_fragment_maps>', satin ? '#include <normal_fragment_maps>' : `#include <normal_fragment_maps>
-      {
-        vec3 f = vObj * 500.0;  // 2 mm flake cells (model space is metres)
-        vec3 c = floor(f);
-        vec3 tilt = fract(sin(vec3(dot(c, vec3(127.1, 311.7, 74.7)), dot(c, vec3(269.5, 183.3, 246.1)),
-                                   dot(c, vec3(113.5, 271.9, 124.6)))) * 43758.5453) - 0.5;
-        normal = normalize(normal + tilt * 0.1 * (1.0 - smoothstep(0.3, 1.0, length(fwidth(f)))));  // a glint, not sandpaper
-      }`);
-  };
-  m.customProgramCacheKey = () => `paint${+satin}`;  // uBare is a uniform: bare and painted cars share a program
+  const m = new THREE.MeshPhysicalNodeMaterial({color, metalness: satin ? 0.1 : 0.45, roughness: satin ? 0.5 : 0.38, clearcoat: 1, clearcoatRoughness: 0.03, ior: 1.5});
+  const u = m.userData = {livery: true, toCar: uniform(new THREE.Matrix4()), uBase: uniform(liv.base), uSecond: uniform(liv.second),
+                          uAccent: uniform(liv.accent), uNoseCol: uniform(liv.nose), uSplit: uniform(liv.split), uStripe: uniform(liv.stripe),
+                          uNoseAt: uniform(liv.noseAt)};
+  const uBare = float(bare ? 0.24 : -1);
+  const obj = positionGeometry;
+  const bareMask = nSmooth(uBare.add(0.004), uBare.sub(0.004), obj.y);  // bare carbon below the floor line
+  // a Fn with the builder's material, because the RB22 assigns its number map after creating the material
+  m.colorNode = Fn(({material}) => {
+    const lp = u.toCar.mul(vec4(obj, 1)).xyz;
+    const aa = fwidth(lp.x).add(fwidth(lp.y));  // a pixel in livery space: edges anti-aliased, not stair-stepped
+    const live = mix(u.uBase, u.uSecond, max(nSmooth(aa, aa.negate(), lp.y.sub(u.uSplit.x).sub(u.uSplit.y.mul(lp.x))), nSmooth(aa, aa.negate(), lp.x.sub(u.uSplit.z))));
+    const band = nSmooth(aa, aa.negate(), abs(lp.y.sub(u.uStripe.x).sub(u.uStripe.y.mul(lp.x))).sub(u.uStripe.z))
+      .mul(nSmooth(aa.negate(), aa, lp.x.sub(u.uStripe.w))).mul(nSmooth(aa, aa.negate(), lp.x.sub(u.uStripe.w).sub(0.5)));
+    let c = mix(mix(live, u.uAccent, band), u.uNoseCol, nSmooth(aa.negate(), aa, lp.x.sub(u.uNoseAt)));
+    if (material.map) {
+      const painted = texture(material.map);
+      c = mix(c, painted.rgb, painted.a);
+    }
+    return mix(c, vec3(0.008, 0.0085, 0.01), bareMask);
+  })();
+  m.roughnessNode = mix(float(satin ? 0.5 : 0.38), 0.32, bareMask);
+  m.metalnessNode = mix(float(satin ? 0.1 : 0.45), 0, bareMask);
+  if (!satin) {  // the flake lobe: 2 mm cells (model space is metres), each tilting the normal a little
+    const f = obj.mul(500), c = floor(f);
+    const tilt = nFract(sin(vec3(dot(c, vec3(127.1, 311.7, 74.7)), dot(c, vec3(269.5, 183.3, 246.1)), dot(c, vec3(113.5, 271.9, 124.6)))).mul(43758.5453)).sub(0.5);
+    // a glint, not sandpaper: it fades out once the cells are under a pixel
+    m.normalNode = normalize(normalViewGeometry.add(tilt.mul(0.1).mul(nSmooth(1, 0.3, length(fwidth(f))))));
+  }
   return m;
 }
 
-// carbon discs glow from ~700 °C: emissive black-body orange, driven per car by scene3d.js (emissiveIntensity)
-const discMat = () => Object.assign(MAT.disc.clone(), {emissive: new THREE.Color(0xff4a12), emissiveIntensity: 0});
+// Carbon discs glow from ~700 C. userData.brakeTemp 0..1 is driven per car by scene3d.js: nothing cold, then dark red, then
+// an HDR orange-yellow that the bloom picks up. base: the material to copy maps and PBR values from.
+export function brakeMat(base) {
+  const m = new THREE.MeshPhysicalNodeMaterial();
+  // not copy(): a node material's copy leaves the PBR values behind, as it isn't a MeshStandardMaterial
+  for (const k of ['name', 'color', 'roughness', 'metalness', 'map', 'normalMap', 'normalScale', 'roughnessMap', 'metalnessMap', 'anisotropy', 'anisotropyMap']) if (base[k] !== undefined) m[k] = base[k];
+  const t = uniform(0);
+  m.userData = {brakeTemp: t};
+  m.emissiveNode = mix(vec3(0.25, 0.01, 0), vec3(5.5, 1.1, 0.12), t.mul(t)).mul(nSmooth(0.02, 0.2, t));
+  return m;
+}
+const discMat = () => brakeMat(MAT.disc);
 
 const MAT = {
   // clear resin over the weave: the weave bumps the base normal, the clearcoat stays smooth (another two-lobe material)
-  carbon: new THREE.MeshPhysicalMaterial({color: 0x16171b, roughness: 0.32, clearcoat: 0.8, clearcoatRoughness: 0.08,
-                                          normalMap: carbonNormal, anisotropy: 0.7, anisotropyMap: carbonDir}),
+  carbon: twillCarbon(),
   disc: new THREE.MeshPhysicalMaterial({color: 0x2b2b2e, roughness: 0.5, metalness: 0.4, normalMap: discNormal,
                                         anisotropy: 0.8, anisotropyMap: discDir}),
   tyre: new THREE.MeshStandardMaterial({color: 0x1d1d1f, roughness: 0.82}),

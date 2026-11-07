@@ -134,7 +134,8 @@ export function renderStrategyLab(root, laps, results, pits, year, why, round) {
     const rows = paceRanking(M).filter(r => info[r.id]), hasStops = pits.length > 0, fuel = fuelPerLap(M.n);
     const intro = el('p', {class: 'muted small'}, 'Clean laps only: no lap 1, in-laps, out-laps or SC/VSC laps, and none 2 s off the driver\'s stint median. The median is not adjusted for fuel or traffic, so compare drivers who ran the whole race.');
     if (!rows.length) return el('div', {class: 'card lab'}, el('h2', {}, 'Race pace and tyre wear'), intro, el('p', {class: 'empty'}, 'Nobody has 5 clean laps in this race.'));
-    const k = hasStops ? Math.max(...rows.map(r => r.stints.length)) : 0;
+    const stints = r => r.stints.filter(s => s.slope !== null || s.n > 0);  // a red flag's tyre change makes a stint with no laps to fit
+    const k = hasStops ? Math.max(...rows.map(r => stints(r).length)) : 0;
     const head = ['#', 'Driver', 'Median lap', 'Gap', 'Clean laps', ...Array.from({length: k}, (_, i) => `Stint ${i + 1}`)];
     return el('div', {class: 'card lab pace'}, el('h2', {}, 'Race pace and tyre wear'), intro,
       el('p', {class: 'muted small'}, hasStops
@@ -143,7 +144,7 @@ export function renderStrategyLab(root, laps, results, pits, year, why, round) {
       el('p', {class: 'muted small'}, year < 2023 ? 'No tyre compounds: OpenF1\'s records of them start in 2023.'
         : 'Tyre compounds aren\'t shown: here they only come with a full GPS replay, about 30 requests to build, too many to spend on a table.'),
       el('div', {class: 'ledgerbar'}, csvButton(`pace_${year}_${round}`, head, () => rows.map((r, i) => [i + 1, label(r.id), +r.median.toFixed(3), i ? +(r.median - rows[0].median).toFixed(3) : '', r.n,
-        ...Array.from({length: k}, (_, j) => stintText(r.stints[j]))]))),
+        ...Array.from({length: k}, (_, j) => stintText(stints(r)[j]))]))),
       el('div', {class: 'tablewrap'}, el('table', {class: 'data'},
         el('thead', {}, el('tr', {}, head.map(th))),
         el('tbody', {}, rows.map((r, i) => el('tr', {},
@@ -152,7 +153,7 @@ export function renderStrategyLab(root, laps, results, pits, year, why, round) {
           el('td', {class: 'num'}, lapTime(r.median)),
           el('td', {class: 'num'}, i ? `+${(r.median - rows[0].median).toFixed(3)}` : ''),
           el('td', {class: 'num'}, r.n),
-          ...Array.from({length: k}, (_, j) => el('td', {class: 'stintcell'}, stintCell(r.stints[j])))))))));
+          ...Array.from({length: k}, (_, j) => el('td', {class: 'stintcell'}, stintCell(stints(r)[j])))))))));
   }
 
   const stintText = s => (!s ? '' : `L${s.from}-${s.to} ${s.slope === null ? `${s.n} clean` : `${s.slope.toFixed(3)} s/lap ±${s.se.toFixed(3)}, est. ${s.corrected.toFixed(3)}`}`);

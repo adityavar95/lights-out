@@ -2,28 +2,37 @@
 import * as THREE from 'three';
 import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
 import {CSS2DRenderer, CSS2DObject} from 'three/addons/renderers/CSS2DRenderer.js';
-import {Sky} from 'three/addons/objects/Sky.js';
-import {CSM} from 'three/addons/csm/CSM.js';
-import {RGBELoader} from 'three/addons/loaders/RGBELoader.js';
+import {SkyMesh} from 'three/addons/objects/SkyMesh.js';
+import {CSMShadowNode} from 'three/addons/csm/CSMShadowNode.js';
+import {HDRLoader} from 'three/addons/loaders/HDRLoader.js';
 import {buildCar} from './cars3d.js';
+import {brakeStep, brakeGlow} from './telemetry.js';
 import {loadRB22, rb22Ready, STEERING_RATIO} from './rb22.js';
-import {makeMirror} from './mirror.js';
-import {createPost} from './post.js';
+import {makeMirror, renderMirrors, warmFor, warmMirrors} from './mirror.js';
+import {createPost, TIERS} from './post.js';
 import {createVfx, haze} from './vfx.js';
 import {textures} from './textures3d.js';
 import {buildCircuit} from './circuit3d.js';
 import {createCrews} from './pit3d.js';
 import {covered} from './util.js';
-import {brakeStep, brakeGlow} from './telemetry.js';
+import {setupLoadStage, stage, stageDone, progressOf, announce} from './loadstage.js';
 
 const SIZE = 1000;                  // the circuit is scaled to this many scene units across
 const UP = new THREE.Vector3(0, 1, 0);
 const SUN = new THREE.Vector3(0.45, 0.62, 0.3).normalize();  // direction towards the sun; re-aimed at the HDRI's sun
-// photographed HDR sky (CC0, Poly Haven); the procedural sky stays if it can't be fetched
-// 4k on every tier (21 MB, cached by the browser after the first visit): it's one download and decode, not a per-frame cost
-const HDRI = 'https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/4k/kloofendal_48d_partly_cloudy_puresky_4k.hdr';
+// photographed HDR sky (CC0, Poly Haven), 4k on every tier, from scripts/fetch_assets.py; the procedural sky stays if the file is missing
+const hdri = name => `/static/assets/hdri/${name}_4k.hdr`;
+// L cycles them. sun: direct light, env: image-based light, hemi: fill; lamps: the floodlights' glow
+const SKIES = [
+  {name: 'Midday', url: hdri('kloofendal_48d_partly_cloudy_puresky'), sun: 3.2, color: 0xfff8ed, env: 0.7, hemi: 0.15, lamps: 0},
+  {name: 'Golden hour', url: hdri('belfast_sunset_puresky'), sun: 2.6, color: 0xffc896, env: 0.8, hemi: 0.1, lamps: 0.5},
+  {name: 'Overcast', url: hdri('kloofendal_overcast_puresky'), sun: 0.7, color: 0xe9eef5, env: 1, hemi: 0.2, lamps: 0},
+  {name: 'Night', url: hdri('rogland_clear_night'), sun: 0.4, color: 0xbcd0ff, env: 1.8, hemi: 0.12, lamps: 8},
+];
 
-let container, renderer, labels, scene, camera, controls, world, csm, post, vfx, hemi, cars = {}, map = null, tex = null;
+// One renderer for the race and the showroom, each with its own CanvasTarget: two WebGPU devices couldn't share pipelines,
+// textures or the PMREM environment, and every shader the showroom needs would compile twice.
+let container, renderer, mainSurface, pmrem, labels, scene, camera, controls, world, sun, csm, post, vfx, hemi, deck = null, tierAt = 0, cars = {}, map = null, tex = null;
 let carsToken = 0, mode = 'overview', chased = null, glide = 1, trackMat = null, simRate = 0, lastUpdate = 0, wettable = [], circuit = null, fly = null;
 // the circuit before this one, disposed after the new one has drawn: its materials hold the compiled shaders the new
 // one reuses (disposing first deleted them, and every race switch recompiled them all: ~0.3 s)
@@ -38,100 +47,138 @@ function pixelRatio(w = innerWidth, h = innerHeight) {
   return high && supersample ? Math.max(dpr, Math.min(2, Math.sqrt(3840 * 2160 / (w * h)))) : dpr;
 }
 const drawnView = new THREE.Matrix4(), drawnProj = new THREE.Matrix4();
-const sky0 = {env: 0.35, hemi: 0.5, fog: new THREE.Color(0xc4d3e2)};  // clear-sky lighting, for the weather to dim
+const sky0 = {sun: 3.2, env: 0.35, hemi: 0.5, lamps: 0, fog: new THREE.Color(0xc4d3e2)};
+let skyAt = 0, skyToken = 0, weather = null;  // clear-sky lighting, for the weather to dim
 const RAIN_GREY = new THREE.Color(0.3, 0.32, 0.35);
 const RIGGED = new Set(['onboard', 'tcam', 'heli', 'follow']);  // camera placed by code each frame, so no orbit controls
 // depth of field: lens f-number per camera, focused on the camera's target (the car, or 15 m ahead of it on board); the
 // overview and the helicopter have none
 const APERTURE = {chase: 2, tcam: 2.8, onboard: 2.8};
-const parts = {halo: true, body: true};
+// the wheel on a camera that follows a car: a factor on its range (chase, TV chase) or its lens (cockpit, T-cam, helicopter), eased
+const ZOOM = {follow: [0.6, 4], chase: [0.25, 4], onboard: [0.5, 1.2], tcam: [0.5, 1.2], heli: [0.35, 1.6]};
+let zoomAim = 1, zoomNow = 1, lastCars = null;
+const parts = {halo: true, body: true, wheel: true};
+let mirrorsWarm = false;
 const crews = createCrews();  // pit crews, for cars that stop in the pit lane
 
 const rnd = (a, b) => a + Math.random() * (b - a);
 
+// Quality tier from the GPU's name. WebGPU only offers that asynchronously and vaguely, and init3d has to answer now
+// (replay.js shows its "no 3D" message from a throw), so a throwaway WebGL2 context asks, then gives its slot back.
+function probeGpu() {
+  const gl = document.createElement('canvas').getContext('webgl2');
+  if (!gl && !navigator.gpu) throw new Error('neither WebGPU nor WebGL2');
+  const info = gl?.getExtension('WEBGL_debug_renderer_info'), gpu = info ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL) : '';
+  gl?.getExtension('WEBGL_lose_context')?.loseContext();
+  // software rendering (hardware acceleration off) can't carry supersampling or the sharper satellite ground
+  return !/swiftshader|llvmpipe|software|basic render/i.test(gpu);
+}
+
+// Resolves when the GPU device exists; the showroom and anything else needing the renderer waits on it
+export let ready = null;
+export const shared = () => ({renderer, pmrem, scene});
+// the showroom's frame: called from the master loop while open; null closes it
+export const setDeck = d => { deck = d; };
+// three's compileAsync puts back the target it was called with after every item it builds, so a warm-up (warmCockpit) leaves its
+// target and MRT on the renderer between frames: anything drawn outside the warm-up clears them first
+const clearWarmTarget = () => { renderer.setRenderTarget(null); renderer.setMRT(null); };
+
 export function init3d(el) {
   container = el;
-  // no canvas MSAA: the post-processing target is multisampled instead; high-performance asks for the discrete GPU on
-  // dual-GPU laptops (Windows can still override it per browser in Settings > Display > Graphics)
-  renderer = new THREE.WebGLRenderer({antialias: false, logarithmicDepthBuffer: true, powerPreference: 'high-performance', stencil: false});  // throws without WebGL
-  // A real GPU (not SwiftShader / llvmpipe / Microsoft Basic Render, i.e. hardware acceleration off) gets the high tier:
-  // the frame supersampled to 2x, 4096² shadow cascades, the sharper satellite ground. It used to also need 8x MSAA, which
-  // nothing uses any more (4x on every tier, below): GPUs reporting 4 samples silently lost all of it.
-  const gl = renderer.getContext(), info = gl.getExtension('WEBGL_debug_renderer_info');
-  const gpu = info ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL) : '';
-  high = !/swiftshader|llvmpipe|software|basic render/i.test(gpu);
-  renderer.setPixelRatio(pixelRatio());
-  // Khronos PBR Neutral: keeps livery hues and saturation (ACES pushed kerb red to neon, blues to purple); x - 0.04 at mid-grey
-  renderer.toneMapping = THREE.NeutralToneMapping;
-  renderer.toneMappingExposure = 1.0;
+  high = probeGpu();
+  // Reversed depth instead of the old logarithmic buffer: same range from a car's wing to the far hills, without writing
+  // frag depth from every fragment, which disabled early-z across the whole scene.
+  renderer = new THREE.WebGPURenderer({antialias: true, powerPreference: 'high-performance', forceWebGL: false, reversedDepthBuffer: true});
+  const canvas = document.createElement('canvas');
+  canvas.style.cssText = 'display:block;width:100%;height:100%';
+  mainSurface = new THREE.CanvasTarget(canvas);
+  mainSurface.setPixelRatio(pixelRatio());
+  renderer.setCanvasTarget(mainSurface);
+  renderer.toneMapping = THREE.AgXToneMapping;
+  renderer.toneMappingExposure = 1.05;
   renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.shadowMap.type = THREE.PCFShadowMap;
   labels = new CSS2DRenderer();
   labels.domElement.className = 'labels3d';
-  container.append(renderer.domElement, labels.domElement);
-  // three brings the context back with a black ground and sky, so start afresh; not under the F1 TV viewer, whose video would stop: the loop waits for it to close
-  renderer.domElement.addEventListener('webglcontextrestored', () => { contextRestored = true; });
+  container.append(canvas, labels.domElement);
+  setupLoadStage(container);
+  // a lost device takes every resource with it, so start afresh; not under the F1 TV viewer, whose video would stop: the loop waits for it to close
+  renderer.onDeviceLost = info => { if (info?.reason === 'destroyed') return; console.warn('3D: GPU device lost', info?.message); contextRestored = true; };  // 'destroyed': just this page unloading
   scene = new THREE.Scene();
   // every render() and the label pass would walk all ~2,000 objects again: the loop updates the matrices once per frame
   scene.matrixWorldAutoUpdate = false;
   tex = textures(high);
   scene.fog = new THREE.Fog(0xc4d3e2, SIZE * 1.3, SIZE * 4);
-  const sky = new Sky(), u = sky.material.uniforms, envScene = new THREE.Scene(), pmrem = new THREE.PMREMGenerator(renderer);
-  u.turbidity.value = 4;
-  u.rayleigh.value = 1.3;
-  u.mieCoefficient.value = 0.004;
-  u.mieDirectionalG.value = 0.8;
-  u.sunPosition.value.copy(SUN);
-  sky.scale.setScalar(50);
-  envScene.add(sky);
-  scene.environment = pmrem.fromScene(envScene).texture;  // the same sky in paint reflections
-  scene.environmentIntensity = 0.35;  // the raw sky is HDR-bright and washes colours out
-  sky.scale.setScalar(SIZE * 20);
-  scene.add(sky);
   camera = new THREE.PerspectiveCamera(42, 1, 0.05, 30000);
   camera.layers.enable(1);  // layer 1: effects and contact shadows (drawn, but left out of the motion-vector pass)
+  camera.layers.enable(2);  // layer 2: what only this camera's pass can draw (vfx.js sparks)
   controls = new OrbitControls(camera, labels.domElement);  // the label layer sits on top, so it gets the mouse
   controls.enableDamping = true;
   controls.maxPolarAngle = Math.PI * 0.49;  // stay above the ground
   controls.maxDistance = SIZE * 1.6;        // the whole circuit, well inside the fog; minDistance is set per circuit
   controls.zoomToCursor = true;             // the scroll wheel zooms towards what's under the pointer
   controls.screenSpacePanning = false;      // right-drag pans over the ground, not up into the sky
+  // Capture, ahead of OrbitControls: Free Orbit keeps its zoom to the cursor, which would pull a followed car off centre.
+  // Without this the rigged cameras ignored the wheel and it scrolled the page behind the stage.
+  labels.domElement.addEventListener('wheel', e => {
+    const r = ZOOM[mode];
+    if (!r) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    zoomAim = THREE.MathUtils.clamp(zoomAim * Math.exp(e.deltaY * (e.deltaMode ? 33 : 1) * 0.0012), r[0], r[1]);
+  }, {capture: true, passive: false});
   hemi = new THREE.HemisphereLight(0xdbe9ff, 0x5d7a45, 0.5);
   scene.add(hemi);
-  // Cascaded shadow maps: the view frustum is cut at near * (far / near)^(i / 4) = ~0.7, 10, 140, 2000 units, each slice with
-  // its own 2048² (high tier 4096²) sun shadow map, so texel size grows with distance like screen pixels do (centimetres on
-  // the car in front of a chase camera, metres across the circuit); fade cross-fades neighbouring cascades so the seams don't show.
-  csm = new CSM({camera, parent: scene, cascades: 4, mode: 'logarithmic', maxFar: SIZE * 2, shadowMapSize: high ? 4096 : 2048,
-                 lightDirection: SUN.clone().negate(), lightIntensity: 2.6, lightFar: SIZE * 6, lightMargin: SIZE * 0.5});
+  // Cascaded shadow maps: 4 slices of the view frustum (practical split: between uniform and logarithmic), each with its
+  // own sun shadow map, so texels grow with distance like screen pixels do; fade cross-fades the seams. CSMShadowNode lives
+  // on the light rather than patching every material, which is what the old csmSync walked the scene for.
+  sun = new THREE.DirectionalLight(SKIES[0].color, sky0.sun);
+  sun.castShadow = true;
+  sun.shadow.mapSize.setScalar(2048);
+  // Bias is a fraction of the shadow camera's depth range: over 2000 units this is 0.04 of one (CSMShadowNode scales it per
+  // cascade). A car stands about 0.5 units tall here, so at the 0.00015 this started from no car cast a shadow at all.
+  sun.shadow.bias = -0.00002;
+  sun.shadow.normalBias = 0.02;
+  Object.assign(sun.shadow.camera, {near: 1, far: SIZE * 2});
+  sun.shadow.camera.layers.enable(1);  // layer 1 also holds the alpha cut-out tree crowns and fences (circuit3d.js), which do cast shadows
+  aimSun();
+  scene.add(sun, sun.target);
+  csm = new CSMShadowNode(sun, {cascades: 4, maxFar: 2200, mode: 'practical', lightMargin: 180});
   csm.fade = true;
-  // layer 1 also holds the alpha cut-out tree crowns and fences (circuit3d.js), which do cast shadows
-  for (const l of csm.lights) { l.color.set(0xfff1dc); l.shadow.camera.layers.enable(1); }
+  sun.shadow.shadowNode = csm;
   world = new THREE.Group();
   scene.add(world);
-  // 4x MSAA on every tier: the high tier already renders up to 2x supersampled, and 8x on top of that doubled the
-  // composer's two MSAA half-float targets (~0.8 GB of GPU memory at a 4K frame) for no visible edge
   post = createPost(renderer, scene, camera, 4);
   vfx = createVfx(scene);
-  loadSky(pmrem, sky);
   const fit = () => {
     const w = container.clientWidth, h = container.clientHeight;
     if (!w || !h) return;  // hidden: zero-size render targets would only warn
-    renderer.setPixelRatio(pixelRatio(w, h));  // it changes with browser zoom or another monitor
-    renderer.setSize(w, h);
+    const pr = pixelRatio(w, h);  // it changes with browser zoom or another monitor
+    mainSurface.setPixelRatio(pr);
+    mainSurface.setSize(w, h, false);
     labels.setSize(w, h);
-    post.setSize(w, h);
+    post.setSize(w, h, pr);
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
-    csm.updateFrustums();
+    if (csm.camera) csm.updateFrustums();  // null until the first frame builds it
     resized = true;  // setSize cleared the canvas
   };
   new ResizeObserver(fit).observe(container);
   // a monitor with another DPR changes no CSS size, so the observer misses it
   const watchDpr = () => matchMedia(`(resolution: ${devicePixelRatio}dppx)`).addEventListener('change', () => { fit(); watchDpr(); }, {once: true});
   watchDpr();
-  const clock = new THREE.Clock();
-  renderer.setAnimationLoop(() => {
-    const dt = Math.min(clock.getDelta(), 0.1);
+  refit = fit;
+  const timer = new THREE.Timer();
+  timer.connect(document);  // no huge first delta after the tab was hidden
+  const frame = time => {
+    timer.update(time);
+    const dt = Math.min(timer.getDelta(), 0.1);
+    clearWarmTarget();
+    if (deck) {  // the showroom draws whatever the race view is doing: its own panel may be covering that
+      renderer.setCanvasTarget(deck.surface);
+      deck.draw(dt);
+      renderer.setCanvasTarget(mainSurface);  // left on the main canvas between frames, so it hears window resizes
+    }
     if (contextRestored && !covered()) { contextRestored = false; location.reload(); }
     // tab hidden, no size yet, or under the F1 TV viewer (it drew ~1,800 calls a frame there, beside 4K video decoding)
     if (!container.offsetParent || !container.clientWidth || !container.clientHeight || covered()) return;
@@ -146,6 +193,7 @@ export function init3d(el) {
         fit();
       }
     }
+    if (lastCars && zoomNow !== zoomAim && performance.now() - lastUpdate > 100) updateCars(...lastCars);  // paused: nothing else moves the camera
     if (fly) {  // after a circuit switch: ease from the old view to the new overview over 1.5 s
       fly.t = Math.min(1, fly.t + dt / 1.5);
       const e = THREE.MathUtils.smootherstep(fly.t, 0, 1);
@@ -169,17 +217,63 @@ export function init3d(el) {
     resized = false;
     drawnView.copy(camera.matrixWorld);
     drawnProj.copy(camera.projectionMatrix);
-    csm.update();
-    for (const l of csm.lights) l.shadow.normalBias = (l.shadow.camera.right - l.shadow.camera.left) / csm.shadowMapSize;  // ~1 texel
-    vfx.update(dt, camera, SUN, renderer.domElement.height);
+    // normal bias ~1 texel per cascade: a fixed one left acne on the far cascades, whose texels are metres wide
+    for (const l of csm.lights) l.shadow.normalBias = Math.max(0.02, (l.shadow.camera.right - l.shadow.camera.left) / l.shadow.mapSize.x);
+    vfx.update(dt, camera, SUN, container.clientHeight);
     scene.updateMatrixWorld();
+    renderMirrors(renderer, scene, camera, on => { for (const l of csm.lights) l.shadow.autoUpdate = on; });
     const moving = performance.now() - lastUpdate < 200;  // the replay is still moving the cars
     post.focus(chased === null ? 0 : camera.position.distanceTo(controls.target), APERTURE[mode]);
     post.render(dt, 1 / Math.max(1, moving ? simRate : 1));  // a 10x replay blurs like real time, not 10x as long
     stale?.dispose();
     stale = null;
     labels.render(scene, camera);
+  };
+  ready = renderer.init().then(() => {
+    // the environment and background need a live device; PMREM is shared with the showroom
+    pmrem = new THREE.PMREMGenerator(renderer);
+    const sky = new SkyMesh(), envScene = new THREE.Scene();
+    sky.turbidity.value = 2.5;
+    sky.rayleigh.value = 1.2;
+    sky.mieCoefficient.value = 0.004;
+    sky.mieDirectionalG.value = 0.82;
+    sky.sunPosition.value.copy(SUN);
+    sky.scale.setScalar(50);
+    envScene.add(sky);
+    clearWarmTarget();
+    scene.environment = pmrem.fromScene(envScene).texture;  // the same sky in paint reflections
+    scene.environmentIntensity = 0.35;  // the raw sky is HDR-bright and washes colours out
+    sky.geometry.dispose();
+    sky.material.dispose();
+    // until the photographed sky lands, the fog's colour: drawn, the raw Preetham sky is so bright that its bloom whited out the whole view
+    scene.background = scene.fog.color.clone();
+    loadSky(SKIES[0]);
+    renderer.setAnimationLoop(frame);
+  }).catch(e => {
+    console.error('3D: no GPU device', e);
+    container.append(Object.assign(document.createElement('p'), {className: 'empty', textContent: '3D view needs WebGPU or WebGL2, which is turned off in this browser.'}));
   });
+}
+
+// Cycles the graphics tier (G key); returns its name. The graph rebuilds, so a stall of a frame or two is expected.
+export function nextTier() {
+  tierAt = (tierAt + 1) % TIERS.length;
+  post.setTier(TIERS[tierAt]);
+  supersample = TIERS[tierAt].ss;
+  refit?.();
+  return TIERS[tierAt].name;
+}
+
+// The direction the shadows and the sky agree on: a directional light points from its position to its target
+function aimSun() {
+  sun.position.copy(SUN).multiplyScalar(SIZE * 3);
+  sun.target.position.set(0, 0, 0);
+}
+
+// Tight cascades on a camera in the traffic (sharp shadows on the car in front), wide ones for a whole-circuit view
+function onCameraModeChanged(m) {
+  csm.maxFar = ['onboard', 'tcam', 'chase', 'follow'].includes(m) ? 550 : 2200;
+  if (csm.camera) csm.updateFrustums();
 }
 
 // Orbit target: over the circuit (panning stops at its edge) and, in the overview, on the ground, so panning over a
@@ -194,11 +288,23 @@ function keepInBounds() {
   camera.position.y = Math.max(camera.position.y, circuit.groundAt(camera.position.x, camera.position.z) + m(2));
 }
 
+// L: the next time of day. The old sky stays up until the new one has loaded.
+export function nextSky() {
+  skyAt = (skyAt + 1) % SKIES.length;
+  loadSky(SKIES[skyAt]);
+  return SKIES[skyAt].name;
+}
+
+export const graphicsTier = () => post.tier.name;
+
 // The HDR panorama becomes the background and, PMREM-prefiltered (a mip per roughness level), the image-based light for
 // diffuse ambient and reflections. The sun light is aimed at its brightest texel so shadows agree with the sky: texel
 // (x, y) with row 0 at the top is longitude 2 pi (u - 0.5), latitude pi (0.5 - v), as three samples equirect maps.
-function loadSky(pmrem, sky) {
-  new RGBELoader().load(HDRI, hdr => {
+function loadSky(preset) {
+  const token = ++skyToken;
+  stage('sky', `Sky: ${preset.name}`);
+  new HDRLoader().load(preset.url, hdr => {
+    if (token !== skyToken) { hdr.dispose(); return; }  // pressed L again meanwhile
     const {data, width: w, height: h} = hdr.image, half = THREE.DataUtils.fromHalfFloat;
     let best = 0, at = 0;
     for (let i = 0; i < w * h / 2; i += 2) {  // upper half: the sun is above the horizon
@@ -208,37 +314,36 @@ function loadSky(pmrem, sky) {
     const phi = ((at % w + 0.5) / w - 0.5) * 2 * Math.PI;
     const lat = Math.max((0.5 - (Math.floor(at / w) + 0.5) / h) * Math.PI, 0.25);  // >= 14 degrees: no endless shadows
     SUN.set(Math.cos(phi) * Math.cos(lat), Math.sin(lat), Math.sin(phi) * Math.cos(lat));
-    csm.lightDirection.copy(SUN).negate();
+    aimSun();
     // fog fades to the horizon's mean radiance (linear HDR; fog is mixed before tone mapping) so the ground meets the sky
     const fog = [0, 0, 0], row = Math.floor(h * 0.49) * w;
     for (let x = 0; x < w; x++) for (let c = 0; c < 3; c++) fog[c] += half(data[(row + x) * 4 + c]) / w;
     scene.fog.color.setRGB(...fog);
     hdr.mapping = THREE.EquirectangularReflectionMapping;
+    const oldEnv = scene.environment, oldBack = scene.background;
+    clearWarmTarget();
     scene.environment = pmrem.fromEquirectangular(hdr).texture;
-    scene.environmentIntensity = sky0.env = 0.7;
+    scene.environmentIntensity = sky0.env = preset.env;
     sky0.fog.copy(scene.fog.color);
     // the background as a GPU cube map (the size three picks itself), so the panorama's pixels (64 MB at 4k) can go:
     // kept as scene.background they stayed in the JS heap for the page's life
-    scene.background = new THREE.WebGLCubeRenderTarget(h / 2).fromEquirectangularTexture(renderer, hdr).texture;
+    scene.background = new THREE.CubeRenderTarget(h / 2).fromEquirectangularTexture(renderer, hdr).texture;
     hdr.dispose();
-    scene.remove(sky);
-    hemi.intensity = sky0.hemi = 0.15;  // the HDRI now supplies the ambient light
-  }, undefined, e => console.warn('3D: the 4K sky could not be loaded, so the procedural sky stays', e));
-}
-
-// Every lit material needs CSM's shader patch: unpatched, the cascade lights don't light it at all. A material's own
-// onBeforeCompile (paint, asphalt) runs after CSM's.
-function csmSync() {
-  const live = new Set();
-  scene.traverse(o => { if (o.material?.isMeshStandardMaterial) live.add(o.material); });
-  for (const mat of csm.shaders.keys()) if (!live.has(mat)) csm.shaders.delete(mat);
-  for (const mat of live) {
-    if (csm.shaders.has(mat)) continue;
-    const own = Object.hasOwn(mat, 'onBeforeCompile') && mat.onBeforeCompile;
-    csm.setupMaterial(mat);
-    const patch = mat.onBeforeCompile;
-    if (own) mat.onBeforeCompile = (sh, r) => { patch(sh); own(sh, r); };
-  }
+    oldEnv?.dispose();
+    if (oldBack?.isTexture) oldBack.dispose();
+    hemi.intensity = sky0.hemi = preset.hemi;  // the HDRI now supplies the ambient light
+    sky0.sun = preset.sun;
+    sky0.lamps = preset.lamps;
+    sun.color.set(preset.color);
+    circuit?.night(sky0.lamps);
+    if (weather) setWeather(weather);
+    else sun.intensity = sky0.sun;
+    resized = true;  // a still frame should show it now
+    stageDone('sky');
+  }, e => stage('sky', `Sky: ${preset.name}`, progressOf(e)), e => {
+    console.warn('3D: the sky could not be loaded', e);
+    stageDone('sky', 'offline: keeping this sky');
+  });
 }
 
 // ---------- circuit (circuit3d.js builds it) ----------
@@ -260,7 +365,7 @@ const m = metres => metres / map.mps;  // metres -> scene units
 // pts: 2D map outline; corners: [[x, y, number]]; startKnown: pts[0] is the line; mpu: metres per map unit; width: metres;
 // ann: circuits.js annotate() (heights, banking, kerbs, tunnel, barriers), flat without it. Frees the previous circuit
 // and cars, and flies the camera to the new overview instead of cutting.
-let contextRestored = false, groundWorker = null;
+let contextRestored = false, groundWorker = null, refit = null;
 export function setTrack(pts, span, corners, startKnown, mpu, width = 13, ann = null) {
   groundWorker?.terminate();  // its imagery is for the circuit going away (up to 256 MB)
   stale?.dispose();  // a second switch before a frame was drawn
@@ -275,11 +380,11 @@ export function setTrack(pts, span, corners, startKnown, mpu, width = 13, ann = 
   ann ??= {h: new Array(n).fill(0), bank: new Array(n).fill(0), kerb: new Array(n).fill(''), tunnel: null, wall: 10, preset: null};
   circuit = buildCircuit(world, {pts, map, tex, width, startKnown, ann, corners, SIZE});
   trackMat = circuit.trackMat;
+  circuit.night(sky0.lamps);
   wettable = circuit.wettable;  // scenery that turns darker and glossier in the rain
   vfx.mps = map.mps;
   post.setMps(map.mps);
   controls.minDistance = m(4);  // close enough to read a car's livery, never inside it
-  csmSync();
   const from = camera.position.clone(), target = controls.target.clone();
   resetView();
   if (mode === 'overview') fly = {from, target, to: camera.position.clone(), aim: controls.target.clone(), t: 0};
@@ -288,7 +393,8 @@ export function setTrack(pts, span, corners, startKnown, mpu, width = 13, ann = 
 export function resetView() {
   chased = null;
   controls.target.set(0, 0, 0);
-  camera.position.set(0, SIZE * 0.72, SIZE * 0.78);
+  const fit = THREE.MathUtils.clamp(1.25 / camera.aspect, 1, 1.5);  // portrait stage: the circuit is limited by the width
+  camera.position.set(0, SIZE * 0.72 * fit, SIZE * 0.78 * fit);
   post.reset();
 }
 
@@ -318,8 +424,29 @@ export function setCars(drivers, onSelect, year) {
     cars[d.id] = {...car, tag, haze: heat, color: d.color, yaw: 0, steer: 0, last: null, v: 0, acc: 0};
   }
   world.add(crews.group);  // setTrack clears the world
-  csmSync();
+  warmCockpit(token);
 }
+
+// The shaders the close cameras need, built in the background once the cars are there: first the main view's (a far camera has
+// drawn only the cars' far level), then the cockpit mirrors', which keep their modelled glass until then.
+function warmCockpit(token) {
+  mirrorsWarm = false;
+  setTimeout(async () => {
+    if (token !== carsToken) return;
+    const seen = new Set(), meshes = [];
+    scene.traverse(o => { if (o.isMesh && o.visible && !o.material.userData.readsViewport && !seen.has(o.material)) { seen.add(o.material); meshes.push(o); } });
+    for (const c of Object.values(cars)) c.steeringWheel?.traverse(o => { if (o.isMesh && !seen.has(o.material)) { seen.add(o.material); meshes.push(o); } });
+    const wanted = () => token === carsToken;
+    try {
+      await warmFor(renderer, scene, meshes, post.scenePass.renderTarget, post.scenePass.getMRT(), wanted);
+      if (Object.values(cars).some(c => c.mirrors)) await warmMirrors(renderer, scene, meshes, wanted);
+    } catch (e) { console.warn('close-up shaders', e); }
+    if (token === carsToken) mirrorsWarm = true;
+  }, 1000);  // after the first frames with the new grid
+}
+
+// does this car have a steering wheel of its own in the cockpit view?
+export const hasCockpitWheel = id => !!cars[id]?.steeringWheel;
 
 // the cars' own geometry and materials (era templates are shared and kept)
 function disposeCars() {
@@ -337,17 +464,20 @@ function disposeCars() {
 // mode: overview (free orbit) | chase (TV) | follow (game chase cam) | onboard (cockpit, driver's eye) | tcam (on the airbox) | heli (helicopter)
 export function setView(m) {
   mode = m;
+  zoomAim = zoomNow = 1;
+  container.dataset.cam = m;  // style.css: corner numbers only in the overview, they show through walls from a low camera
   chased = null;
   fly = null;  // still easing to the overview, it'd pull a chase camera back out there for good: chase keeps its offset
   controls.enabled = !RIGGED.has(m);
   camera.fov = {overview: 42, chase: 50, onboard: 72, tcam: 64, heli: 30, follow: 62}[m];
   camera.updateProjectionMatrix();
-  csm.updateFrustums();  // the cascades are slices of the view frustum
+  onCameraModeChanged(m);  // the cascades are slices of the view frustum
   post.reset();
   if (m === 'overview') resetView();
 }
 
 export const setParts = p => Object.assign(parts, p);
+export {announce};
 
 // the start gantry's red lamps: n of 5 lit (0: dark)
 export const setStartLights = n => circuit?.lights(n);
@@ -359,7 +489,8 @@ export const setStartLights = n => circuit?.lights(n);
 export function setWeather({cloud, rain, wetLine, wetOff}) {
   if (!scene) return;
   const overcast = Math.max(0, cloud - 0.1) / 0.9, wet = (wetLine + wetOff) / 2;
-  for (const l of csm.lights) l.intensity = 2.6 * (1 - 0.85 * overcast);
+  weather = {cloud, rain, wetLine, wetOff};
+  sun.intensity = sky0.sun * (1 - 0.85 * overcast);
   scene.environmentIntensity = sky0.env * (1 - 0.5 * overcast);
   scene.backgroundIntensity = 1 - 0.6 * overcast;
   hemi.intensity = sky0.hemi * (1 + 0.5 * overcast);  // flat, diffuse light under cloud
@@ -369,7 +500,7 @@ export function setWeather({cloud, rain, wetLine, wetOff}) {
   if (trackMat) {
     trackMat.userData.wetLine.value = wetLine;
     trackMat.userData.wetOff.value = wetOff;
-    trackMat.normalScale.setScalar(1 - 0.8 * wet);  // the water film smooths over the aggregate
+    trackMat.userData.normalScale.value = 1 - 0.8 * wet;  // the water film smooths over the aggregate
   }
   for (const m of wettable) m.roughness = 0.9 - 0.6 * wet;
   vfx.rain = rain;
@@ -380,15 +511,27 @@ export function setWeather({cloud, rain, wetLine, wetOff}) {
 // (Mercator is conformal, so over a few km the map is affine to well under a metre). Trees stay only where the image
 // shows vegetation. Anything failing (no real outline, a poor fit, tiles unreachable) leaves the procedural grass.
 // Twice: ~36 tiles first, then the sharp image. On a cold browser cache its ~480 tiles take ~12 s, past the intro's lights out.
+// the limit by backend: WebGPU reports it on the device, WebGL2 through its context
+function maxTexture() {
+  const b = renderer.backend;
+  return b.device?.limits.maxTextureDimension2D ?? b.gl?.getParameter(b.gl.MAX_TEXTURE_SIZE) ?? 4096;
+}
+
 export async function setGround(year, round, maxPx = 2048) {
   groundWorker?.terminate();
-  const c = circuit, full = Math.min(high ? 8192 : 4096, renderer.capabilities.maxTextureSize);  // high tier: one zoom level sharper (~0.5 m a pixel)
+  const c = circuit, full = Math.min(high ? 8192 : 4096, maxTexture());  // high tier: one zoom level sharper (~0.5 m a pixel)
   if (!c) return;
   const xs = c.pts.map(p => (p[0] - map.cx) * map.k), zs = c.pts.map(p => (p[1] - map.cy) * map.k), pad = m(500);
   const g = await new Promise(done => {  // the fit, the imagery and its vegetation: groundwork.js, on a worker thread
     const w = groundWorker = new Worker(new URL('./groundwork.js', import.meta.url), {type: 'module'});
-    w.onmessage = e => { w.terminate(); done(e.data); };
-    w.onerror = e => { w.terminate(); done({error: e.message || 'worker failed'}); };
+    w.onmessage = e => {
+      if (e.data?.progress !== undefined) return stage('ground', 'Satellite ground', e.data.progress);
+      w.terminate();
+      if (e.data?.image) stageDone('ground'); else stageDone('ground', 'offline: procedural grass');
+      done(e.data);
+    };
+    w.onerror = e => { w.terminate(); stageDone('ground', 'offline: procedural grass'); done({error: e.message || 'worker failed'}); };
+    stage('ground', 'Satellite ground');
     w.postMessage({url: `/api/geo/${year}/${round}`, pts: c.pts, map: {k: map.k, cx: map.cx, cy: map.cy}, L: SIZE / 2,
       box: [Math.min(...xs) - pad, Math.max(...xs) + pad, Math.min(...zs) - pad, Math.max(...zs) + pad],
       maxPx: Math.min(maxPx, full)});
@@ -418,7 +561,6 @@ export async function setGround(year, round, maxPx = 2048) {
 export function setPitLane(pts, boxes = null) {
   if (!circuit || pts.length < 2) return;
   circuit.pitLane(pts, boxes);
-  csmSync();
 }
 
 // What the audio hears from: the camera's pose and every visible car's position, in metres (scene units x mps).
@@ -441,7 +583,7 @@ export function setTyre(id, color) {
 }
 
 // Sparks (plank strikes) and tyre smoke (lock-ups): fx {sparks, smoke} 0..1 from the race simulation, else guessed from
-// motion: hard braking (past ~2.5 g) locks the fronts, above ~270 km/h the plank strikes, worst as braking dips the nose.
+// motion: braking well past the normal 4-5 g locks the fronts, above ~270 km/h the plank strikes, worst as braking dips the nose.
 // simDt: replay seconds since the last update, dt: real seconds.
 function effects(c, at, next, simDt, dt, fx) {
   const vel = next.clone().sub(at).divideScalar(0.5), v = vel.length() * map.mps;  // m/s over the next half second
@@ -450,9 +592,8 @@ function effects(c, at, next, simDt, dt, fx) {
   if (Math.abs(acc) > 80) return;  // scrubbing or a data jump, not driving
   c.acc += (acc - c.acc) * Math.min(1, simDt * 4);  // ~0.25 s low-pass: GPS positions are noisy
   c.brakeC = brakeStep(c.brakeC ?? 150, -c.acc, v, simDt);  // carbon brakes: heated by the energy they take
-  const glow = brakeGlow(c.brakeC);
-  for (const d of c.discs) d.emissiveIntensity = 3 * glow * glow;
-  const brake = fx ? Math.sqrt(fx.smoke) : THREE.MathUtils.smoothstep(-c.acc, 18, 35);
+  for (const d of c.discs) d.userData.brakeTemp.value = brakeGlow(c.brakeC);
+  const brake = fx ? Math.sqrt(fx.smoke) : THREE.MathUtils.smoothstep(-c.acc, 48, 65);
   const count = perSecond => Math.floor(perSecond * dt + Math.random());  // whole particles this frame, right on average
   const sparks = fx ? fx.sparks : THREE.MathUtils.smoothstep(v, 70, 85) * (0.2 + brake) * (Math.random() < 0.4);  // bursts, as over bumps
   const nSparks = count(900 * sparks), nSmoke = c.fronts.map(() => count(45 * brake * brake)), nSpray = count(260 * (fx?.spray ?? 0));
@@ -491,12 +632,20 @@ function chassis(c, turn, moved, f) {
 // The focused car's rear-view mirrors reflect the scene in the cockpit view (its own rear wheels left out); built the
 // first time they're needed, and back to the model's glass otherwise, so only one car pays for the extra renders.
 function mirrors(c, on) {
-  if (!c.mirrors) return;
+  if (!c.mirrors || !mirrorsWarm) return;
   if (on && !c.mirrored) {
     c.mirrored = true;
     for (const glass of c.mirrors) makeMirror(glass, {hide: c.wheels.filter(w => !w.front).map(w => w.pivot)});
   }
   if (c.mirrored) for (const glass of c.mirrors) glass.userData.mirror(on);
+}
+
+// a lens change costs a projection and the cascades' frusta: not for a change nobody can see
+function zoomTo(fov) {
+  if (Math.abs(fov - camera.fov) < 0.2) return;
+  camera.fov = fov;
+  camera.updateProjectionMatrix();
+  if (csm.camera) csm.updateFrustums();
 }
 
 // pos/ahead: {id: [x, y]} map coords now and 0.5 s later (gives the heading). rate: replay seconds per real second (0 when
@@ -507,6 +656,10 @@ export function updateCars(pos, ahead, focus, rate = 1, progress = 1, fx = null)
   const now = performance.now(), dt = Math.min((now - lastUpdate) / 1000, 0.25);
   lastUpdate = now;
   simRate = rate;
+  lastCars = [pos, ahead, focus, 0, progress, fx];
+  const zoomWas = zoomNow;
+  zoomNow += (zoomAim - zoomNow) * (1 - Math.exp(-dt / 0.12));
+  if (Math.abs(zoomAim - zoomNow) < 0.002) zoomNow = zoomAim;
   trackMat.userData.rubber.value = 0.3 + 0.7 * progress;  // rubber builds up over the session
   const scale = 1 / map.mps;  // cars are modelled in metres, drawn true to scale
   let steer = 0;
@@ -552,7 +705,9 @@ export function updateCars(pos, ahead, focus, rate = 1, progress = 1, fx = null)
     mirrors(c, own);
     c.body.visible = !own || parts.body;
     c.halo.visible = !own || parts.halo;
-    c.tag.visible = !own;
+    if (c.steeringWheel) c.steeringWheel.visible = !own || parts.wheel;
+    // a low camera sees the whole field's tags stacked on its horizon, through the walls
+    c.tag.visible = !own && !(mode === 'tcam' && id === focus) && (id === focus || mode === 'overview' || mode === 'heli' || c.group.position.distanceTo(camera.position) < m(200));
     c.tag.element.classList.toggle('sel', id === focus);
     c.tag.element.classList.toggle('dim', !!focus && id !== focus);
     if (id !== focus) continue;
@@ -563,27 +718,35 @@ export function updateCars(pos, ahead, focus, rate = 1, progress = 1, fx = null)
       camera.position.copy(c.group.localToWorld((mode === 'tcam' ? c.tcam : c.eye).clone()));
       controls.target.copy(c.group.localToWorld((mode === 'tcam' ? c.tcamLook : c.look).clone()));
       camera.lookAt(controls.target);
-      const g = fx?.[id]?.cam, cf = c.camFx ??= {p: 0, r: 0, y: 0};
-      if (g) {  // driving: the head pitches forward under braking (~0.7 deg/g), rolls into the corner, looks to the apex
-        cf.p += (THREE.MathUtils.clamp(g.gLong * 0.012, -0.07, 0.03) - cf.p) * 0.15;
-        cf.r += (THREE.MathUtils.clamp(-g.gLat * 0.01, -0.06, 0.06) - cf.r) * 0.15;
-        cf.y += (THREE.MathUtils.clamp(-g.steer * 0.8, -0.2, 0.2) - cf.y) * 0.1;
-        const buzz = g.v > 83 ? 0.0015 * (g.v - 83) / 10 : 0;  // aero buffeting above 300 km/h
-        camera.rotateY(cf.y);
-        camera.rotateX(cf.p + (Math.random() - 0.5) * buzz);
-        camera.rotateZ(cf.r + (Math.random() - 0.5) * buzz);
-      }
+      // The head pitches forward under braking (~0.7 deg/g), rolls into the corner, looks to the apex: from the simulation
+      // while driving, else from the car's measured motion, so a replay feels the same.
+      const g = fx?.[id]?.cam ?? {gLat: c.gLat ?? 0, gLong: c.acc / 9.81, steer: -(c.delta ?? 0), v: c.v}, cf = c.camFx ??= {p: 0, r: 0, y: 0};
+      cf.p += (THREE.MathUtils.clamp(g.gLong * 0.012, -0.07, 0.03) - cf.p) * 0.15;
+      cf.r += (THREE.MathUtils.clamp(-g.gLat * 0.01, -0.06, 0.06) - cf.r) * 0.15;
+      cf.y += (THREE.MathUtils.clamp(-g.steer * 0.8, -0.2, 0.2) - cf.y) * 0.1;
+      // engine vibration through the tub rises with revs (which go with speed), aero buffeting above 300 km/h, a jolt on a kerb
+      const engine = g.v > 1 ? 0.0004 + 0.0005 * Math.min(1, g.v / 90) : 0.00015, aero = g.v > 83 ? 0.0015 * (g.v - 83) / 10 : 0;
+      const onKerb = fx?.[id]?.g?.kerb ?? (Math.abs(road.lat) > circuit.half - m(0.4) ? 0.5 : 0);
+      const buzz = engine + aero + 0.008 * onKerb;
+      camera.rotateY(cf.y);
+      camera.rotateX((mode === 'onboard' ? -0.07 : 0) + cf.p + (Math.random() - 0.5) * buzz);  // onboard: the road, not half a frame of sky
+      camera.rotateZ(cf.r + (Math.random() - 0.5) * buzz);
+      // the speed tunnel: 4 degrees wider at 340 km/h with the rear wing open, a little less with it shut
+      const widen = 4 * Math.min(1, (c.v / 94.4) ** 2) * (fx?.[id]?.drs ? 1 : 0.65);
+      zoomTo(((mode === 'tcam' ? 64 : 72) + widen) * zoomNow);
     } else if (mode === 'heli') {
       // 70 m back, 35 m out, 55 m up, eased in with a 0.7 s lag like a pilot tracking the car; the aim lags only 0.2 s
       const want = new THREE.Vector3(at.x - Math.cos(c.yaw) * m(70) + Math.sin(c.yaw) * m(35), at.y + m(55),
                                      at.z + Math.sin(c.yaw) * m(70) + Math.cos(c.yaw) * m(35));
-      if (chased !== id) { chased = id; post.reset(); camera.position.copy(want); controls.target.copy(at); }
+      if (chased !== id || moved >= 200) { chased = id; post.reset(); camera.position.copy(want); controls.target.copy(at); }  // a scrub cuts, like every other camera
       // lags in replay time: in real time a 10x replay left the camera ~560 m behind, flying to catch up at ~800 m/s,
       // which the motion blur smeared over the whole frame
       const lag = dt * Math.max(1, rate);
       camera.position.lerp(want, 1 - Math.exp(-lag / 0.7));
       controls.target.lerp(at, 1 - Math.exp(-lag / 0.2));
       camera.lookAt(controls.target);
+      // the lens tracks the range, so the car stays the same size as the pilot climbs and falls behind
+      zoomTo(THREE.MathUtils.clamp(30 * camera.position.distanceTo(controls.target) / m(95.6), 20, 40) * zoomNow);
     } else if (mode === 'follow') {  // the racing-game chase cam: low behind the car, swinging round with it
       // weight (sim cars): it hangs back under power and closes in under braking, swings out and leans in corners,
       // and shakes over kerbs and at top speed; smoothed over ~0.15 s so it reads as the car's mass, not noise
@@ -591,18 +754,26 @@ export function updateCars(pos, ahead, focus, rate = 1, progress = 1, fx = null)
       const ease = 1 - Math.exp(-dt / 0.15);
       cf.lon += ((g?.gLong ?? 0) - cf.lon) * ease;
       cf.lat += ((g?.gLat ?? 0) - cf.lat) * ease;
-      const back = 1.6 * len * (1 + THREE.MathUtils.clamp(cf.lon, -5, 3) * 0.04), side = -cf.lat * 0.025 * len;
-      const want = new THREE.Vector3(at.x - Math.cos(c.yaw) * back + Math.sin(c.yaw) * side, at.y + 0.42 * len,
+      const back = zoomNow * 1.6 * len * (1 + THREE.MathUtils.clamp(cf.lon, -5, 3) * 0.04), side = -cf.lat * 0.025 * len;
+      const want = new THREE.Vector3(at.x - Math.cos(c.yaw) * back + Math.sin(c.yaw) * side, at.y + 0.42 * len * zoomNow,
                                      at.z + Math.sin(c.yaw) * back + Math.cos(c.yaw) * side);
-      if (chased !== id) { chased = id; post.reset(); camera.position.copy(want); }
-      camera.position.lerp(want, 1 - Math.exp(-dt * Math.max(1, rate) / 0.08));  // replay time, as the heli's
+      if (chased !== id) { chased = id; post.reset(); camera.position.copy(want); c.armAt = null; }
+      // The camera rides with the car and the spring only takes up the swing: springing on the world position it trailed
+      // by 2v/w, ~14 m at 330 km/h, so the car shrank to a third of its size on every straight and grew back in the corners.
+      if (c.armAt) camera.position.add(at).sub(c.armAt);
+      (c.armAt ??= new THREE.Vector3()).copy(at);
+      // A critically damped spring on an arm: it settles as fast as a spring can without ever overshooting past the car.
+      // Exact for any step, so a dropped frame doesn't kick it: x(h) = want + (d + (v + w d) h) e^(-w h). Replay time, as the heli's.
+      const arm = c.arm ??= new THREE.Vector3(), h = dt * Math.max(1, rate), w = 13, e = Math.exp(-w * h);
+      const d = camera.position.clone().sub(want), step = arm.clone().addScaledVector(d, w).multiplyScalar(h);
+      arm.addScaledVector(step, -w).multiplyScalar(e);
+      camera.position.copy(want).addScaledVector(d.add(step), e);
       controls.target.set(at.x + Math.cos(c.yaw) * len, at.y + 0.18 * len, at.z - Math.sin(c.yaw) * len);
       camera.lookAt(controls.target);
       const shake = (g?.kerb ? 0.004 + 0.06 * g.kerb : 0) + (c.v > 70 ? 0.0012 * (c.v - 70) / 10 : 0);
-      camera.rotateZ(cf.lat * 0.008 + (Math.random() - 0.5) * shake);
+      camera.rotateZ(cf.lat * 0.008 + road.roll * 0.6 + (Math.random() - 0.5) * shake);  // banks with the road
       camera.rotateX((Math.random() - 0.5) * shake);
-      const fov = 62 + 10 * THREE.MathUtils.clamp(c.v / 90, 0, 1);  // widens with speed, 72 deg at ~320 km/h
-      if (Math.abs(fov - camera.fov) > 0.5) { camera.fov = fov; camera.updateProjectionMatrix(); csm.updateFrustums(); }
+      zoomTo(62 + 10 * THREE.MathUtils.clamp(c.v / 90, 0, 1));  // widens with speed, 72 deg at ~320 km/h
     } else if (mode === 'chase' && chased === null) {  // drop in behind the car
       chased = id;
       post.reset();
@@ -611,7 +782,7 @@ export function updateCars(pos, ahead, focus, rate = 1, progress = 1, fx = null)
     } else if (mode === 'chase') {  // follow, turning with the car; the user can still orbit
       if (chased !== id) { chased = id; glide = 0; }  // another car picked: pan across to it instead of cutting
       glide = Math.min(1, glide + dt / 0.9);
-      const offset = camera.position.clone().sub(controls.target).applyAxisAngle(UP, turn);
+      const offset = camera.position.clone().sub(controls.target).applyAxisAngle(UP, turn).multiplyScalar(zoomNow / zoomWas);
       controls.target.lerp(at, glide < 1 ? THREE.MathUtils.smootherstep(glide, 0, 1) : 1);
       camera.position.copy(controls.target).add(offset);
     }

@@ -1,245 +1,182 @@
-// Post-processing: motion vectors -> MSAA HDR scene -> ambient occlusion -> depth of field -> motion blur -> bloom ->
-// chromatic aberration -> tone mapping + sRGB (OutputPass) -> SMAA.
+// Post-processing as one TSL node graph on a THREE.RenderPipeline. A single pass writes colour, velocity and emissive
+// through MRT, because WebGPU charges for a second scene draw what the old WebGL chain paid three times over (beauty,
+// velocity with an override material, GTAO's own normal pass). From there:
+// HDR scene x half-res GTAO -> depth of field -> motion blur -> bloom -> chromatic aberration -> AgX + sRGB -> SMAA.
 import * as THREE from 'three';
-import {EffectComposer} from 'three/addons/postprocessing/EffectComposer.js';
-import {RenderPass} from 'three/addons/postprocessing/RenderPass.js';
-import {GTAOPass} from 'three/addons/postprocessing/GTAOPass.js';
-import {ShaderPass} from 'three/addons/postprocessing/ShaderPass.js';
-import {UnrealBloomPass} from 'three/addons/postprocessing/UnrealBloomPass.js';
-import {OutputPass} from 'three/addons/postprocessing/OutputPass.js';
-import {SMAAPass} from 'three/addons/postprocessing/SMAAPass.js';
+import {pass, mrt, output, velocity, emissive, uniform, Fn, vec2, vec3, vec4, float, mix, Loop, If, uv, convertToTexture,
+        renderOutput, clamp, length, dot, fract, sqrt, cos, sin, min, max, pow, screenCoordinate} from 'three/tsl';
+import {ao} from 'three/addons/tsl/display/GTAONode.js';
+import {bloom} from 'three/addons/tsl/display/BloomNode.js';
+import {smaa} from 'three/addons/tsl/display/SMAANode.js';
 
 const EXPOSURE = 1 / 100;  // simulated camera shutter time, s: a broadcast camera's (1/60 smeared fast pans and the ground)
+const SENSOR = 0.024;      // m, full-frame sensor height: with the camera's vertical fov it gives the focal length
+const BLUR_TAPS = 16, DOF_TAPS = 32;
+const PUNCH = 1.35, SATURATION = 1.4;  // Blender's AgX "Punchy" look: AgX alone has lifted blacks and pale colours
+const MAX_BLUR = 0.035;    // of the screen: the longest streak, so one wild motion vector can't smear half the frame
 
-// Motion vectors: every object is drawn with this frame's and last frame's model-view-projection, and the difference of
-// the two projected positions is how far that surface moved on screen this frame. That covers camera motion (the view
-// matrix changed) and per-object motion (the model matrix changed) in one pass. Alpha 1 marks covered pixels.
-const velocityShader = {
-  uniforms: {uPrevModel: {value: new THREE.Matrix4()}, uPrevViewProj: {value: new THREE.Matrix4()}},
-  vertexShader: /* glsl */`
-    uniform mat4 uPrevModel, uPrevViewProj;
-    varying vec4 vCur, vPrev;
-    #include <common>
-    #include <logdepthbuf_pars_vertex>
-    void main() {
-      vec4 p = vec4(position, 1.0);
-      #ifdef USE_INSTANCING
-        p = instanceMatrix * p;
-      #endif
-      vCur = projectionMatrix * viewMatrix * modelMatrix * p;
-      vPrev = uPrevViewProj * uPrevModel * p;
-      gl_Position = vCur;
-      #include <logdepthbuf_vertex>
-    }`,
-  fragmentShader: /* glsl */`
-    varying vec4 vCur, vPrev;
-    #include <logdepthbuf_pars_fragment>
-    void main() {
-      #include <logdepthbuf_fragment>
-      gl_FragColor = vec4((vCur.xy / vCur.w - vPrev.xy / vPrev.w) * 0.5, 0.0, 1.0);  // NDC spans 2, UV spans 1
-    }`,
-};
+// G cycles these. Each drops what costs most for what it gives. `ss`: whether scene3d.js may supersample.
+export const TIERS = [
+  {name: 'Ultra', ao: true, dof: true, blur: true, smaa: true, ss: true},
+  {name: 'High', ao: true, dof: true, blur: true, smaa: true, ss: false},
+  {name: 'Medium', ao: false, dof: false, blur: true, smaa: true, ss: false},
+  {name: 'Low', ao: false, dof: false, blur: false, smaa: false, ss: false},
+];
 
-// Gather blur along each pixel's motion vector (scaled to the shutter time and clamped). Samples only count if they moved
-// like the centre pixel (|v_sample - v| < |v|), so a car the camera is tracking (v ~ 0) stays sharp instead of smearing into
-// the streaking background around it, and vice versa. Per-pixel noise offsets the taps to trade banding for fine grain.
-// Sky pixels (no geometry, alpha 0) get the camera's rotation alone: uReproj maps a far-plane point from this frame's
-// rotation-only view-projection to last frame's.
-const blurShader = {
-  uniforms: {tDiffuse: {value: null}, tVelocity: {value: null}, uScale: {value: 0}, uReproj: {value: new THREE.Matrix4()}},
-  vertexShader: /* glsl */`
-    varying vec2 vUv;
-    void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
-  fragmentShader: /* glsl */`
-    uniform sampler2D tDiffuse, tVelocity;
-    uniform float uScale;
-    uniform mat4 uReproj;
-    varying vec2 vUv;
-    const int TAPS = 12;
-    const float MAX_LEN = 0.025;  // of the screen
-    vec2 motion(vec2 uv) {
-      vec4 v = texture2D(tVelocity, uv);
-      if (v.a < 0.5) {
-        vec2 ndc = uv * 2.0 - 1.0;
-        vec4 prev = uReproj * vec4(ndc, 1.0, 1.0);
-        v.xy = (ndc - prev.xy / prev.w) * 0.5;
-      }
-      vec2 m = v.xy * uScale;
-      float l = length(m);
-      return l > MAX_LEN ? m * (MAX_LEN / l) : m;
-    }
-    void main() {
-      vec4 base = texture2D(tDiffuse, vUv);
-      vec2 v = motion(vUv);
-      float len = length(v);
-      if (len < 0.0005) { gl_FragColor = base; return; }
-      float jitter = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));  // interleaved gradient noise
-      vec4 sum = base;
-      float total = 1.0;
-      for (int i = 0; i < TAPS; i++) {
-        vec2 uv = vUv + v * ((float(i) + jitter) / float(TAPS) - 0.5);
-        float w = clamp(2.0 - 2.0 * length(motion(uv) - v) / len, 0.0, 1.0);
-        sum += texture2D(tDiffuse, uv) * w;
-        total += w;
-      }
-      gl_FragColor = sum / total;
-    }`,
-};
-
-const SENSOR = 0.024;  // m, full-frame sensor height: with the camera's vertical fov it gives the focal length
-
-// Depth of field: thin-lens circle of confusion F² / (N (s - F)) · |1 - s / w| for focus distance s and depth w, in
-// pixels (uScale is the first factor; capped at uRadius), gathered over a jittered Vogel disk of radius uRadius. A sample
-// counts where its own blur disk reaches this pixel; one behind this pixel only as far as this pixel's blur, so a sharp
-// car gets no halo of the blurred background, while a blurred foreground still spills over it. Depth: the AO pass's
-// logarithmic depth buffer.
-const dofShader = {
-  uniforms: {tDiffuse: {value: null}, tDepth: {value: null}, uFocus: {value: 0}, uScale: {value: 0}, uRadius: {value: 0},
-             uLogFar: {value: 0}, uTexel: {value: new THREE.Vector2()}},
-  vertexShader: blurShader.vertexShader,
-  fragmentShader: /* glsl */`
-    uniform sampler2D tDiffuse, tDepth;
-    uniform float uFocus, uScale, uRadius, uLogFar;
-    uniform vec2 uTexel;
-    varying vec2 vUv;
-    const int TAPS = 32;
-    float depthAt(vec2 uv) { return exp2(texture2D(tDepth, uv).x * uLogFar) - 1.0; }  // d = log2(1 + w) / log2(far + 1)
-    float coc(float w) { return min(abs(1.0 - uFocus / w) * uScale, uRadius); }  // pixels
-    void main() {
-      float w0 = depthAt(vUv), c0 = coc(w0);
-      float spin = 6.2831853 * fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
-      vec4 sum = texture2D(tDiffuse, vUv);
-      float total = 1.0;
-      for (int i = 0; i < TAPS; i++) {
-        float r = sqrt((float(i) + 0.5) / float(TAPS)) * uRadius, a = float(i) * 2.39996323 + spin;  // golden angle
-        vec2 uv = vUv + vec2(cos(a), sin(a)) * r * uTexel;
-        float w = depthAt(uv), c = w > w0 ? min(coc(w), c0) : coc(w), k = clamp(c - r + 1.0, 0.0, 1.0);
-        sum += texture2D(tDiffuse, uv) * k;
-        total += k;
-      }
-      gl_FragColor = sum / total;
-    }`,
-};
-
-// Lateral chromatic aberration: red and blue land at slightly different magnifications, growing with the square of the
-// distance from the centre (~3 px at the corners of a 1080p frame, nothing in the middle).
-const caShader = {
-  uniforms: {tDiffuse: {value: null}},
-  vertexShader: blurShader.vertexShader,
-  fragmentShader: /* glsl */`
-    uniform sampler2D tDiffuse;
-    varying vec2 vUv;
-    void main() {
-      vec2 d = vUv - 0.5, o = d * dot(d, d) * 0.006;
-      vec4 c = texture2D(tDiffuse, vUv);
-      gl_FragColor = vec4(texture2D(tDiffuse, vUv + o).r, c.g, texture2D(tDiffuse, vUv - o).b, c.a);
-    }`,
-};
+const ign = () => fract(dot(screenCoordinate.xy, vec2(0.06711056, 0.00583715)).mul(52.9829189));  // interleaved gradient noise
 
 export function createPost(renderer, scene, camera, samples = 4) {
-  // MSAA (4x) in a half-float target: anti-aliases geometry edges (wishbones, fences, track lines) and
-  // keeps HDR values above 1 for bloom; the OutputPass tone maps at the end
-  const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(1, 1, {type: THREE.HalfFloatType, samples}));
-  const velocity = new THREE.WebGLRenderTarget(1, 1, {type: THREE.HalfFloatType});  // half resolution is plenty for blur
-  const velMat = new THREE.ShaderMaterial({...velocityShader, side: THREE.DoubleSide});
-  const prev = new WeakMap(), prevVP = new THREE.Matrix4(), prevRot = new THREE.Matrix4(), rot = new THREE.Matrix4();
-  const clear = new THREE.Color();
-  let skip = true, frame = 0;
-  velMat.onBeforeRender = (r, s, c, g, object) => {
-    const p = prev.get(object);  // not drawn last frame (e.g. an LOD level that just switched in): no motion of its own
-    velMat.uniforms.uPrevModel.value.copy(p?.frame === frame - 1 ? p : object.matrixWorld);
-    velMat.uniformsNeedUpdate = true;  // per-object uniform: upload before every draw
-  };
-  const blur = new ShaderPass(blurShader);
-  blur.uniforms.tVelocity.value = velocity.texture;
-  // Ground-truth AO: contact darkening under the floor, in wheel arches, at barrier feet. GTAO rebuilds view positions from
-  // perspective depth, but this renderer's depth is logarithmic (d = log2(1 + w) / log2(far + 1)), so both of its shaders
-  // get a getViewPosition that scales the pixel's view ray to w instead (converting back to perspective depth bands at range).
-  const ao = new GTAOPass(scene, camera, 1, 1);
-  const viewPos = `vec3 getViewPosition(const in vec2 uv, const in float depth) {
-    vec4 ray = cameraProjectionMatrixInverse * vec4(uv * 2.0 - 1.0, 1.0, 1.0);
-    vec3 p = ray.xyz / ray.w;
-    return p * ((exp2(depth * ${Math.log2(camera.far + 1).toFixed(6)}) - 1.0) / -p.z);
-  }`;
-  for (const m of [ao.gtaoMaterial, ao.pdMaterial]) m.fragmentShader = m.fragmentShader.replace(/vec3 getViewPosition\([^)]*\) \{[^}]*\}/, viewPos);
-  // its normal/depth pass: no effects or contact-shadow decals (layer 1), and the beauty pass already drew the shadow maps
-  const [hide, show] = [ao.overrideVisibility, ao.restoreVisibility];
-  ao.overrideVisibility = () => { camera.layers.disable(1); renderer.shadowMap.autoUpdate = false; hide.call(ao); };
-  ao.restoreVisibility = () => { show.call(ao); renderer.shadowMap.autoUpdate = true; camera.layers.enable(1); };
-  const dof = new ShaderPass(dofShader);
-  dof.uniforms.tDepth.value = ao.depthTexture;
-  dof.uniforms.uLogFar.value = Math.log2(camera.far + 1);
-  dof.enabled = false;
-  let focusAt = 0, stop = 0, height = 1, mps = 1;
-  composer.addPass(new RenderPass(scene, camera));
-  composer.addPass(ao);
-  composer.addPass(dof);
-  composer.addPass(blur);
-  // threshold in linear HDR: only sun glints on paint, halo and wet-look clearcoat, sparks and the sun itself bloom
-  composer.addPass(new UnrealBloomPass(new THREE.Vector2(1, 1), 0.35, 0.4, 2.5));
-  composer.addPass(new ShaderPass(caShader));
-  composer.addPass(new OutputPass());
-  composer.addPass(new SMAAPass(1, 1));  // on the tone-mapped image: specular and shader aliasing MSAA doesn't touch
+  // MSAA here, not on the canvas: edges of wishbones, fences and track lines are resolved while the values are still HDR
+  const scenePass = pass(scene, camera, {samples});
+  // Velocity blends by its own alpha: a solid surface writes alpha 1, and an effect (vfx.js noVelocity) writes 0 and leaves the
+  // surface's vector. Without this every smoke puff stamped one vector over its whole disc, and the blur smeared the car under it.
+  const keepUnder = Object.assign(new THREE.BlendMode(THREE.CustomBlending), {blendSrc: THREE.SrcAlphaFactor, blendDst: THREE.OneMinusSrcAlphaFactor});
+  scenePass.setMRT(mrt({output, velocity, emissive}).setBlendMode('velocity', keepUnder));
+  const color = scenePass.getTextureNode('output'), depth = scenePass.getTextureNode('depth'), vel = scenePass.getTextureNode('velocity');
+  const glow = scenePass.getTextureNode('emissive');
 
+  const uScale = uniform(0), uReproj = uniform(new THREE.Matrix4()), uFarZ = uniform(1);
+  // view depth from a depth value for either depth convention: clip z = A z + B, clip w = -z, so d = -A - B / z
+  const uA = uniform(0), uB = uniform(0);
+  const viewDepth = d => uB.div(d.add(uA));
+  const uFocus = uniform(0), uCoc = uniform(0), uRadius = uniform(0), uDof = uniform(0), uTexel = uniform(new THREE.Vector2(1, 1));
+
+  // Motion vector at p, as a uv offset across the exposure. NDC y is up and uv y is down, hence the flip. The sky gets
+  // the camera's rotation alone: the background mesh follows the camera, so its stored velocity means nothing.
+  const motion = Fn(([p]) => {
+    const d = depth.sample(p).r, ndc = vec2(p.x.mul(2).sub(1), float(1).sub(p.y.mul(2)));
+    const prev = uReproj.mul(vec4(ndc, uFarZ, 1));
+    const sky = ndc.sub(prev.xy.div(prev.w));
+    const v = d.equal(uFarZ).select(sky, vel.sample(p).xy).mul(vec2(0.5, -0.5)).mul(uScale).toVar();
+    v.assign(length(v).lessThan(1000).select(v, vec2(0)));  // false for NaN too: one bad vector must not smear
+    const l = length(v);
+    If(l.greaterThan(MAX_BLUR), () => { v.assign(v.mul(float(MAX_BLUR).div(l))); });
+    return v;
+  });
+
+  // Gather along the motion vector. A tap only counts if it moved like this pixel (|v_tap - v| < |v|), so a car the camera
+  // tracks (v ~ 0) stays sharp instead of smearing into the streaking ground around it, which three's stock motionBlur
+  // node doesn't do: on a chase camera it blurred the very thing being watched.
+  const blurOf = tex => Fn(() => {
+    const p = uv(), base = tex.sample(p), v = motion(p).toVar(), len = length(v);
+    const sum = vec4(base).toVar(), total = float(1).toVar(), jitter = ign();
+    If(len.greaterThanEqual(0.0005), () => {
+      Loop(BLUR_TAPS, ({i}) => {
+        const q = p.add(v.mul(float(i).add(jitter).div(BLUR_TAPS).sub(0.5)));
+        const w = clamp(float(2).sub(length(motion(q).sub(v)).mul(2).div(len)), 0, 1);
+        sum.addAssign(tex.sample(q).mul(w));
+        total.addAssign(w);
+      });
+    });
+    return sum.div(total);
+  })();
+
+  // Thin-lens circle of confusion F^2 / (N (s - F)) |1 - s / w| in pixels, over a jittered Vogel disk. A tap counts where
+  // its own blur reaches this pixel; one behind this pixel only as far as this pixel's blur, so a sharp car gets no halo
+  // of the blurred background while a blurred foreground still spills over it.
+  const dofOf = tex => Fn(() => {
+    const p = uv(), base = tex.sample(p);
+    const sum = vec4(base).toVar(), total = float(1).toVar();
+    If(uDof.greaterThan(0.5), () => {
+    const coc = w => min(float(1).sub(uFocus.div(w)).abs().mul(uCoc), uRadius);
+    const w0 = viewDepth(depth.sample(p).r), c0 = coc(w0), spin = ign().mul(6.2831853);
+    Loop(DOF_TAPS, ({i}) => {
+      const r = sqrt(float(i).add(0.5).div(DOF_TAPS)).mul(uRadius), a = float(i).mul(2.39996323).add(spin);
+      const q = p.add(vec2(cos(a), sin(a)).mul(r).mul(uTexel));
+      const w = viewDepth(depth.sample(q).r), c = w.greaterThan(w0).select(min(coc(w), c0), coc(w));
+      const k = clamp(c.sub(r).add(1), 0, 1);
+      sum.addAssign(tex.sample(q).mul(k));
+      total.addAssign(k);
+    });
+    });
+    return sum.div(total);
+  })();
+
+  let aoNode = null, bloomNode = null, smaaNode = null, tier = TIERS[0], focusAt = 0, stop = 0, height = 1, mps = 1;
+  const pipeline = new THREE.RenderPipeline(renderer);
+  pipeline.outputColorTransform = false;  // renderOutput below does it before SMAA, which wants the display image
+
+  const build = () => {
+    for (const n of [aoNode, bloomNode, smaaNode]) n?.dispose?.();
+    aoNode = smaaNode = null;
+    let image = color;
+    if (tier.ao) {
+      // Normals from depth, not an MRT target: smoke writes no depth but overwrote the normal under it, and GTAO turned each
+      // puff into a black disc. Only what's in the depth buffer can occlude.
+      aoNode = ao(depth, null, camera);
+      aoNode.resolutionScale = 0.5;  // half-res: ~4x cheaper, and contact shadows are soft anyway
+      aoNode.radius.value = 0.35 / mps;
+      aoNode.thickness.value = 1 / mps;
+      aoNode.scale.value = 1.1;
+      // multiplied here rather than fed to lighting through builtinAOContext: that needs AO before the beauty pass, so a
+      // second depth + normal draw, the cost the single MRT pass exists to avoid
+      image = vec4(image.rgb.mul(aoNode.getTextureNode().r), 1);
+    }
+    let sharp = convertToTexture(image);
+    if (tier.dof) sharp = convertToTexture(dofOf(sharp));
+    const blurred = tier.blur ? convertToTexture(blurOf(sharp)) : sharp;
+    // threshold in linear HDR: 2.5 rather than a display-range 0.85, or every pixel of the photographed sky would bloom.
+    // Only sun glints, sparks, hot brakes and rain lights get there, and emissive is lifted so they always do.
+    bloomNode = bloom(blurred.rgb.add(glow.rgb.mul(1.5)), 0.32, 0.45, 2.5);
+    // lateral chromatic aberration: red and blue land at slightly different magnifications, ~3 px at a 1080p corner
+    const lens = Fn(() => {
+      const p = uv(), d = p.sub(0.5), o = d.mul(dot(d, d)).mul(0.006);
+      return vec4(blurred.sample(p.add(o)).r, blurred.sample(p).g, blurred.sample(p.sub(o)).b, 1);
+    })();
+    // AgX keeps highlights from clipping but flattens everything else: a red livery came out salmon, the asphalt pale grey.
+    // The look goes on after the curve, where the image is display-encoded, as Blender's does.
+    const shown = pow(max(renderOutput(vec4(lens.rgb.add(bloomNode.rgb), 1)).rgb, vec3(0)), vec3(PUNCH));
+    const graded = vec4(clamp(mix(vec3(dot(shown, vec3(0.2126, 0.7152, 0.0722))), shown, SATURATION), 0, 1), 1);
+    // on the tone-mapped image: specular and shader aliasing MSAA doesn't touch
+    pipeline.outputNode = tier.smaa ? (smaaNode = smaa(convertToTexture(graded))) : graded;
+    pipeline.needsUpdate = true;
+  };
+  build();
+
+  const rot = new THREE.Matrix4(), prevRot = new THREE.Matrix4(), inv = new THREE.Matrix4();
+  let skip = true;
   return {
-    setSize(w, h) {
-      const pr = renderer.getPixelRatio();
-      composer.setPixelRatio(pr);  // the composer keeps the ratio it was built with otherwise
-      composer.setSize(w, h);
-      velocity.setSize(Math.max(1, Math.round(w * pr / 2)), Math.max(1, Math.round(h * pr / 2)));
-      dof.uniforms.uTexel.value.set(1 / (w * pr), 1 / (h * pr));
+    pipeline,
+    scenePass,
+    get tier() { return tier; },
+    setTier(t) { tier = t; build(); skip = true; },
+    setSize(w, h, pr) {
+      uTexel.value.set(1 / (w * pr), 1 / (h * pr));
       height = h * pr;
     },
     // depth of field: focus distance in scene units and the lens f-number (0 / undefined = off)
     focus(distance, fNumber) {
-      dof.enabled = distance > 0 && fNumber > 0;
+      uDof.value = distance > 0 && fNumber > 0 && tier.dof ? 1 : 0;
       focusAt = distance;
       stop = fNumber;
     },
     reset() { skip = true; },  // after a camera cut: no blur from the jump
-    setMps(m) { mps = m; ao.updateGtaoMaterial({radius: 1 / m, thickness: 1 / m}); },  // AO reach ~1 m, in scene units
+    setMps(m) {
+      mps = m;
+      if (aoNode) { aoNode.radius.value = 0.35 / m; aoNode.thickness.value = 1 / m; }  // scene units
+    },
     // shutter: 0..1 scale on top of the exposure (1 / replay speed, so a sped-up replay isn't a smear)
     render(dt, shutter = 1) {
-      frame++;
       camera.updateMatrixWorld();
+      const e = camera.projectionMatrix.elements;
+      uA.value = e[10];
+      uB.value = e[14];
+      uFarZ.value = renderer.reversedDepthBuffer ? 0 : 1;
       rot.extractRotation(camera.matrixWorldInverse).premultiply(camera.projectionMatrix);
-      blur.uniforms.uReproj.value.copy(prevRot).multiply(rot.clone().invert());
+      if (skip) prevRot.copy(rot);
+      uReproj.value.copy(prevRot).multiply(inv.copy(rot).invert());
       // per-frame motion -> motion during the exposure: v_frame / dt * EXPOSURE
-      blur.uniforms.uScale.value = skip ? 0 : shutter * EXPOSURE / Math.max(dt, 1 / 240);
-      if (skip) prevVP.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
-      velMat.uniforms.uPrevViewProj.value.copy(prevVP);
-      if (dof.enabled) {
-        const u = dof.uniforms, f = SENSOR / 2 / Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)), s = focusAt * mps;
-        u.uFocus.value = focusAt;
-        u.uScale.value = f * f / (stop * Math.max(s - f, f)) / SENSOR * height;
-        u.uRadius.value = THREE.MathUtils.clamp(u.uScale.value * 3, 1, 0.012 * height);  // the far blur and nearer
+      uScale.value = skip ? 0 : shutter * EXPOSURE / Math.max(dt, 1 / 240);
+      if (uDof.value) {
+        const f = SENSOR / 2 / Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)), s = focusAt * mps;
+        uFocus.value = focusAt;
+        uCoc.value = f * f / (stop * Math.max(s - f, f)) / SENSOR * height;
+        uRadius.value = THREE.MathUtils.clamp(uCoc.value * 3, 1, 0.012 * height);  // the far blur and nearer
       }
-
-      const bg = scene.background, alpha = renderer.getClearAlpha();
-      renderer.getClearColor(clear);
-      scene.background = null;
-      scene.overrideMaterial = velMat;
-      camera.layers.disable(1);  // effects and contact shadows have no motion vectors of their own
-      renderer.shadowMap.autoUpdate = false;  // shadow maps are rendered once, for the beauty pass
-      renderer.setClearColor(0x000000, 0);
-      renderer.setRenderTarget(velocity);
-      renderer.clear();
-      renderer.render(scene, camera);
-      renderer.setRenderTarget(null);
-      renderer.setClearColor(clear, alpha);
-      renderer.shadowMap.autoUpdate = true;
-      camera.layers.enable(1);
-      scene.overrideMaterial = null;
-      scene.background = bg;
-
-      composer.render(dt);
-
-      prevVP.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
-      prevRot.extractRotation(camera.matrixWorldInverse).premultiply(camera.projectionMatrix);
-      scene.traverseVisible(o => {  // hidden LOD levels are most of the scene
-        if (o.isMesh) (prev.get(o) ?? prev.set(o, new THREE.Matrix4()).get(o)).copy(o.matrixWorld).frame = frame;
-      });
+      pipeline.render();
+      prevRot.copy(rot);
       skip = false;
     },
+    dispose() { for (const n of [aoNode, bloomNode, smaaNode]) n?.dispose?.(); pipeline.dispose(); },
   };
 }

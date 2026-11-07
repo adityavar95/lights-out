@@ -7,6 +7,9 @@ import * as THREE from 'three';
 import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
 import {MeshoptDecoder} from 'three/addons/libs/meshopt_decoder.module.js';
 import {seatDriver} from './driver.js';
+import {stage, stageDone, progressOf} from './loadstage.js';
+import {brakeMat} from './cars3d.js';
+import {dash, dashCanvas} from './dash.js';
 
 const MODEL = new URL('./models/rb22.glb', import.meta.url).href;
 // Model space (as baked below): metres, nose +z, left +x, up +y.
@@ -26,7 +29,15 @@ export const rb22Ready = () => !!template;
 
 // Fetches and bakes the model once. Rejects if it can't be loaded; the procedural car then stays at every distance.
 export function loadRB22() {
-  return loading ??= new GLTFLoader().setMeshoptDecoder(MeshoptDecoder).loadAsync(MODEL).then(gltf => { template = bake(gltf.scene); });
+  if (loading) return loading;
+  stage('rb22', 'Car model');
+  return loading = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder).loadAsync(MODEL, e => stage('rb22', 'Car model', progressOf(e))).then(gltf => {
+    template = bake(gltf.scene);
+    stageDone('rb22');
+  }, e => {
+    stageDone('rb22', 'offline: procedural car');
+    throw e;
+  });
 }
 
 // Every mesh baked into model space; the merged wheel meshes split per corner, the mirror glass per side.
@@ -54,8 +65,11 @@ function bake(scene) {
       splitCorners(geometry).slice(0, 2).forEach((g, i) => out.add(Object.assign(new THREE.Mesh(g, m.material), {name: MIRRORS[i]})));
       continue;
     }
+    const onWheel = STEERING_BOX.containsBox(geometry.boundingBox);
+    if (onWheel && m.material.name.startsWith('kers_blue')) continue;  // a fixed bar across the screen
+    if (onWheel && m.material.name.startsWith('gp21_LCD')) screenUv(geometry);
     const mesh = new THREE.Mesh(geometry, m.material);
-    (STEERING_BOX.containsBox(geometry.boundingBox) ? steering : out).add(mesh);
+    (onWheel ? steering : out).add(mesh);
   }
   out.add(steering, ...wheels);
   return out;
@@ -186,6 +200,24 @@ function paintTexture(ink, num, size = PAINT_SIZE) {
   return texture;
 }
 
+// The LCD's own uv picks a photo out of an atlas: stretch the whole canvas over it instead, as the driver sees it
+function screenUv(geometry) {
+  const {min, max} = geometry.boundingBox, P = geometry.attributes.position, uv = geometry.attributes.uv;
+  for (let i = 0; i < P.count; i++) uv.setXY(i, (max.x - P.getX(i)) / (max.x - min.x), (P.getY(i) - min.y) / (max.y - min.y));
+  uv.needsUpdate = true;
+}
+
+// One screen for every car: only the focused car's is ever close enough to read, and that's whose readings it draws
+let screen = null;
+function screenMaterial() {
+  if (screen) return screen;
+  const map = new THREE.CanvasTexture(dashCanvas());
+  map.colorSpace = THREE.SRGBColorSpace;
+  map.anisotropy = 4;
+  dash.drawn = () => { map.needsUpdate = true; };
+  return screen = new THREE.MeshBasicNodeMaterial({name: 'wheel-screen', map, fog: false});
+}
+
 // The steering wheel's decal texture without its two ORACLE logos, as [x0, y0, x1, y1] fractions of the image.
 const WHEEL_LOGOS = [[250 / 1024, 934 / 1024, 770 / 1024, 1008 / 1024], [976 / 1024, 704 / 1024, 1010 / 1024, 890 / 1024]];
 const WHEEL_DECALS = new WeakMap();  // source texture -> cleaned copy, shared by every car
@@ -231,10 +263,11 @@ export function buildRB22({paint, accent, ink, helmet, num, stripe, light}) {
       if (!accentMats.has(o.material)) accentMats.set(o.material, Object.assign(o.material.clone(), {color: new THREE.Color(accent), metalness: 0, roughness: 0.45}));
       o.material = accentMats.get(o.material);
     } else if (name.startsWith('discs')) {  // the model's disc texture, glowing per car under braking
-      if (!discMats.has(o.material)) discMats.set(o.material, Object.assign(o.material.clone(), {emissive: new THREE.Color(0xff4a12), emissiveIntensity: 0}));
+      if (!discMats.has(o.material)) discMats.set(o.material, brakeMat(o.material));
       o.material = discMats.get(o.material);
     } else if (o.name === 'rain-light') o.material = light;  // flashes with ERS harvesting and in the wet
     else if (name.startsWith('sw_decals')) own.push(o.material = Object.assign(o.material.clone(), {map: wheelDecals(o.material.map)}));
+    else if (name.startsWith('gp21_LCD')) o.material = screenMaterial();
     if (o.name.startsWith('mirror-')) o.geometry = o.geometry.clone();  // the mirror stretches its glass per car
   });
   own.push(...accentMats.values(), ...discMats.values());

@@ -76,3 +76,11 @@ export function undercuts(M) {
   }
   return out.sort((x, y) => x.lapA - y.lapA || x.lapB - y.lapB);
 }
+
+// Finishers whose position on the last lap isn't their classified one: time penalties, mostly. laps: Jolpica rows
+// {driverId, number, position}; results: Jolpica rows. [{id, road, classified}]
+export function roadVsClassified(laps, results) {
+  const L = Math.max(0, ...laps.map(l => +l.number)), road = new Map(laps.filter(l => +l.number === L).map(l => [l.driverId, +l.position]));
+  return results.filter(r => road.has(r['Driver.driverId']) && road.get(r['Driver.driverId']) !== +r.position)
+    .map(r => ({id: r['Driver.driverId'], road: road.get(r['Driver.driverId']), classified: +r.position}));
+}

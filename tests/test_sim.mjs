@@ -66,6 +66,16 @@ const board = full.board();
 assert.equal(board[0].car.id, full.winner);
 assert.ok(board.slice(1).every(r => r.gap > 0), 'gaps behind the winner');
 
+// a gap is timed at the car's own spot, not its 20 m stretch: the leader reached 2000 m at t = 100 and 2020 m at t = 101, so
+// at t = 110 a car at 2005 m is 9.75 s back and one at 2015 m 9.25 s, where both used to read 10.000
+{
+  const close = race(['A', 'B', 'C']);
+  close.leaderPass[100] = 100; close.leaderPass[101] = 101; close.t = 110;
+  [close.cars[0].s, close.cars[1].s, close.cars[2].s] = [2100, 2015, 2005];
+  const [, near, far] = close.board();
+  assert.ok(Math.abs(near.gap - 9.25) < 1e-9 && Math.abs(far.gap - 9.75) < 1e-9, `gaps ${near.gap} ${far.gap}`);
+}
+
 // wet compounds and the crossover: inters beat slicks on a damp track, wets beat inters in standing water, and
 // slicks are fastest when dry
 assert.ok(surfaceGrip('INTERMEDIATE', 0.3).grip * COMPOUNDS.INTERMEDIATE.grip > surfaceGrip('MEDIUM', 0.3).grip);

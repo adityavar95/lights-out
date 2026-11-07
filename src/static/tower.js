@@ -27,7 +27,7 @@ export function buildTower(list, drivers, onSelect) {
                           onkeydown: e => onkey(e, d, row),
                           onfocus: () => { for (const r of list.children) r.tabIndex = r === row ? 0 : -1; }},
       el('span', {class: 'pos'}), el('span', {class: 'bar', style: `background:${d.color}`}),
-      el('span', {class: 'code'}, d.code, el('span', {class: 'secs', 'aria-hidden': 'true'}, el('i'), el('i'), el('i'))),
+      el('span', {class: 'code'}, el('span', {}, d.code, el('small', {class: 'chg'})), el('span', {class: 'secs', 'aria-hidden': 'true'}, el('i'), el('i'), el('i'))),
       el('span', {class: 'gap'}), el('span', {class: 'tyre'}), el('span', {class: 'badge'}),
       el('button', {class: 'trcmp', tabindex: -1, title: `Compare ${d.code}'s telemetry`, 'aria-label': `Compare ${d.code}'s telemetry trace`,
                     onclick: e => { e.stopPropagation(); dispatchEvent(new CustomEvent('f1:trace', {detail: d.id})); },
@@ -35,7 +35,13 @@ export function buildTower(list, drivers, onSelect) {
     list.append(row);
     rows[d.id] = row;
   }
-  list.style.height = `${drivers.length * ROW_H}px`;
+  list.style.height = `calc(${drivers.length} * var(--row-h, ${ROW_H}px))`;
+  // the whole field without scrolling where the panel allows it: rows give way down to 22 px
+  list.fit ??= new ResizeObserver(() => {
+    const room = list.parentElement.clientHeight, n = list.children.length;
+    list.style.setProperty('--row-h', `${n ? Math.max(22, Math.min(ROW_H, Math.floor(room / n * 10) / 10)) : ROW_H}px`);
+  });
+  list.fit.observe(list.parentElement);
   return rows;
 }
 
@@ -128,7 +134,7 @@ export function renderTower(rows, board, cols, column, selected, onTyre) {
   const inside = board.length && rows[board[0].d.id].parentNode.matches(':focus-within');
   board.forEach((b, i) => {
     const row = rows[b.d.id], [pos, , code, gap, tyre, badge] = row.children, c = cols[b.d.id];
-    row.style.transform = `translateY(${i * ROW_H}px)`;
+    row.style.transform = `translateY(calc(${i} * var(--row-h, ${ROW_H}px)))`;
     row.classList.toggle('out', b.out);
     row.classList.toggle('sel', selected === b.d.id);
     row.dataset.i = i;
@@ -136,6 +142,11 @@ export function renderTower(rows, board, cols, column, selected, onTyre) {
     row.setAttribute('aria-pressed', selected === b.d.id);
     row.setAttribute('aria-label', `${b.out ? 'Out' : `P${b.pos}`}, ${b.d.name ?? b.d.code}`);
     pos.textContent = b.out ? '–' : b.pos;
+    // places gained or lost since the first order shown (the grid, unless a link opened the replay mid-race)
+    row.dataset.start ??= b.pos;
+    const gained = row.dataset.start - b.pos, chg = code.firstChild.lastChild;
+    chg.textContent = b.out || !gained ? '' : `${gained > 0 ? '▲' : '▼'}${Math.abs(gained)}`;
+    chg.dataset.up = gained > 0;
     gap.textContent = c[column] || '';
     gap.dataset.c = column === 'last' ? c.lastCls : column === 'trap' ? c.trapCls : '';
     [...code.lastChild.children].forEach((bar, k) => { bar.dataset.s = c.sectors[k] || ''; });
@@ -144,6 +155,8 @@ export function renderTower(rows, board, cols, column, selected, onTyre) {
     tyre.style.borderColor = ty ? ty[1] : 'transparent';
     tyre.title = b.tyre ? `${b.tyre}${b.age ? `, ${b.age} laps old` : ''}${b.stops ? `, ${b.stops} stop${b.stops > 1 ? 's' : ''}` : ''}` : '';
     onTyre(b.d.id, ty?.[1]);
-    badge.textContent = b.pit ? 'PIT' : '';
+    badge.textContent = b.pit ? 'PIT' : b.stops ? `${b.stops}` : '';
+    badge.dataset.k = b.pit ? 'pit' : 'stops';
+    badge.title = b.stops ? `${b.stops} pit stop${b.stops > 1 ? 's' : ''}` : '';
   });
 }

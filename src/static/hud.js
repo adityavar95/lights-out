@@ -2,6 +2,7 @@
 // with the telemetry cluster, g-force friction circle, tyre thermal matrix and circuit radar.
 import {el, svg, fmtClock, lastBefore, led} from './util.js';
 import {CORNERS, tyreColor} from './telemetry.js';
+import {nearestPoint} from './pitdata.js';
 
 const LEDS = 15, RPM_LOW = 9500, RPM_HIGH = 12300;  // shift lights start at RPM_LOW, all lit at RPM_HIGH
 const G_PX = 10;  // friction circle: 10 svg units per g, so the 1 / 3 / 5 g rings are r = 10 / 30 / 50
@@ -10,7 +11,7 @@ export const SECTOR_COLORS = ['#ff4d5e', '#38b6ff', '#ffd23f'];
 export const STATUS = {GREEN: 'green', YELLOW: 'yellow', SC: 'yellow', 'SC IN': 'yellow', VSC: 'yellow', 'VSC ENDING': 'yellow', RED: 'red', CHEQUERED: 'chequered'};
 const TYRE_LETTER = {SOFT: 'S', MEDIUM: 'M', HARD: 'H', INTERMEDIATE: 'I', WET: 'W'};
 
-let h, radar = null, trail = [];
+let h, radar = null, trail = [], focusNow = null;
 
 const glass = (cls, ...children) => el('section', {class: `glass ${cls}`}, ...children);
 
@@ -24,7 +25,8 @@ export function setupHud(wrap, {onClose, onErsMode, onDrsTest}) {
     top: el('div', {class: 'hud-top glass'}),
     left: glass('hud-left'),
     deck: el('div', {class: 'hud-deck glass'}),
-    radarSvg: svg('svg', {class: 'radar', role: 'img', 'aria-label': 'Circuit map with car positions'}),
+    radarSvg: svg('svg', {class: 'radar', role: 'img', 'aria-label': 'Circuit map with car positions; click a point to read the focused car there'}),
+    radarInfo: el('div', {class: 'radarinfo', 'aria-live': 'polite'}),
     leds: Array.from({length: LEDS}, () => svg('circle', {r: 3.4})),
     speed: el('b', {class: 'speed'}), gear: el('b', {class: 'gearbig'}), src: el('span', {class: 'src'}),
     thr: el('i'), brk: el('i'), drs: el('span', {class: 'drsmod'}), ers: el('i'), ersPct: el('b'), ersMode: el('span'),
@@ -78,7 +80,7 @@ export function setupHud(wrap, {onClose, onErsMode, onDrsTest}) {
     el('div', {class: 'tmatrix'},
       tyreCell(h.tyres[0], 'fl'), chassis(), tyreCell(h.tyres[1], 'fr'), tyreCell(h.tyres[2], 'rl'), tyreCell(h.tyres[3], 'rr')));
   h.radarPanel = glass('radarpanel', el('div', {class: 'phead'}, 'CIRCUIT',
-    el('span', {class: 'legend'}, ...SECTOR_COLORS.map((c, i) => el('span', {style: `--c:${c}`}, `S${i + 1}`)), el('span', {class: 'drsleg'}, 'DRS'))), h.radarSvg);
+    el('span', {class: 'legend'}, ...SECTOR_COLORS.map((c, i) => el('span', {style: `--c:${c}`}, `S${i + 1}`)), el('span', {class: 'drsleg'}, 'DRS'))), h.radarSvg, h.radarInfo);
   h.right = el('div', {class: 'hud-right'}, h.radarPanel, h.gpanel, h.cluster);
   wrap.append(h.top, h.left, h.right, h.deck);
   // the deck wraps onto more rows as controls are added; the docked panels sit above whatever height it has
@@ -98,6 +100,7 @@ function chassis() {
 // pts: outline [[x, y]] in map coords; sectors: outline indices where S2 and S3 start; zones: [[from, to]] index pairs
 export function setRadar(pts, sectors, zones, drivers, zoneName = 'DRS') {
   h.radarSvg.replaceChildren();
+  h.radarInfo.textContent = '';
   radar = null;
   if (!pts?.length) return;
   const X = pts.map(p => p[0]), Y = pts.map(p => p[1]), x0 = Math.min(...X), y0 = Math.min(...Y);
@@ -114,7 +117,7 @@ export function setRadar(pts, sectors, zones, drivers, zoneName = 'DRS') {
   for (const [a, b] of zones) h.radarSvg.append(svg('polyline', {points: line(a, b), class: 'drszone'}));
   h.radarPanel.querySelector('.drsleg').textContent = zoneName;
   const r = span * 0.014;
-  radar = {dots: {}, ring: svg('circle', {r: r * 2.1, class: 'selring'}), ghost: svg('circle', {r: r * 2.2, class: 'ghost'}),
+  radar = {pts, seen: new Array(pts.length), at: undefined, probe: svg('circle', {r: r * 1.8, class: 'radarprobe', style: 'display:none'}), dots: {}, ring: svg('circle', {r: r * 2.1, class: 'selring'}), ghost: svg('circle', {r: r * 2.2, class: 'ghost'}),
            cursor: svg('circle', {r: r * 1.6, class: 'trcursor'})};
   for (const d of drivers) {
     const dot = svg('circle', {r, fill: d.color, class: 'cardot'});
@@ -122,7 +125,17 @@ export function setRadar(pts, sectors, zones, drivers, zoneName = 'DRS') {
     radar.dots[d.id] = dot;
     h.radarSvg.append(dot);
   }
-  h.radarSvg.append(radar.ghost, radar.ring, radar.cursor);
+  h.radarSvg.append(radar.ghost, radar.ring, radar.cursor, radar.probe);
+  // click a point on the circuit: what the focused car was doing there on its latest pass
+  h.radarSvg.onclick = e => {
+    const m = h.radarSvg.getScreenCTM();
+    if (!m) return;
+    const p = new DOMPoint(e.clientX, e.clientY).matrixTransform(m.inverse()), i = nearestPoint(pts, [p.x, p.y]), q = pts[i], s = radar.seen[i];
+    radar.probe.style.display = '';
+    radar.probe.setAttribute('cx', q[0]);
+    radar.probe.setAttribute('cy', q[1]);
+    h.radarInfo.textContent = s ? `${s.code}: ${Math.round(s.kmh)} km/h, gear ${s.gear === 0 ? 'N' : s.gear}, brake ${Math.round(s.brake ?? 0)}%` : 'Follow a driver past this point to read it';
+  };
   setGhost(null);
   setCursor(null);
 }
@@ -130,6 +143,11 @@ export function setRadar(pts, sectors, zones, drivers, zoneName = 'DRS') {
 // every frame: cars {id: [x, y]} in map coords
 export function renderRadar(cars, selected) {
   if (!radar) return;
+  const carAt = cars[selected];
+  if (carAt && focusNow && focusNow.kmh !== null) {
+    radar.at = nearestPoint(radar.pts, carAt, radar.at);
+    radar.seen[radar.at] = {code: focusNow.d.code, kmh: focusNow.kmh, gear: focusNow.gear, brake: focusNow.brake};
+  }
   for (const [id, dot] of Object.entries(radar.dots)) {
     const p = cars[id];
     dot.style.display = p ? '' : 'none';
@@ -147,6 +165,7 @@ const dash = v => (v === null || v === undefined || Number.isNaN(v) ? '–' : v)
 // f: null, or {d, b, kmh, gear, rpm, throttle, brake, drs: 'off' | 'detected' | 'open' | null, drsName, estimated,
 //              ers: {soc, mode}, g: {gLat, gLong}, tyres: {temps, wear, compound}}
 export function renderFocus(f) {
+  focusNow = f;
   for (const p of [h.cluster, h.gpanel]) p.hidden = !f;
   if (!f) { trail = []; return; }
   const {d, b} = f;
