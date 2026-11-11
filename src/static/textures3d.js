@@ -64,12 +64,55 @@ function photo(name, metres, tile, fallback, res = '1k') {
 // out at 0.5 by the material. Built as RGBA data, not a canvas texture: a canvas stores premultiplied colour, so the
 // transparent pixels would be black and the mip levels would draw dark fringes round every leaf; here they carry the
 // foliage's mean colour instead.
-function foliage(S = 2048) {
+// kind 'lush' is that atlas (conifers and broadleaf trees); 'palm' (right half: one frond, trunk end at its left edge) and
+// 'arid' (left half: a sparse olive-grey crown) draw their own, in the same 2:1 layout.
+function foliage(kind = 'lush', S = 2048) {
   const c = document.createElement('canvas');
   c.width = 2 * S;
   c.height = S;
   const g = c.getContext('2d', {willReadFrequently: true}), u = S / 1024;
   const shade = (k, warm) => `rgb(${Math.round(255 * k * (0.8 + 0.12 * warm))},${Math.round(255 * k)},${Math.round(255 * k * (0.62 - 0.1 * warm))})`;
+  (kind === 'lush' ? lush : dry)(g, S, u, shade, kind);
+  return foliageTex(g, S);
+}
+
+function dry(g, S, u, shade, kind) {
+  g.lineCap = 'round';
+  if (kind === 'palm') {  // a frond: spine along the middle, leaflets slanting to the tip on both sides, no body under it
+    const mid = S / 2, ox = S;
+    g.strokeStyle = '#5a4c30';
+    g.lineWidth = 7 * u;
+    g.beginPath(); g.moveTo(ox, mid); g.lineTo(ox + S * 0.97, mid); g.stroke();
+    for (let x = 20 * u; x < S * 0.96; x += 7 * u) {
+      const len = 0.46 * S * Math.sin(Math.PI * Math.min(1, x / S * 1.04)) ** 0.55 * (0.85 + 0.15 * rand());
+      for (const s of [-1, 1]) {
+        g.strokeStyle = shade(0.5 + 0.45 * rand() * (x / S + 0.4), rand() * 0.4);
+        g.lineWidth = (5 + 3 * rand()) * u;
+        g.beginPath(); g.moveTo(ox + x, mid); g.lineTo(ox + x + len * 0.55, mid + s * len * (0.9 + 0.1 * rand())); g.stroke();
+      }
+    }
+    return;
+  }
+  // arid acacia / shrub: a flat-topped crown of small olive-grey leaf clumps with gaps, on a few grey-brown stems
+  const cx = S / 2, cy = S / 2, R = 440 * u, grey = (k, a) => `rgb(${Math.round(255 * k * (0.78 + 0.1 * a))},${Math.round(255 * k * (0.78 + 0.08 * a))},${Math.round(255 * k * (0.5 + 0.1 * a))})`;
+  g.strokeStyle = '#5c5240';
+  for (let i = 0; i < 14; i++) {
+    const a = rand() * 2 * Math.PI;
+    g.lineWidth = (3 + 4 * rand()) * u;
+    g.beginPath(); g.moveTo(cx, cy + R * 0.2); g.lineTo(cx + Math.cos(a) * R * 0.85, cy + Math.sin(a) * R * 0.5 - R * 0.1); g.stroke();
+  }
+  for (let i = 0; i < 70; i++) {  // clumps: dark core with lighter leaves on top
+    const a = rand() * 2 * Math.PI, r = R * 0.9 * Math.sqrt(rand()), x = cx + Math.cos(a) * r, y = cy + Math.sin(a) * r * 0.5 - R * 0.1;
+    g.fillStyle = grey(0.38 + 0.1 * rand(), rand());
+    g.beginPath(); g.ellipse(x, y, (50 + 40 * rand()) * u, (28 + 20 * rand()) * u, 0, 0, 2 * Math.PI); g.fill();
+    for (let j = 0; j < 40; j++) {
+      g.fillStyle = grey(0.55 + 0.4 * rand() * (1 - (y - cy + R) / (2 * R)), rand());
+      g.beginPath(); g.ellipse(x + (rand() - 0.5) * 110 * u, y + (rand() - 0.5) * 60 * u, (8 + 6 * rand()) * u, (4 + 2 * rand()) * u, rand() * Math.PI, 0, 2 * Math.PI); g.fill();
+    }
+  }
+}
+
+function lush(g, S, u, shade) {
   // broadleaf: dark inner clumps so the crown is solid inside, then leaves, darker in the middle and underneath
   const R = 470 * u, cx = 512 * u, cy = 512 * u;
   for (let i = 0; i < 40; i++) {
@@ -111,6 +154,13 @@ function foliage(S = 2048) {
     }
   };
   g.lineCap = 'round';
+  // a solid dark body under the needles: without it a spray's coverage averaged under the alpha cut-off a few mips down and
+  // the whole conifer dissolved to dust at a distance
+  g.fillStyle = shade(0.3, 0.1);
+  g.beginPath();
+  for (let x = 0; x <= S * 0.93; x += 8 * u) g.lineTo(ox + x, mid - env(x) * 0.62);
+  for (let x = S * 0.93; x >= 0; x -= 8 * u) g.lineTo(ox + x, mid + env(x) * 0.62);
+  g.fill();
   g.lineWidth = 3 * u;
   for (let x = 30 * u; x < S * 0.92; x += (34 + 20 * rand()) * u) {
     for (const s of [-1, 1]) {
@@ -118,7 +168,7 @@ function foliage(S = 2048) {
       g.strokeStyle = '#4a3c2e';
       g.lineWidth = 3 * u;
       g.beginPath(); g.moveTo(ox + x, mid); g.lineTo(ox + tx, ty); g.stroke();
-      g.lineWidth = 2.2 * u;
+      g.lineWidth = 3.4 * u;
       needles(x, mid, tx, ty, (14 + 8 * rand()) * u, Math.ceil(h / (3 * u)), 0.42 + 0.4 * (x / S));
     }
   }
@@ -127,7 +177,9 @@ function foliage(S = 2048) {
   g.beginPath(); g.moveTo(ox, mid); g.lineTo(ox + S * 0.95, mid); g.stroke();
   g.lineWidth = 2.2 * u;
   needles(0, mid, S * 0.95, mid, 18 * u, 900, 0.6);
+}
 
+function foliageTex(g, S) {
   const img = g.getImageData(0, 0, 2 * S, S).data, sum = [0, 0, 0];
   let n = 0;
   for (let i = 0; i < img.length; i += 4 * 61) if (img[i + 3] > 200) { sum[0] += img[i]; sum[1] += img[i + 1]; sum[2] += img[i + 2]; n++; }
@@ -145,23 +197,17 @@ export function textures(high) {
     gravel: photo('gravel_floor', 2.25, 6, speckle('#b8a580', 30000, 0.3), high ? '4k' : '1k'),
     // kerb: red/white blocks a metre long (strip UVs repeat every 2 m) with ridges every 12.5 cm across them
     kerbRidges: normalTex(64, (u, v) => 0.5 * Math.sin(2 * Math.PI * 16 * v), 0.006),
-    // debris fence on the barriers: 8 cm diamond mesh, a post every 4 m (one tile), top and bottom rails. Alpha cut out
-    // at 0.5: the wires are 0.6, so at the first coarser mip they average under the cut-off and drop out together (fully
-    // opaque wires dithered into moiré dots at mid distance), leaving posts and rails.
+    // debris fence on the barriers: 8 cm diamond mesh; stanchions and rails are real geometry (trackside.js, circuit3d.js)
     fence: canvasTex(512, 384, (g, w, h) => {
-      g.strokeStyle = 'rgba(163,168,173,0.6)';
+      g.strokeStyle = 'rgba(150,155,160,0.75)';
       g.lineWidth = 2;
       for (let x = -h; x < w + h; x += 10) {
         g.beginPath(); g.moveTo(x, 0); g.lineTo(x + h, h); g.moveTo(x, h); g.lineTo(x + h, 0); g.stroke();
       }
-      g.fillStyle = '#6d7277';
-      g.fillRect(0, 0, 14, h);  // post
-      g.fillRect(0, 0, w, 6);   // top rail
-      g.fillRect(0, h - 6, w, 6);
     }),
     // relief for the terrain under its satellite / grass colour: tufts and soil in the normal and roughness maps
     ground: photo('sparse_grass', 3, 0, speckle('#5a7a3a', 2000, 0.2), high ? '4k' : '2k'),
-    foliage: foliage(),
+    foliageOf: (cache => kind => cache[kind] ??= foliage(kind))({}),  // atlas per tree kind, drawn when a circuit first needs it
     grass: canvasTex(256, 256, (g, w, h) => {  // plain speckle: mowing stripes shimmer from a distance
       g.fillStyle = '#427f31';
       g.fillRect(0, 0, w, h);
@@ -171,18 +217,47 @@ export function textures(high) {
       }
     }),
     kerb: canvasTex(8, 64, (g, w, h) => {
-      g.fillStyle = '#c4161c';
+      g.fillStyle = '#a30d12';  // the tone curve lifts red towards salmon
       g.fillRect(0, 0, w, h / 2);
       g.fillStyle = '#e8e8e4';
       g.fillRect(0, h / 2, w, h / 2);
     }),
-    wall: canvasTex(128, 32, (g, w, h) => {
-      g.fillStyle = '#1f3f8f';
-      g.fillRect(0, 0, w / 2, h);
-      g.fillStyle = '#ececec';
-      g.fillRect(w / 2, 0, w / 2, h);
-      g.fillStyle = '#222';
-      g.fillRect(0, h * 0.82, w, h * 0.18);
+    // one 8 m tile of barrier, 1.1 m tall: two boards on a concrete base, tyre scuffs low down, a joint at each block
+    wall: canvasTex(2048, 282, (g, w, h) => {
+      const boardH = h * 0.8;
+      [['#16181d', '#f2f2f2'], ['#eeeeec', '#16181d']].forEach(([back, ink], k) => {
+        const x = k * w / 2;
+        g.fillStyle = back;
+        g.fillRect(x, 0, w / 2, boardH);
+        g.fillStyle = '#c4161c';
+        g.fillRect(x, boardH - 10, w / 2, 10);
+        g.fillStyle = ink;
+        g.font = '800 italic 112px Geist, system-ui, sans-serif';
+        g.textAlign = 'center';
+        g.textBaseline = 'middle';
+        g.fillText('LIGHTS OUT', x + w / 4, boardH / 2 + 2);
+      });
+      g.fillStyle = '#7d7f82';
+      g.fillRect(0, boardH, w, h - boardH);
+      for (let i = 0; i < 90; i++) {  // rubber and dirt
+        g.fillStyle = `rgba(15,15,15,${0.04 + 0.1 * rand()})`;
+        g.fillRect(rand() * w, h * (0.55 + 0.45 * rand()), 40 + rand() * 260, 2 + rand() * 7);
+      }
+      g.fillStyle = 'rgba(0,0,0,0.5)';
+      for (const x of [0, w / 2]) g.fillRect(x - 2, 0, 4, h);
+    }),
+    // three-rail Armco, 1.1 m tall: 8 m of rails over dark gaps, each rail bright along its bulge
+    armco: canvasTex(256, 128, (g, w, h) => {
+      g.fillStyle = '#34363a';
+      g.fillRect(0, 0, w, h);
+      for (let k = 0; k < 3; k++) {
+        const y = 6 + k * 42, rail = g.createLinearGradient(0, y, 0, y + 34);
+        rail.addColorStop(0, '#6e7278'); rail.addColorStop(0.5, '#c8ccd2'); rail.addColorStop(1, '#5c6066');
+        g.fillStyle = rail;
+        g.fillRect(0, y, w, 34);
+      }
+      g.fillStyle = '#2a2c30';
+      for (const x of [0, w / 2]) g.fillRect(x, 0, 6, h);
     }),
     checker: canvasTex(64, 16, (g, w, h) => {
       for (let x = 0; x < 8; x++) for (let y = 0; y < 2; y++) {

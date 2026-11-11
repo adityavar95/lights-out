@@ -1,6 +1,7 @@
 /* circuit selector (circuitdeck.js): a glass deck over the 3D stage, a grid of circuit cards */
 .circuitdeck { position: absolute; z-index: 4; inset: 64px 24px calc(var(--deck-h, 64px) + 18px); display: flex; flex-direction: column;
   gap: 8px; padding: 8px 12px; color: var(--hud-ink); animation: cdin var(--panel-t); }
+.glass.circuitdeck { background: rgb(14 14 14 / .96); }  /* the race HUD's text behind it made the cards unreadable */
 .circuitdeck[hidden] { display: none; }
 @keyframes cdin { from { transform: translateY(-14px) scale(.98); opacity: 0; } }
 .circuitdeck .pwhead .phead { margin: 0; }
@@ -71,12 +72,12 @@
 @media (max-width: 1100px) { .tdbody { grid-template-columns: 1fr 150px; } .teledrawer { position: static; order: 1; } }
 
 /* what the stage is still fetching */
-.loadstage { position: absolute; top: 60px; left: 50%; transform: translateX(-50%); z-index: 7; padding: 8px 12px; min-width: 300px; color: #eef0f4; font-size: 12px; pointer-events: none; }
-.lsrow { display: grid; grid-template-columns: 1fr 90px auto; gap: 8px; align-items: center; padding: 2px 0; }
+.loadstage { position: absolute; top: 60px; left: 50%; transform: translateX(-50%); z-index: 7; padding: 12px 16px; min-width: 320px; color: var(--hud-ink); border-radius: var(--dp-radius-panel); font-size: 12px; pointer-events: none; }
+.lsrow { display: grid; grid-template-columns: 1fr 90px auto; gap: 12px; align-items: center; padding: 4px 0; }
 .lsrow i { height: 3px; border-radius: 2px; background: rgb(255 255 255 / .14); overflow: hidden; }
-.lsrow b { display: block; height: 100%; background: #fff; }
-.lsrow[data-state=offline] b { background: #e6a23c; }
-.lsrow small { color: #aab0bc; }
+.lsrow b { display: block; height: 100%; background: var(--hud-ink); }
+.lsrow[data-state=offline] b { background: var(--f1-yellow); }
+.lsrow small { color: var(--hud-muted); }
 
 .trow .chg { margin-left: 4px; font-size: 12px; font-weight: 500; color: #ff6b70; }
 .trow .chg[data-up=true] { color: #2fd06f; }

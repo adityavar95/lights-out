@@ -202,7 +202,7 @@ def race_track(year: int, round: int):
         raise HTTPException(502, f"Track map request failed: {e}")
     if t is None:
         raise HTTPException(404, f"No track map available for {c['circuitName']}")
-    return t
+    return {**t, "lat": float(c["Location"]["lat"])}  # circuits.js biome(): what grows round an unlisted circuit
 
 
 @lru_cache(maxsize=64)
@@ -420,12 +420,13 @@ def f1tv_telemetry(year: int, round: int, driver: int, session: str = "Race"):
         raise HTTPException(502, f"Telemetry request failed: {e}")
 
 
-@app.get("/api/f1tv/radio/{year}/{round}/{driver}")
-def f1tv_radio(year: int, round: int, driver: int, session: str = "Race", x_f1_token: str | None = Header(None)):
-    """A driver's team radio as text (radio.py) for the multiviewer's onboard tiles: clips so far, each with its words
-    once transcribed. The caller's F1 TV token fetches the audio, which F1 refuses without one."""
+@app.get("/api/f1tv/radio/{year}/{round}")
+def f1tv_radio(year: int, round: int, session: str = "Race", driver: int | None = None, x_f1_token: str | None = Header(None)):
+    """Team radio as text (radio.py) for the multiviewer's radio panel: every driver's clips so far (or one driver's),
+    each with its words once transcribed, and the drivers' codes, team colours and headshots. The caller's F1 TV token
+    fetches the audio, which F1 refuses without one."""
     if year < 2023:
-        return {"clips": [], "pending": 0, "error": None}  # OpenF1 has team radio from 2023
+        return {"clips": [], "drivers": {}, "pending": 0, "error": None}  # OpenF1 has team radio from 2023
     race = race_info(year, round)
     try:
         names = [session, "Sprint Shootout"] if session == "Sprint Qualifying" else [session]

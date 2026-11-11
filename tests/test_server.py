@@ -304,18 +304,18 @@ with tempfile.TemporaryDirectory() as tmp:
     radio.DIR = Path(tmp)
     try:
         radio.openf1 = lambda path: [{"date": "2026-10-25T20:05:00+00:00", "recording_url": "https://livetiming.formula1.com/static/a.mp3"}]
-        assert radio.clips({"session_key": 1, "date_end": "2026-10-25T22:00:00+00:00"}, "Race", 2026, 44) == [(1792958700.0, "https://livetiming.formula1.com/static/a.mp3")]
+        assert radio.clips({"session_key": 1, "date_end": "2026-10-25T22:00:00+00:00"}, "Race", 2026, 44) == [(1792958700.0, "https://livetiming.formula1.com/static/a.mp3", 44)]
         def locked(path): raise _rp.OpenF1Locked("live")
         radio.openf1 = locked
         radio.live.radio = lambda: ({"Name": "Practice 1", "Path": "2026/x/y/"}, [
             {"Utc": "2026-10-30T12:40:00.1Z", "RacingNumber": "44", "Path": "TeamRadio/HAM.mp3"},
             {"Utc": "2026-10-30T12:41:00Z", "RacingNumber": "16", "Path": "TeamRadio/LEC.mp3"}])
-        assert radio.clips({"session_key": 2, "date_end": "2026-10-25T22:00:00+00:00"}, "Practice 1", 2026, 44) == [(1793364000.1, "https://livetiming.formula1.com/static/2026/x/y/TeamRadio/HAM.mp3")]
+        assert radio.clips({"session_key": 2, "date_end": "2026-10-25T22:00:00+00:00"}, "Practice 1", 2026, 44) == [(1793364000.1, "https://livetiming.formula1.com/static/2026/x/y/TeamRadio/HAM.mp3", 44)]
         assert radio.clips({"session_key": 2, "date_end": "2026-10-25T22:00:00+00:00"}, "Practice 2", 2026, 44) == []  # the feed is on another session
         # transcription off (as shipped): F1's clips with their audio urls, nothing queued, no words
         radio.TRANSCRIBE = False
         r = radio.radio({"session_key": 2, "date_end": "2026-10-25T22:00:00+00:00"}, "Practice 1", 2026, 44, "tok")
-        assert r == {"clips": [{"t": 1793364000.1, "url": "https://livetiming.formula1.com/static/2026/x/y/TeamRadio/HAM.mp3", "text": None, "error": None}],
+        assert r == {"clips": [{"t": 1793364000.1, "url": "https://livetiming.formula1.com/static/2026/x/y/TeamRadio/HAM.mp3", "driver": 44, "text": None, "error": None}],
                      "pending": 0, "error": None, "transcribe": False}, r
         assert not radio._queued
         for bad in ["https://evil.example/a.mp3", "https://livetiming.formula1.com/static/../x", "file:///etc/passwd",
@@ -615,11 +615,11 @@ try:
     def timeout(year): raise TimeoutError("read timed out")
     server.races = timeout
     assert client.get("/api/track/2020/1").status_code == 502
-    assert client.get("/api/f1tv/radio/2024/1/1").status_code == 502
+    assert client.get("/api/f1tv/radio/2024/1?driver=1").status_code == 502
     assert client.get("/api/circuit/spa").status_code == 502
     server.races = lambda year: ({"round": "1", "date": f"{year}-03-08", "raceName": "X", "Circuit": {"circuitId": "spa"}},)
     assert client.get("/api/track/2020/2").status_code == 404
-    assert client.get("/api/f1tv/radio/2024/2/1").status_code == 404
+    assert client.get("/api/f1tv/radio/2024/2?driver=1").status_code == 404
     # L-M15: elevation looks at newer years whatever the race's, like the track and pit lane routes
     newest = []
     server._elevation_at = lambda c, y: newest.append(y) or {"x": []}

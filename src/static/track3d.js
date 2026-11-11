@@ -35,7 +35,7 @@ export const noise = Fn(([p]) => {
 // 0.04), so metalness stays 0: the mirror look is smoothness plus Fresnel, strongest at the grazing angles a camera sees.
 // maps: {map, normalMap, roughnessMap} (textures3d.js)
 export function asphalt(maps, half) {
-  const mat = new THREE.MeshPhysicalNodeMaterial({color: 0xd0d6e0, side: THREE.DoubleSide, clearcoatRoughness: 0.05, ior: 1.5});
+  const mat = new THREE.MeshPhysicalNodeMaterial({color: 0xc4d0dc, side: THREE.DoubleSide, clearcoatRoughness: 0.05, ior: 1.5});
   const rubberAmount = uniform(0.3), wetLine = uniform(0), wetOff = uniform(0), normalScale = uniform(1);
   mat.userData = {rubber: rubberAmount, wetLine, wetOff, normalScale};
   const track = uv().mul(4);  // 4 m tiles

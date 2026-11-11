@@ -5,7 +5,7 @@
 .lab-controls[hidden] { display: none; }
 
 .lapchart .zero { stroke: var(--muted); stroke-width: 1.5; }
-.lapchart .sc { fill: var(--yellow); opacity: .16; }
+.lapchart .sc { fill: light-dark(rgb(0 0 0 / .06), rgb(255 255 255 / .08)); }
 .lapchart.trace .series .endlabel { paint-order: stroke; stroke: var(--panel); stroke-width: 3px; stroke-linejoin: round; }
 .legenditem[aria-pressed=true] { background: var(--ink); color: var(--bg); }  /* as .pill.on; the rim can't change colour */
 

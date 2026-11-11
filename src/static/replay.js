@@ -6,7 +6,7 @@ import {setupStory} from './storypanel.js';
 import {nextMoment} from './moments.js';
 import {markLayer, gpsMarks, lapMarks, NO_MARKS} from './scrubmarks.js';
 import {get, el, rows, failed, teamColor, fmtClock, fmtLap, lastBefore, trackStatus, led, covered, dropUp, count} from './util.js';
-import {init3d, setTrack, setCars, updateCars, setView, setParts, setTyre, setGround, setPitLane, setStartLights, nextSky, nextTier, announce, hasCockpitWheel} from './scene3d.js';
+import {init3d, setTrack, setCars, updateCars, setView, setParts, setTyre, setGround, setPitLane, setStartLights, setDaylight, nextSky, nextTier, announce, hasCockpitWheel} from './scene3d.js';
 import {setupOnboard, setCameraUi, setWheelAngle, nextCamera} from './onboard.js';
 import {fetchLive, liveInfo, liveDrivers, liveFeeds, liveStatus, liveClock, liveState, liveGps, hasGps, gpsAt, liveCar, resetGps} from './live.js';
 import {setupDrawer, toggleDrawer, updateDrawer} from './teledrawer.js';
@@ -117,9 +117,9 @@ export function setupReplay(root, copyView) {
     el('button', {class: 'neu', title: 'Back to the full replay (Esc)', onclick: () => stopReel()}, 'Exit'));
   ui.stage.append(ui.startLights, ui.reelBar);
   hud.left.append(el('div', {class: 'towerhead'}, el('span', {}, 'TIMING'), ui.colBtn), el('div', {class: 'towerscroll'}, ui.tower));
-  // the deck itself: session, play, speed, position, camera. Cinematic, sound and the telemetry trace sit in the ⋯ menu
+  // the deck itself: session, play, speed, position, camera. Cinematic and the telemetry trace sit in the ⋯ menu; sound and graphics in Settings, top right
   const moreBtn = el('button', {class: 'neu', popovertarget: 'moremenu', 'aria-haspopup': 'true', 'aria-expanded': false,
-    title: 'More: cinematic view, commentary, sound, telemetry trace', 'aria-label': 'More controls'}, '⋯');
+    title: 'More: cinematic view, commentary, telemetry trace', 'aria-label': 'More controls'}, '⋯');
   hud.more = el('div', {class: 'deckmenu', id: 'moremenu', popover: 'auto', 'aria-label': 'More controls'}, el('div', {class: 'deckgroup'}, ui.view, commentaryUi(),
     el('button', {class: 'neu', title: 'Copy a link to this moment of the replay', onclick: () => { hud.more.hidePopover(); copyView(); }}, 'Copy link')));
   hud.more.addEventListener('click', e => e.target.closest('[aria-controls=tracedeck]') && hud.more.hidePopover());  // the trace panel takes over
@@ -199,16 +199,25 @@ export async function showRace(year, round, sessions, sim = false) {
   const f1 = f1Coords(S.track);
   drawTrack(S.track?.x, S.track?.y, S.track?.rotation ?? 0, S.track?.corners ?? [], f1, f1 ? 0.1 : 1);
   if (ui.has3d && S.track) setGround(year, round);  // satellite imagery, when it loads
+  // the race row: session times (this season's "hasn't run yet") and the circuit's lat/long (the sky's sun, the Simulation's
+  // too); app.js has this season's list already, and an older one is a single cached request
+  S.race = await get(`/api/jolpica/${year}/races`).then(l => rows(l).find(r => +r.round === +round), () => null);
+  if (token !== S.token) return;
+  daylight();
   if (sim) {  // the circuit selector: straight into a Simulation
     ui.session.value = SIM;
     ui.play.disabled = false;
     return loadData(true);
   }
-  if (year >= new Date().getFullYear()) {  // the app has this calendar already
-    S.race = await get(`/api/jolpica/${year}/races`).then(l => rows(l).find(r => +r.round === +round), () => null);
-    if (token !== S.token) return;
-  }
   idleHint();
+}
+
+// the sky's sun: a GPS replay's clock start, else Jolpica's session time (the Simulation's: the race's; before 2005 Jolpica
+// has no times, and sessionStart's midnight stand-in would make night of every old race), else midday
+function daylight(start = null) {
+  if (!ui.has3d) return;
+  const s = ui.session.value === SIM ? 'Race' : ui.session.value;
+  setDaylight(+S.race?.['Circuit.Location.lat'], +S.race?.['Circuit.Location.long'], start || (S.race?.time ? sessionStart(S.race, s) : null));
 }
 
 const ahead = () => sessionStart(S.race, ui.session.value) > Date.now();
@@ -666,6 +675,7 @@ const nearest = p => {  // outline index closest to a map point
 
 function prepare(data) {
   S.data = data;
+  daylight(data.start && new Date(data.start));
   S.tele = {};  // all per session: a lap-timing replay has no lapsBy of its own, and tower.js would read the last session's
   S.lapsBy = S.focus = undefined;
   S.drivers = data.drivers.map(d => ({...d, color: d.color || teamColor(d.teamId, d.team)}));

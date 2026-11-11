@@ -95,7 +95,7 @@ async function pick(year) {
   D.title.replaceChildren(el('b', {}, chassis), el('small', {}, ` ${year}`));
   D.spec.replaceChildren(...[badge('ENGINE', `${supplier} ${e.name}`), badge('REV LIMIT', `${e.rpmMax.toLocaleString()} rpm`),
     badge('POWER', `≈${hp} hp`), badge('MIN WEIGHT', `${e.minMass} kg`), badge('POWER / WEIGHT', `≈${(hp / e.minMass).toFixed(2)} hp/kg`),
-    badge('WHEELBASE', `≈${Math.round(s.wb * 1000)} mm`), badge('RIMS', s.rim > 0.2 ? '18"' : '13"'),
+    badge('WHEELBASE', `≈${Math.round(s.wb * 1000)} mm`), badge('RIMS', `${s.inch}"`),
     badge('TYRES', s.grooves ? 'grooved' : 'slick'), badge('ERS', e.pK ? `${e.pK / 1e3} kW` : 'none'), year >= 2026 ? badge('OVERTAKE', 'active aero') : badge('DRS', e.drs ? 'yes' : 'no'),
     note && badge('INNOVATION', note)].filter(Boolean));
   D.team.replaceChildren(new Option(team, team));

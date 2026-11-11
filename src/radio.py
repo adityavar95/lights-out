@@ -1,8 +1,8 @@
 """Team radio as text, for the F1 TV viewer's driver onboards. Neither F1 nor OpenF1 publishes words, only audio clips:
 the clip list comes from OpenF1 once a session is over (it locks everything while one is live) or from F1's live feed
 (`TeamRadio`) during one; the audio sits on F1's livetiming server, which refuses it without an F1 TV sign-in (401), so
-it's fetched with the caller's subscription token; the words come from a local speech-to-text model (faster-whisper,
-on the GPU where CUDA is there). Each clip is transcribed once, on one background thread, and kept on disk."""
+it's fetched with the caller's subscription token; the words come from a local speech-to-text model (NVIDIA Parakeet
+TDT 0.6B v3). Each clip is transcribed once, on one background thread, and kept on disk."""
 import hashlib
 import json
 import queue
@@ -21,12 +21,10 @@ from replay import CACHE, OpenF1Locked, _finished, openf1, save
 
 HOST = "livetiming.formula1.com"
 STATIC = f"https://{HOST}/static/"
-DIR = CACHE.parent / "radio"
-MODEL = "small.en"  # ~0.5 GB, downloaded on first use; radio is English and noisy, the tiny models garble it
-# F1 words the model otherwise hears as everyday ones ("box" as "books", "DRS" as "DOS")
-PROMPT = ("Formula 1 team radio. Box, box. Copy. Softs, mediums, hards, inters. DRS, delta, gap, P1, safety car, VSC, push. "
-          "Verstappen, Hamilton, Leclerc, Norris, Piastri, Russell, Antonelli, Alonso, Stroll, Gasly, Ocon, Albon, Sainz, "
-          "Hulkenberg, Bortoleto, Bearman, Hadjar, Lawson, Lindblad, Colapinto, Perez, Bottas.")
+DIR = CACHE.parent / "radio" / "parakeet"  # Whisper's older transcripts sit one folder up, not reused
+MODEL = "nemo-parakeet-tdt-0.6b-v3"  # onnx-asr's name for it
+MODEL_REPO = "istupakov/parakeet-tdt-0.6b-v3-onnx"  # nvidia/parakeet-tdt-0.6b-v3 exported to ONNX (NeMo itself won't run here)
+MODEL_DIR = CACHE.parent / "parakeet"
 
 _jobs: queue.Queue = queue.Queue()
 _queued: set = set()
@@ -38,7 +36,7 @@ _rows: dict = {}  # (session_key, driver) -> (asked at, or None for good; OpenF1
 _lock = threading.Lock()
 _worker: threading.Thread | None = None
 _model = None
-IDLE = 120  # s without a clip to transcribe before the model is unloaded (reloading it takes ~1-2 s)
+IDLE = 120  # s without a clip to transcribe before the model is unloaded (reloading it takes a few s)
 
 
 def _path(url: str) -> Path:
@@ -54,47 +52,23 @@ def entry(url: str) -> dict | None:
         return None
 
 
-@lru_cache(maxsize=1)  # the model reloads after IDLE, and PATH mustn't grow each time
-def _cuda_dlls():
-    """CUDA's cuBLAS/cuDNN from their pip wheels (nvidia-cublas-cu12, nvidia-cudnn-cu12) keep their DLLs in
-    site-packages/nvidia/*/bin, where Windows doesn't look; ctranslate2 loads them by name at the first clip."""
-    import importlib.util
-    import os
-    import sys
-    if sys.platform != "win32":
-        return
-    for pkg in ("nvidia.cublas", "nvidia.cudnn"):
-        spec = importlib.util.find_spec(pkg)
-        for root in (spec.submodule_search_locations or []) if spec else []:
-            bin_dir = Path(root) / "bin"
-            if bin_dir.is_dir():
-                os.add_dll_directory(str(bin_dir))
-                os.environ["PATH"] = str(bin_dir) + os.pathsep + os.environ.get("PATH", "")  # plain LoadLibrary reads PATH
-
-
 def _load():
-    """The model on the GPU where CUDA's cuBLAS/cuDNN libraries load (~0.2 s a clip), else on the CPU (~4.5 s for a
-    9 s clip, measured): a GPU with no CUDA libraries installed only fails at the first clip, so it's tried here."""
+    """NVIDIA's Parakeet TDT 0.6B v3 (nvidia/parakeet-tdt-0.6b-v3) as ONNX, run by onnx-asr on the CPU: ~1.4 s for an
+    8 s clip, measured on the 2026 São Paulo race. Its int8 build is faster but garbled the same clip ("risk of rain"
+    as "risk of read"). Kept in .cache/parakeet (~2.5 GB, downloaded on first use): from the Hugging Face cache, whose
+    files are links into a blob store, ONNX Runtime refuses the encoder's external weights."""
     global _model
     if _model is None:
-        _cuda_dlls()
-        from faster_whisper import WhisperModel  # heavy import: only once a clip needs it
-        import ctranslate2
-        import numpy as np
-        if ctranslate2.get_cuda_device_count() > 0:
-            try:
-                m = WhisperModel(MODEL, device="cuda", compute_type="float16")
-                list(m.transcribe(np.random.default_rng(0).normal(0, 0.01, 16000).astype(np.float32), vad_filter=False)[0])
-                _model = m
-            except Exception:  # e.g. "cublas64_12.dll is not found"
-                pass
-        _model = _model or WhisperModel(MODEL, device="cpu", compute_type="int8")
+        import onnx_asr  # heavy import: only once a clip needs it
+        from huggingface_hub import snapshot_download
+        d = snapshot_download(MODEL_REPO, local_dir=MODEL_DIR, allow_patterns=["*.json", "*.txt", "nemo128.onnx",
+                                                                               "encoder-model.onnx*", "decoder_joint-model.onnx"])
+        _model = onnx_asr.load_model(MODEL, d, providers=["CPUExecutionProvider"])
     return _model
 
 
 def decode(audio):
-    """A clip (path or file-like, any format ffmpeg reads) as 16 kHz mono float samples, what the model takes.
-    faster-whisper 1.2.1's own decoder passes PyAV an argument (metadata_errors) PyAV 19 no longer has."""
+    """A clip (path or file-like, any format ffmpeg reads) as 16 kHz mono float samples, what the model takes."""
     import av
     import numpy as np
     out = av.AudioResampler(format="s16", layout="mono", rate=16000)
@@ -106,8 +80,8 @@ def decode(audio):
 
 def transcribe(audio) -> dict:
     """A clip's words, {text} (a path or file-like, any format ffmpeg reads)."""
-    segments, _ = _load().transcribe(decode(audio), beam_size=5, vad_filter=True, initial_prompt=PROMPT, condition_on_previous_text=False)
-    return {"text": " ".join(x.text.strip() for x in segments).strip()}
+    x = decode(audio)
+    return {"text": _load().recognize(x, sample_rate=16000).strip() if len(x) else ""}
 
 
 def clip_url(url: str) -> str:
@@ -133,7 +107,7 @@ def _work():
     while True:
         try:
             url, token = _jobs.get(timeout=IDLE)
-        except queue.Empty:  # no clips for a while: free the model (~0.5 GB of RAM, or the GPU's) until the next one
+        except queue.Empty:  # no clips for a while: free the model (~2.5 GB of RAM) until the next one
             _model = None
             continue
         try:
@@ -188,51 +162,79 @@ def started(published: float, url: str) -> float:
     return published - delay if delay < 300 else published
 
 
-def _team_radio(session: dict, driver: int) -> list | None:
-    """OpenF1's rows for one driver, or None while it's locked; the viewer polls per onboard and OpenF1 allows ~30 req/min."""
-    key = (session["session_key"], driver)
+def _openf1_rows(session: dict, endpoint: str, driver: int | None = None) -> list | None:
+    """OpenF1's rows for this session (one driver's, or all), kept until it's over (then for good), or None while it's
+    locked: the viewer polls, and OpenF1 allows ~30 req/min."""
+    key = (session["session_key"], driver if endpoint == "team_radio" else endpoint)
     hit = _rows.get(key)
     if hit and (hit[0] is None or time.time() - hit[0] < ROWS_TTL):
         return hit[1]
     try:
-        rows = openf1(f"team_radio?session_key={session['session_key']}&driver_number={driver}")
+        rows = openf1(f"{endpoint}?session_key={session['session_key']}" + (f"&driver_number={driver}" if driver else ""))
     except OpenF1Locked:
         rows = None
     _rows[key] = (None if rows and _finished(session) else time.time(), rows)
     return rows
 
 
-def clips(session: dict | None, session_name: str, year: int, driver: int) -> list:
-    """[(unix seconds it was said, audio url)] for one driver: OpenF1's once the session is over, else the live feed's
-    when it's running this session (OpenF1 is locked while it's live)."""
+def _feed(session_name: str, year: int) -> tuple:
+    """(SessionInfo, clips) from F1's live feed when it's carrying this session, else (None, [])."""
     info, caps = live.radio()
-    on_feed = info and info.get("Name") == session_name and str(info.get("Path", "")).startswith(f"{year}/")
-    if session and not (on_feed and (live.status() or {}).get("live")):  # running on the feed: OpenF1 would only refuse
-        rows = _team_radio(session, driver)
+    on = info and info.get("Name") == session_name and str(info.get("Path", "")).startswith(f"{year}/")
+    return (info, caps) if on else (None, [])
+
+
+def clips(session: dict | None, session_name: str, year: int, driver: int | None = None) -> list:
+    """[(unix seconds it was said, audio url, driver number)] for one driver, or every driver with None: OpenF1's once
+    the session is over, else the live feed's when it's running this session (OpenF1 is locked while it's live)."""
+    info, caps = _feed(session_name, year)
+    if session and not (info and (live.status() or {}).get("live")):  # running on the feed: OpenF1 would only refuse
+        rows = _openf1_rows(session, "team_radio", driver)
         if rows is not None:
-            return sorted((started(_ts(r["date"]), r["recording_url"]), r["recording_url"]) for r in rows)
-    if on_feed:
-        urls = [(_ts(c["Utc"]), STATIC + info["Path"] + c["Path"]) for c in caps if str(c.get("RacingNumber")) == str(driver)]
-        return sorted((started(t, u), u) for t, u in urls)
+            return sorted((started(_ts(r["date"]), r["recording_url"]), r["recording_url"], int(r.get("driver_number") or driver))
+                          for r in rows)
+    if info:
+        urls = [(_ts(c["Utc"]), STATIC + info["Path"] + c["Path"], int(c["RacingNumber"]))
+                for c in caps if driver is None or str(c.get("RacingNumber")) == str(driver)]
+        return sorted((started(t, u), u, d) for t, u, d in urls)
     return []
 
 
-# Each message's words in the onboard's radio list (the user's call): F1 publishes none, so speech-to-text, every clip of
-# the driver queued as the list asks for it (GPU: ~0.5 s a clip). False: the list has F1's clips to play, no words.
+def drivers(session: dict | None, session_name: str, year: int) -> dict:
+    """{number: {tla, name, team, colour, headshot}} for the radio panel's driver cards: the live feed's DriverList while
+    it's carrying this session, else OpenF1's drivers (F1's headshots either way); {} when neither answers."""
+    info, _ = _feed(session_name, year)
+    if info:
+        return {int(k): {"tla": d.get("Tla"), "name": " ".join(filter(None, (d.get("FirstName"), d.get("LastName")))) or None,
+                         "team": d.get("TeamName"), "colour": d.get("TeamColour"), "headshot": d.get("HeadshotUrl")}
+                for k, d in live.driver_list().items() if isinstance(d, dict) and str(k).isdigit()}
+    rows = _openf1_rows(session, "drivers") if session else None
+    return {int(r["driver_number"]): {"tla": r.get("name_acronym"), "name": r.get("full_name") and r["full_name"].title(),
+                                      "team": r.get("team_name"), "colour": r.get("team_colour"), "headshot": r.get("headshot_url")}
+            for r in rows or [] if r.get("driver_number")}
+
+
+# Each message's words in the viewer's radio panel (the user's call): F1 publishes none, so speech-to-text, every clip of
+# the driver queued as the list asks for it (~1.4 s a clip). False: the list has F1's clips to play, no words.
 TRANSCRIBE = True
 
 
-def radio(session: dict | None, session_name: str, year: int, driver: int, token: str | None) -> dict:
-    """{clips: [{t (when it was said), url, text, error}], pending, error, transcribe}: what the viewer shows. url:
-    F1's audio, played through /api/f1tv/radio/audio; text null with transcription off, or while it's being transcribed;
-    error: why this clip has no words (it's tried again after RETRY s), else null."""
+def radio(session: dict | None, session_name: str, year: int, driver: int | None, token: str | None) -> dict:
+    """{clips: [{t (when it was said), url, driver, text, error}], pending, error, transcribe}, plus drivers
+    (radio.drivers) when it's every driver's (driver None): what the viewer's radio panel shows. url: F1's audio, played
+    through /api/f1tv/radio/audio; text null with transcription off, or while it's being transcribed; error: why this
+    clip has no words (it's tried again after RETRY s), else null."""
     cs = clips(session, session_name, year, driver)
     if TRANSCRIBE:
-        queue_clips([u for _, u in cs], token)
+        queue_clips([u for _, u, _ in reversed(cs)], token)  # newest first: on a live session that's what's being said
     why = lambda u: _errors[u][1] if u in _errors else None
-    out = [{"t": t, "url": u, "text": (e := entry(u)) and e["text"] if TRANSCRIBE else None, "error": why(u)} for t, u in cs]
-    errs = {why(u) for _, u in cs if u in _errors}
-    return {"clips": out, "pending": sum(1 for _, u in cs if u in _queued), "error": next(iter(errs), None), "transcribe": TRANSCRIBE}
+    out = [{"t": t, "url": u, "driver": d, "text": (e := entry(u)) and e["text"] if TRANSCRIBE else None, "error": why(u)}
+           for t, u, d in cs]
+    errs = {why(u) for _, u, _ in cs if u in _errors}
+    r = {"clips": out, "pending": sum(1 for _, u, _ in cs if u in _queued), "error": next(iter(errs), None), "transcribe": TRANSCRIBE}
+    if driver is None:
+        r["drivers"] = drivers(session, session_name, year)
+    return r
 
 
 def audio(url: str, token: str | None) -> bytes:

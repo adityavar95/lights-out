@@ -12,22 +12,14 @@ import {smaa} from 'three/addons/tsl/display/SMAANode.js';
 const EXPOSURE = 1 / 100;  // simulated camera shutter time, s: a broadcast camera's (1/60 smeared fast pans and the ground)
 const SENSOR = 0.024;      // m, full-frame sensor height: with the camera's vertical fov it gives the focal length
 const BLUR_TAPS = 16, DOF_TAPS = 32;
-const PUNCH = 1.35, SATURATION = 1.4;  // Blender's AgX "Punchy" look: AgX alone has lifted blacks and pale colours
 const MAX_BLUR = 0.035;    // of the screen: the longest streak, so one wild motion vector can't smear half the frame
-
-// G cycles these. Each drops what costs most for what it gives. `ss`: whether scene3d.js may supersample.
-export const TIERS = [
-  {name: 'Ultra', ao: true, dof: true, blur: true, smaa: true, ss: true},
-  {name: 'High', ao: true, dof: true, blur: true, smaa: true, ss: false},
-  {name: 'Medium', ao: false, dof: false, blur: true, smaa: true, ss: false},
-  {name: 'Low', ao: false, dof: false, blur: false, smaa: false, ss: false},
-];
 
 const ign = () => fract(dot(screenCoordinate.xy, vec2(0.06711056, 0.00583715)).mul(52.9829189));  // interleaved gradient noise
 
-export function createPost(renderer, scene, camera, samples = 4) {
+// options: graphics.js's msaa, smaa, ao, dof, blur, bloom, lens, contrast, saturation
+export function createPost(renderer, scene, camera, options) {
   // MSAA here, not on the canvas: edges of wishbones, fences and track lines are resolved while the values are still HDR
-  const scenePass = pass(scene, camera, {samples});
+  const scenePass = pass(scene, camera, {samples: options.msaa ? 4 : 0});
   // Velocity blends by its own alpha: a solid surface writes alpha 1, and an effect (vfx.js noVelocity) writes 0 and leaves the
   // surface's vector. Without this every smoke puff stamped one vector over its whole disc, and the blur smeared the car under it.
   const keepUnder = Object.assign(new THREE.BlendMode(THREE.CustomBlending), {blendSrc: THREE.SrcAlphaFactor, blendDst: THREE.OneMinusSrcAlphaFactor});
@@ -35,6 +27,8 @@ export function createPost(renderer, scene, camera, samples = 4) {
   const color = scenePass.getTextureNode('output'), depth = scenePass.getTextureNode('depth'), vel = scenePass.getTextureNode('velocity');
   const glow = scenePass.getTextureNode('emissive');
 
+  // contrast and saturation: Blender's AgX "Punchy" look by default, since AgX alone has lifted blacks and pale colours
+  const uPunch = uniform(options.contrast), uSaturation = uniform(options.saturation);
   const uScale = uniform(0), uReproj = uniform(new THREE.Matrix4()), uFarZ = uniform(1);
   // view depth from a depth value for either depth convention: clip z = A z + B, clip w = -z, so d = -A - B / z
   const uA = uniform(0), uB = uniform(0);
@@ -92,13 +86,30 @@ export function createPost(renderer, scene, camera, samples = 4) {
     return sum.div(total);
   })();
 
-  let aoNode = null, bloomNode = null, smaaNode = null, tier = TIERS[0], focusAt = 0, stop = 0, height = 1, mps = 1;
+  // GTAO varies its samples by a 5x5 noise tile and leaves the denoising to the caller; unfiltered it speckled the ground under every car.
+  // One axis of a 5-tap blur across that tile, in half-res texels, keeping to the same surface so the AO doesn't bleed across a car's edge.
+  const aoBlur = (tex, axis) => Fn(() => {
+    const p = uv(), w0 = viewDepth(depth.sample(p).r);
+    const sum = tex.sample(p).r.toVar(), total = float(1).toVar();
+    for (const i of [-4, -2, 2, 4]) {
+      const q = p.add(axis.mul(uTexel).mul(i));
+      const k = clamp(float(1).sub(viewDepth(depth.sample(q).r).sub(w0).abs().div(w0.mul(0.05))), 0, 1);
+      sum.addAssign(tex.sample(q).r.mul(k));
+      total.addAssign(k);
+    }
+    return vec4(sum.div(total), 0, 0, 1);
+  })();
+
+  let aoNode = null, bloomNode = null, smaaNode = null, tier = options, focusAt = 0, stop = 0, height = 1, mps = 1;
   const pipeline = new THREE.RenderPipeline(renderer);
   pipeline.outputColorTransform = false;  // renderOutput below does it before SMAA, which wants the display image
 
+  const targets = [], target = n => { const r = convertToTexture(n); targets.push(r); return r; };
   const build = () => {
+    // every rebuild makes new full-screen targets: 14 setting changes at 4K ran the GPU out of memory
     for (const n of [aoNode, bloomNode, smaaNode]) n?.dispose?.();
-    aoNode = smaaNode = null;
+    for (const r of targets.splice(0)) r.renderTarget?.dispose();
+    aoNode = bloomNode = smaaNode = null;
     let image = color;
     if (tier.ao) {
       // Normals from depth, not an MRT target: smoke writes no depth but overwrote the normal under it, and GTAO turned each
@@ -110,25 +121,25 @@ export function createPost(renderer, scene, camera, samples = 4) {
       aoNode.scale.value = 1.1;
       // multiplied here rather than fed to lighting through builtinAOContext: that needs AO before the beauty pass, so a
       // second depth + normal draw, the cost the single MRT pass exists to avoid
-      image = vec4(image.rgb.mul(aoNode.getTextureNode().r), 1);
+      image = vec4(image.rgb.mul(aoBlur(target(aoBlur(aoNode.getTextureNode(), vec2(1, 0))), vec2(0, 1)).r), 1);
     }
-    let sharp = convertToTexture(image);
-    if (tier.dof) sharp = convertToTexture(dofOf(sharp));
-    const blurred = tier.blur ? convertToTexture(blurOf(sharp)) : sharp;
+    let sharp = target(image);
+    if (tier.dof) sharp = target(dofOf(sharp));
+    const blurred = tier.blur ? target(blurOf(sharp)) : sharp;
     // threshold in linear HDR: 2.5 rather than a display-range 0.85, or every pixel of the photographed sky would bloom.
     // Only sun glints, sparks, hot brakes and rain lights get there, and emissive is lifted so they always do.
-    bloomNode = bloom(blurred.rgb.add(glow.rgb.mul(1.5)), 0.32, 0.45, 2.5);
-    // lateral chromatic aberration: red and blue land at slightly different magnifications, ~3 px at a 1080p corner
-    const lens = Fn(() => {
-      const p = uv(), d = p.sub(0.5), o = d.mul(dot(d, d)).mul(0.006);
+    if (tier.bloom) bloomNode = bloom(blurred.rgb.add(glow.rgb.mul(1.5)), 0.32, 0.45, 2.5);
+    // lateral chromatic aberration: red and blue land at slightly different magnifications, ~1 px at a 1080p corner
+    const lens = !tier.lens ? blurred : Fn(() => {
+      const p = uv(), d = p.sub(0.5), o = d.mul(dot(d, d)).mul(0.002);
       return vec4(blurred.sample(p.add(o)).r, blurred.sample(p).g, blurred.sample(p.sub(o)).b, 1);
     })();
     // AgX keeps highlights from clipping but flattens everything else: a red livery came out salmon, the asphalt pale grey.
     // The look goes on after the curve, where the image is display-encoded, as Blender's does.
-    const shown = pow(max(renderOutput(vec4(lens.rgb.add(bloomNode.rgb), 1)).rgb, vec3(0)), vec3(PUNCH));
-    const graded = vec4(clamp(mix(vec3(dot(shown, vec3(0.2126, 0.7152, 0.0722))), shown, SATURATION), 0, 1), 1);
+    const shown = pow(max(renderOutput(vec4(bloomNode ? lens.rgb.add(bloomNode.rgb) : lens.rgb, 1)).rgb, vec3(0)), vec3(uPunch));
+    const graded = vec4(clamp(mix(vec3(dot(shown, vec3(0.2126, 0.7152, 0.0722))), shown, uSaturation), 0, 1), 1);
     // on the tone-mapped image: specular and shader aliasing MSAA doesn't touch
-    pipeline.outputNode = tier.smaa ? (smaaNode = smaa(convertToTexture(graded))) : graded;
+    pipeline.outputNode = tier.smaa ? (smaaNode = smaa(target(graded))) : graded;
     pipeline.needsUpdate = true;
   };
   build();
@@ -138,8 +149,16 @@ export function createPost(renderer, scene, camera, samples = 4) {
   return {
     pipeline,
     scenePass,
-    get tier() { return tier; },
-    setTier(t) { tier = t; build(); skip = true; },
+    // rebuilds the graph, a stall of a frame or two, so only when the graph changes; contrast and saturation are uniforms
+    setOptions(o) {
+      uPunch.value = o.contrast;
+      uSaturation.value = o.saturation;
+      const same = ['msaa', 'smaa', 'ao', 'dof', 'blur', 'bloom', 'lens'].every(k => o[k] === tier[k]);
+      tier = o;
+      if (same) return;
+      build();
+      skip = true;
+    },
     setSize(w, h, pr) {
       uTexel.value.set(1 / (w * pr), 1 / (h * pr));
       height = h * pr;
@@ -177,6 +196,11 @@ export function createPost(renderer, scene, camera, samples = 4) {
       prevRot.copy(rot);
       skip = false;
     },
-    dispose() { for (const n of [aoNode, bloomNode, smaaNode]) n?.dispose?.(); pipeline.dispose(); },
+    dispose() {
+      for (const n of [aoNode, bloomNode, smaaNode]) n?.dispose?.();
+      for (const r of targets) r.renderTarget?.dispose();
+      scenePass.dispose();
+      pipeline.dispose();
+    },
   };
 }

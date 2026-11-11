@@ -289,3 +289,24 @@ assert.deepEqual(gridOrder([{id: 'brooks', grid: 3}, {id: 'moss', grid: 3}, {id:
   assert.ok(r.cars.every(c => Number.isFinite(c.d)), 'd stays a number');
 }
 console.log('ok');
+
+// the sun over a circuit and the sky it picks; a replay's wetness from the rain flag's history and the field's tyres
+{
+  const {sunElevation, skyFor, replayWeather} = await import('../src/static/weather.js');
+  assert.ok(sunElevation(26.03, 50.51, '2025-04-13T15:00:00Z') < 3, 'Bahrain 18:00 local in April: the sun is setting');
+  assert.ok(sunElevation(1.29, 103.86, '2025-10-05T12:00:00Z') < -6, 'Singapore 20:00 local: night');
+  assert.ok(sunElevation(-23.7, -46.7, '2026-11-08T17:00:00Z') > 40, 'São Paulo 14:00 local in November: high sun');
+  const abu = sunElevation(24.47, 54.6, '2025-12-07T13:00:00Z');
+  assert.ok(abu > -6 && abu < 20, `Abu Dhabi 17:00 local: low sun, got ${abu.toFixed(1)}`);
+  assert.deepEqual([skyFor(45), skyFor(10), skyFor(-10)], [0, 1, 3]);
+  const w = [[0, 20, 25, 0, 2], [600, 19, 22, 1, 3], [1800, 19, 23, 0, 3]];  // rain from 10 to 30 min
+  assert.equal(replayWeather(w, 300).wetOff, 0, 'dry before the rain');
+  assert.ok(replayWeather(w, 1500).wetOff > 0.85 && replayWeather(w, 1500).rain > 0, 'flooded 15 min into the rain');
+  assert.ok(replayWeather(w, 2400).wetOff > 0.4 && replayWeather(w, 2400).rain === 0, 'drying 10 min after it stopped, not raining');
+  assert.ok(replayWeather(w, 2400).wetLine < replayWeather(w, 2400).wetOff, 'the line dries first');
+  assert.equal(replayWeather(w, 4000).wetOff, 0, 'dry ~35 min after');
+  assert.equal(replayWeather(w, 300, ['INTERMEDIATE', 'INTERMEDIATE', 'SOFT']).wetOff, 0.35, 'a field on inters says wet before the flag');
+  assert.equal(replayWeather(w, 300, ['WET', 'WET', 'INTERMEDIATE']).wetOff, 0.7, 'wets say wetter');
+  assert.equal(replayWeather(w, 300, ['SOFT', 'SOFT', 'INTERMEDIATE']).wetOff, 0, 'one car on inters is not the track');
+  assert.deepEqual(replayWeather([], 100), {cloud: 0.1, rain: 0, wetLine: 0, wetOff: 0});
+}

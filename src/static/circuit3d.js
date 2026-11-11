@@ -3,11 +3,13 @@
 // ground plane (scene x, z); heights become scene y. One instance per track; dispose() frees it on a circuit switch.
 import * as THREE from 'three';
 import {CSS2DObject} from 'three/addons/renderers/CSS2DRenderer.js';
-import {Fn, uniform, texture, vec2, vec3, positionGeometry, normalViewGeometry, mix, smoothstep, clamp, dot, min} from 'three/tsl';
+import {mergeGeometries} from 'three/addons/utils/BufferGeometryUtils.js';
+import {Fn, uniform, texture, uv, vec2, vec3, vec4, float, fract, abs, floor as cellOf, mrt, fwidth, positionGeometry, normalViewGeometry, mix, smoothstep, clamp, dot, min} from 'three/tsl';
 import {asphalt, noise} from './track3d.js';
 import {racingLine} from './sim.js';
 import {garages} from './pit3d.js';
 import {buildTrackside} from './trackside.js';
+import {GRID} from './lanes.js';
 
 const UP = new THREE.Vector3(0, 1, 0);
 let seed = 1;
@@ -53,25 +55,29 @@ function densify(P, ann, mps) {
   return {p3, src, ann: {...ann, bank, kerb, tunnel: ann.tunnel && ann.tunnel.map(i => at[i])}};
 }
 
-// strip between lateral offsets a and b (scene units, + = left) lying on the road surface, lifted y off it; or, with
-// `height`, a vertical wall standing at offset a (a number, or one per point). Closed loops repeat the first point so
-// the texture doesn't wrap back.
-function strip(F, a, b, y, material, closed, tileM, mps, height = 0) {
-  const count = closed ? F.length + 1 : F.length, pos = [], uv = [], idx = [];
+// strip between lateral offsets a and b (scene units, + = left; a number, or one per point) lying on the road surface, lifted y
+// off it at a and yb at b; or, with `height`, a vertical wall standing at offset a, flip mirroring its texture along the road for
+// the side where the road runs right to left. Closed loops repeat the first point so the texture doesn't wrap back.
+function strip(F, a, b, y, material, closed, tileM, mps, height = 0, {yb = y, flip = false} = {}) {
+  const count = closed ? F.length + 1 : F.length, pos = [], nor = [], uv = [], idx = [], of = (o, i) => (Array.isArray(o) ? o[i % F.length] : o);
   let dist = 0;
   for (let i = 0; i < count; i++) {
-    const f = F[i % F.length];
+    const f = F[i % F.length], ai = of(a, i), bi = of(b, i);
     if (i) dist += f.P.distanceTo(F[(i - 1) % F.length].P);
     const v = dist * mps / tileM;
-    const A = f.P.clone().addScaledVector(f.N, Array.isArray(a) ? a[i % F.length] : a).addScaledVector(f.B, y);
+    const A = f.P.clone().addScaledVector(f.N, ai).addScaledVector(f.B, y);
     if (height) {
       const top = A.clone().addScaledVector(UP, height);
       pos.push(A.x, A.y, A.z, top.x, top.y, top.z);
-      uv.push(v, 0, v, 1);
+      uv.push(flip ? -v : v, 0, flip ? -v : v, 1);
     } else {
-      const Bp = f.P.clone().addScaledVector(f.N, b).addScaledVector(f.B, y);
+      const Bp = f.P.clone().addScaledVector(f.N, bi).addScaledVector(f.B, yb), span = bi - ai || 1;
       pos.push(A.x, A.y, A.z, Bp.x, Bp.y, Bp.z);
-      uv.push(0, v, Math.abs(b - a) * mps / tileM, v);
+      uv.push(0, v, Math.abs(span) * mps / tileM, v);
+      // the frame's own up, not one worked out from the triangles: those facets flashed as chevrons in the sun's glare.
+      // Signed to the triangles' winding, which decides which way a double-sided material turns it
+      const n = f.B.clone().addScaledVector(f.N, -(yb - y) / span).normalize().multiplyScalar(-Math.sign(span));
+      nor.push(n.x, n.y, n.z, n.x, n.y, n.z);
     }
     if (i < count - 1) idx.push(2 * i, 2 * i + 1, 2 * i + 2, 2 * i + 1, 2 * i + 3, 2 * i + 2);
   }
@@ -79,7 +85,39 @@ function strip(F, a, b, y, material, closed, tileM, mps, height = 0) {
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
   g.setIndex(idx);
-  g.computeVertexNormals();
+  if (height) g.computeVertexNormals();
+  else g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+  const mesh = new THREE.Mesh(g, material);
+  mesh.receiveShadow = true;
+  return mesh;
+}
+
+// The grid's painted slots: for each car a bar across the road ahead of it and a short line back down each side, at lanes.js's
+// positions (rows and columns) so the lap-timing replay's cars line up in them. F[0] is the line, the grid runs back from it.
+function gridSlots(F, m, mps, material, slots = 22) {
+  const n = F.length, pos = [], nor = [], idx = [];
+  const rect = (f, lat0, lat1, d0, d1) => {
+    const base = pos.length / 3;
+    for (const [l, d] of [[lat0, d0], [lat1, d0], [lat1, d1], [lat0, d1]]) {
+      const p = f.P.clone().addScaledVector(f.N, l).addScaledVector(f.T, d).addScaledVector(f.B, 0.03);
+      pos.push(p.x, p.y, p.z);
+      nor.push(-f.B.x, -f.B.y, -f.B.z);  // as the winding faces: a double-sided material flips it back up
+    }
+    idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
+  };
+  let walked = 0, i = 0;
+  for (let rank = 0; rank < slots; rank++) {
+    const back = GRID.front + GRID.row * rank - 3;  // 3 m: the car's centre to just ahead of its nose
+    while (walked < back) { const j = (i - 1 + n) % n; walked += F[i].P.distanceTo(F[j].P) * mps; i = j; }
+    const f = F[i], lat = (rank % 2 ? -1 : 1) * GRID.col, w = m(0.85), t = m(0.1), d = walked - back;
+    rect(f, m(lat) - w, m(lat) + w, m(d) - t, m(d) + t);
+    for (const s of [-1, 1]) rect(f, m(lat) + s * w - t, m(lat) + s * w + t, m(d) - m(1), m(d));
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(new Array(pos.length / 3 * 2).fill(0), 2));
+  g.setIndex(idx);
   const mesh = new THREE.Mesh(g, material);
   mesh.receiveShadow = true;
   return mesh;
@@ -198,8 +236,14 @@ export function buildCircuit(world, {pts, map, tex, width, startKnown, ann, corn
     const tile = texture(tex.grass).setUpdateMatrix(true);
     const grain = clamp(dot(tile.rgb, vec3(0.2126, 0.7152, 0.0722)).div(0.16), 0.8, 1.2);
     const cover = satOn.mul(smoothstep(0, 0.08, min(min(suv.x, suv.x.oneMinus()), min(suv.y, suv.y.oneMinus()))));
-    const around = mix(tile.rgb.mul(patchTint), satMean.mul(grain).mul(patchTint), satOn);  // beyond the image: its mean colour
-    return mix(around, satNode.rgb.mul(grain), cover);
+    // beyond the image, farmland: cells of crop tints, warped so they aren't a grid, hedged in dark lines that fade with distance
+    const fg = vec2(dot(g, vec2(0.92, 0.39)), dot(g, vec2(-0.39, 0.92))).mul(map.mps).add(noise(gm.div(300)).mul(120)), cell = fg.div(vec2(260, 190));
+    const crop = noise(cellOf(cell).add(0.5).mul(7.3)), hedgeAt = abs(fract(cell).sub(0.5)), hedge = smoothstep(0.47, 0.495, hedgeAt.x.max(hedgeAt.y)).mul(clamp(float(0.25).sub(fwidth(cell.x).mul(6)), 0, 0.25).mul(4));
+    const fields = mix(mix(vec3(0.82, 0.84, 0.72), vec3(1.15, 1.08, 0.72), smoothstep(0.3, 0.55, crop)), vec3(0.7, 0.92, 0.72), smoothstep(0.6, 0.8, crop)).mul(hedge.mul(-0.45).add(1));
+    const around = mix(tile.rgb.mul(patchTint), satMean.mul(grain).mul(patchTint).mul(fields), satOn);  // mean colour of the image
+    // the imagery is ~1 m a pixel: ground grain at 1.5 and 6 m gives it something to resolve from close by
+    const near = noise(gm.div(1.5).add(3)).mul(0.14).add(noise(gm.div(6)).mul(0.14)).add(0.86);
+    return mix(around, satNode.rgb.mul(grain).mul(near), cover);
   })();
   add(new THREE.Mesh(ground, grass)).receiveShadow = true;
   // height of the terrain mesh under scene (x, z): bilinear between the grid vertices (row j = z, column i = x)
@@ -211,8 +255,9 @@ export function buildCircuit(world, {pts, map, tex, width, startKnown, ann, corn
   };
 
   // --- asphalt, run-off, lines, kerbs, gravel, barriers ---
-  const runoff = Math.min(m(5), wall);  // Monaco's barriers stand at the edge: run-off is just the gap to them
-  add(strip(F, -half - runoff, half + runoff, 0.01, mat(tex.asphalt, 0x9a958a), true, 4, map.mps));
+  const runoff = Math.min(m(1.6), wall);  // a narrow asphalt apron; the run-off proper is on the corners' outsides, below
+  const paved = mat(tex.asphalt, 0x8c95a0);
+  add(strip(F, -half - runoff, half + runoff, 0.01, paved, true, 4, map.mps));
   const trackMat = asphalt(tex.asphalt, width / 2), track = add(strip(F, -half, half, 0.02, trackMat, true, 4, map.mps));
   // the AI's racing line (metres, + = right of travel); the strip's offsets point left, hence the minus. Worked out on
   // the original points (it's O(n^2)) and interpolated onto the dense ones.
@@ -226,28 +271,60 @@ export function buildCircuit(world, {pts, map, tex, width, startKnown, ann, corn
   };
   const white = mat(null, 0xf4f4f4);
   white.colorNode = vec3(0.9).mul(transfer());
-  for (const s of [-1, 1]) add(strip(F, s * (half - m(0.6)), s * (half - m(0.25)), 0.03, white, true, 50, map.mps));
-  const kerb = mat({map: tex.kerb, normalMap: tex.kerbRidges}), gravel = mat(tex.gravel);
+  // the track limit: an 18 cm line right at the road's edge, the kerb against it
+  for (const s of [-1, 1]) add(strip(F, s * (half - m(0.18)), s * half, 0.03, white, true, 50, map.mps));
+  if (startKnown) add(gridSlots(F, m, map.mps, white));
+  // mown grass between the apron and the barrier, in the satellite image's stead (a metre a pixel is a smear up close):
+  // the grass tile in world space, the mower's stripes along the road, patches of a drier green
+  if (wall > runoff + m(1)) {
+    const verge = mat(null);
+    verge.colorNode = Fn(() => {
+      const gm = positionGeometry.xz.mul(map.mps), mow = smoothstep(0.2, 0.3, abs(fract(uv().y.div(2)).sub(0.5)));
+      const patch = noise(gm.div(14)).mul(0.26).add(noise(gm.div(2.5)).mul(0.16)).add(0.8);
+      return texture(tex.grass, gm.div(9)).rgb.mul(vec3(0.62, 0.62, 0.36)).mul(mix(0.9, 1.08, mow)).mul(patch);
+    })();
+    for (const s of [-1, 1]) add(strip(F, s * (half + runoff), s * (half + wall), 0.008, verge, true, 12, map.mps));
+  }
+  const kerb = mat({map: tex.kerb, normalMap: tex.kerbRidges}), gravel = mat(tex.gravel), lip = mat(null, 0x6d6f70);
   kerb.colorNode = texture(tex.kerb).setUpdateMatrix(true).rgb.mul(transfer());
+  const kerbUp = m(0.05);
   for (const run of cornerRuns(F, map.mps)) {
     // the outside of the corner: the side away from the chord between the run's ends
     const i = run.length >> 1, mid = run[i].P, a = run[0].P, b = run.at(-1).P;
     const out = Math.sign(run[i].N0.x * (mid.x - (a.x + b.x) / 2) + run[i].N0.z * (mid.z - (a.z + b.z) / 2)) || 1;
-    // kerbs where a real circuit has them: the inside over the whole corner (the apex), the outside over its exit half
-    add(strip(run, -out * half, -out * (half + m(1.2)), 0.025, kerb, false, 2, map.mps));
-    if (run.length - i > 1) add(strip(run.slice(i), out * half, out * (half + m(1.2)), 0.025, kerb, false, 2, map.mps));
-    if (ann.preset?.runoff === 'armco') continue;  // no gravel traps on a street circuit
-    add(strip(run, out * (half + m(5)), out * (half + Math.min(m(9.8), wall - m(0.3))), 0.012, gravel, false, 6, map.mps));
+    // kerbs where a real circuit has them: the inside over the whole corner (the apex), the outside over its exit half. A
+    // kerb rises from the road to its outer edge, then drops back to the ground on a concrete lip
+    const kerbed = (r, s) => {
+      add(strip(r, s * half, s * (half + m(1.05)), 0.025, kerb, false, 2, map.mps, 0, {yb: kerbUp}));
+      add(strip(r, s * (half + m(1.05)), s * (half + m(1.3)), kerbUp, lip, false, 2, map.mps, 0, {yb: 0.012}));
+    };
+    kerbed(run, -out);
+    if (run.length - i > 1) kerbed(run.slice(i), out);
+    if (ann.preset?.runoff === 'armco' || wall < m(6)) continue;  // no run-off or gravel traps on a street circuit
+    // the outside's run-off: asphalt then gravel, each swelling from nothing through the corner, so the verge isn't a ribbon
+    const swell = run.map((_, j) => Math.sin(Math.PI * (j + 0.5) / run.length) ** 0.6);
+    const edge = swell.map(k => out * (half + runoff + (m(5) - runoff) * k));
+    add(strip(run, out * (half + runoff), edge, 0.011, paved, false, 4, map.mps));
+    add(strip(run, edge, edge.map((e, j) => e + out * (Math.min(m(9.8), wall - m(0.3)) - m(5)) * swell[j]), 0.012, gravel, false, 6, map.mps));
   }
-  // barriers: painted concrete blocks, or bare steel Armco on the street circuit
-  const barrier = ann.preset?.runoff === 'armco' ? mat(null, 0xb9bdc4, {metalness: 0.7, roughness: 0.35}) : mat({map: tex.wall});
-  // alpha-to-coverage: the 4x MSAA target anti-aliases the cut-out wires; alphaTest also cuts the fence's shadow
-  const fence = mat({map: tex.fence}, 0xffffff, {alphaTest: 0.5, alphaToCoverage: true, metalness: 0.6, roughness: 0.45});
+  // barriers: concrete blocks with advertising boards, or bare steel Armco on the street circuit: a face, a top and a back
+  const armco = ann.preset?.runoff === 'armco', thick = armco ? m(0.08) : m(0.35);
+  const barrier = armco ? mat({map: tex.armco}, 0xffffff, {metalness: 0.7, roughness: 0.35}) : mat({map: tex.wall}), concrete = mat(null, armco ? 0x8a8d92 : 0x85878a);
+  // Blended, not cut out: the wires fade to a veil with distance as real mesh does, where a cut-out dithered them to dust.
+  // Blended surfaces overwrite every attachment, so like the effects it writes no motion vector (see post.js)
+  const fence = mat({map: tex.fence}, 0xffffff, {transparent: true, depthWrite: false, metalness: 0.6, roughness: 0.45});
+  fence.mrtNode = mrt({velocity: vec4(0)});
+  const rail = mat(null, 0x6d7277, {metalness: 0.7, roughness: 0.4});
   let walls = [];
-  // a 1.1 m barrier along frames Fr at offsets o, and the 3 m debris fence on top of it
-  const wallAndFence = (Fr, o, closed) => [add(strip(Fr, o, 0, 0, barrier, closed, 8, map.mps, m(1.1))),
-    onLayer1(Object.assign(add(strip(Fr, o, 0, m(1.1), fence, closed, 4, map.mps, m(3))), {castShadow: true}))];
-  // the fence is cut out by alpha too: on layer 1 like the tree crowns (see there), or it's a solid grey wall to AO and blur
+  // a 1.1 m barrier along frames Fr at offsets o, and the 3 m debris fence on top of it between two rails
+  const wallAndFence = (Fr, o, closed) => {
+    const side = Math.sign(o.find(x => x)) || 1, back = o.map(x => x + side * thick), flip = side < 0;
+    const wire = onLayer1(add(strip(Fr, o, 0, m(1.1), fence, closed, 4, map.mps, m(3), {flip})));
+    return [add(strip(Fr, o, 0, 0, barrier, closed, 8, map.mps, m(1.1), {flip})), add(strip(Fr, o, back, m(1.1), concrete, closed, 8, map.mps)),
+            add(strip(Fr, back, 0, -m(1), concrete, closed, 8, map.mps, m(2.1), {flip})), wire,
+            add(strip(Fr, o, 0, m(4.04), rail, closed, 8, map.mps, m(0.07))), add(strip(Fr, o, 0, m(1.1), rail, closed, 8, map.mps, m(0.05)))];
+  };
+  // the fence is see-through: on layer 1 like the tree crowns (see there), or it's a solid grey wall to AO and blur
   function onLayer1(o) { o.layers.set(1); return o; }
   // offs[side]: lateral offset of that side's barrier at each outline point, null for an opening (pitLane moves them)
   const barriers = offs => {
@@ -302,12 +379,18 @@ export function buildCircuit(world, {pts, map, tex, width, startKnown, ann, corn
 
   // --- trees on the terrain, 20-160 m off the track: conifers and broadleaf crowns of leaf cards (textures3d.js
   // foliage), cut out by alpha. Alpha-to-coverage turns the cut edges into MSAA coverage, so leaves are anti-aliased. ---
-  const trunkGeo = new THREE.CylinderGeometry(m(0.22), m(0.42), m(7), 7).translate(0, m(3.5), 0);
+  // what grows here follows the climate (circuits.js biome): palms (Singapore) are tall and thin, arid scrub (the Gulf, Vegas)
+  // a third as many and low, broadleaf a little wider and lower than conifers (Spa, Red Bull Ring). `cones` holds the
+  // conifer / palm crowns, `leaves` the broadleaf / scrub ones; `pCone` is the share of conifer crowns.
+  const biome = ann?.biome ?? 'broadleaf', palm = biome === 'palm', arid = biome === 'arid';
+  const pCone = {conifer: 0.9, broadleaf: 0.1, palm: 1, arid: 0}[biome];
+  const trunkGeo = palm ? new THREE.CylinderGeometry(m(0.17), m(0.3), m(11), 7).translate(0, m(5.5), 0)
+                        : new THREE.CylinderGeometry(m(0.22), m(0.42), m(7), 7).translate(0, m(3.5), 0);
   seed = 11;
-  const coneGeo = conifer(m), leafGeo = broadleaf(m);
-  const N = 1500, mtx = new THREE.Matrix4();
+  const coneGeo = palm ? palmTree(m) : conifer(m), leafGeo = broadleaf(m);
+  const N = arid ? 500 : palm ? 900 : 1500, mtx = new THREE.Matrix4();
   const trunks = new THREE.InstancedMesh(trunkGeo, new THREE.MeshStandardMaterial({color: 0x4a3a2a, roughness: 1}), N);
-  const crownMat = new THREE.MeshStandardNodeMaterial({map: tex.foliage, alphaTest: 0.5, alphaToCoverage: true, side: THREE.DoubleSide,
+  const crownMat = new THREE.MeshStandardNodeMaterial({map: tex.foliageOf(palm ? 'palm' : arid ? 'arid' : 'lush'), alphaTest: 0.5, alphaToCoverage: true, side: THREE.DoubleSide,
                                                    roughness: 0.8, vertexColors: true});
   // a card's back face keeps the crown's outward normal: three flips it for back faces, which lit half the leaves from inside
   crownMat.normalNode = normalViewGeometry;
@@ -324,14 +407,20 @@ export function buildCircuit(world, {pts, map, tex, width, startKnown, ann, corn
     const p = p3[Math.floor(rand() * p3.length)], ang = rand() * Math.PI * 2, r = m(20 + rand() * 140);
     const x = p.x + Math.cos(ang) * r, z = p.z + Math.sin(ang) * r;
     if (sample.some(q => (q.x - x) ** 2 + (q.z - z) ** 2 < clear)) continue;
-    const s = 0.7 + rand() * 0.8, conifer = rand() < 0.5, crowns = conifer ? cones : leaves;
-    mtx.makeRotationY(rand() * Math.PI * 2).scale(new THREE.Vector3(s, s, s)).setPosition(x, groundAt(x, z) - m(0.3), z);
+    const conifer = rand() < pCone, crowns = conifer ? cones : leaves;
+    // 13-24 m conifers; broadleaf 11-20 m and wider; palms 14-20 m; scrub 3-6 m
+    const s = arid ? 0.5 + rand() * 0.4 : palm ? 1.1 + rand() * 0.45 : 1.15 + rand() * 1.05;
+    const sc = conifer || palm ? [s, s, s] : arid ? [1.4 * s, s, 1.4 * s] : [1.15 * s, 0.92 * s, 1.15 * s];
+    mtx.makeRotationY(rand() * Math.PI * 2).scale(new THREE.Vector3(...sc)).setPosition(x, groundAt(x, z) - m(0.3), z);
     trunks.setMatrixAt(k++, mtx);
     crowns.setMatrixAt(crowns.count, mtx);
     // HSL in sRGB, times the foliage texture's greens: in three's linear working space these lightnesses come out pastel
     // conifers dark and blue-green (lighter ones came out lime)
-    crowns.setColorAt(crowns.count++, new THREE.Color().setHSL(conifer ? 0.34 + rand() * 0.06 : 0.2 + rand() * 0.08,
-      conifer ? 0.2 + rand() * 0.15 : 0.3 + rand() * 0.25, conifer ? 0.27 + rand() * 0.07 : 0.5 + rand() * 0.12, THREE.SRGBColorSpace));
+    const [h, sat, lum] = conifer && !palm ? [0.35 + rand() * 0.05, 0.16 + rand() * 0.12, 0.23 + rand() * 0.06]
+      : palm ? [0.25 + rand() * 0.07, 0.3 + rand() * 0.15, 0.33 + rand() * 0.1]
+      : arid ? [0.14 + rand() * 0.04, 0.1 + rand() * 0.12, 0.4 + rand() * 0.1]
+      : [0.15 + rand() * 0.2, 0.2 + rand() * 0.2, 0.3 + rand() * 0.15];  // broadleaf: yellow-green to deep green
+    crowns.setColorAt(crowns.count++, new THREE.Color().setHSL(h, sat, lum, THREE.SRGBColorSpace));
   }
   trunks.count = k;
   for (const t of [trunks, cones, leaves]) add(t).castShadow = true;
@@ -391,6 +480,11 @@ export function buildCircuit(world, {pts, map, tex, width, startKnown, ann, corn
 
   return {
     trackMat, wettable, surface, groundAt, pts, half, night: side.night,
+    // graphics.js settings; hiding also spares them their draw calls in every shadow cascade
+    show({trees, trackside}) {
+      for (const o of [trunks, cones, leaves]) o.visible = trees;
+      for (const o of side.meshes) o.visible = trackside;
+    },
     lights: n => start?.userData.lights(n),  // the start gantry's red lamps lit, 0-5
     // Pit lane (map points of its centre line, entry road to exit road): a strip on the ground beside the track,
     // replacing any earlier one, with a line along each edge. The barrier on its side moves in to become the pit wall
@@ -406,7 +500,7 @@ export function buildCircuit(world, {pts, map, tex, width, startKnown, ann, corn
       const near = lanePts.map(q => { const s = surface(q, hint); hint = s.i; return s; });
       const lp = near.map(s => s.p.clone().setY(s.y)), LF = frames(lp, lp.map(() => 0)), laneHalf = m(2.8);
       laneMat ??= mat(tex.asphalt, 0x8c8c8c);
-      laneLine ??= new THREE.MeshStandardMaterial({color: 0xf4f4f4, roughness: 0.8});
+      laneLine ??= new THREE.MeshStandardMaterial({color: 0xf4f4f4, roughness: 0.8, side: THREE.DoubleSide});
       // 12 cm up: the terrain's triangles can stand a little above its bilinear height on a slope
       laneMeshes = [add(strip(LF, -laneHalf, laneHalf, m(0.12), laneMat, false, 4, map.mps)),
                     ...[-1, 1].map(s => add(strip(LF, s * m(2.75), s * m(2.6), m(0.13), laneLine, false, 50, map.mps)))];
@@ -447,6 +541,7 @@ export function buildCircuit(world, {pts, map, tex, width, startKnown, ann, corn
       const sheds = bays.map(b => b.P.clone().addScaledVector(b.out, m(12)));  // the middle of each garage
       fell((x, z) => !lp.some(q => (q.x - x) ** 2 + (q.z - z) ** 2 < (laneHalf + m(6)) ** 2)
                      && !sheds.some(q => (q.x - x) ** 2 + (q.z - z) ** 2 < m(14) ** 2));
+      side.clearOf([...lp, ...sheds]);
     },
     // satellite ground: texture, uv = M (scene x, z, 1) over the terrain, keep(x, z): whether a tree there stands on
     // vegetation in the image (the others go), mean: the image's mean colour, for the land beyond it
@@ -527,14 +622,14 @@ function broadleaf(m) {
 // u = 0.5) and drooping, 2-3.4 m long low down, shorter up the tree
 function conifer(m) {
   const quads = [], top = 11, low = 1.8;
-  for (let y = low; y < top - 0.4; y += 0.55) {
+  for (let y = low; y < top - 0.4; y += 0.42) {
     const reach = 0.35 + 3.1 * (1 - (y - low) / (top - low)), n = Math.max(5, Math.round(5 + reach * 2)), spin = rand() * 2 * Math.PI;
     for (let j = 0; j < n; j++) {
       const a = spin + (j + 0.4 * rand()) / n * 2 * Math.PI, droop = 0.25 + 0.25 * rand(), L = m(reach * (0.95 + 0.25 * rand()));
       const out = new THREE.Vector3(Math.cos(a) * Math.cos(droop), -Math.sin(droop), Math.sin(a) * Math.cos(droop));
       // across the spray: tangential, rolled ~35 degrees up so it reads from the side as well as from above
       const side = new THREE.Vector3(-Math.sin(a), 0, Math.cos(a)).applyAxisAngle(out, 0.6 * (rand() - 0.5) + 0.6);
-      const w = L * 0.9, root = new THREE.Vector3(0, m(y), 0).addScaledVector(side, -w / 2);
+      const w = L * 1.1, root = new THREE.Vector3(0, m(y), 0).addScaledVector(side, -w / 2);
       quads.push([root, out.multiplyScalar(L), side.multiplyScalar(w), [0.5, 0, 1, 1]]);
     }
   }
@@ -546,23 +641,61 @@ function conifer(m) {
                v => { const out = Math.min(1, Math.hypot(v.x, v.z) / m(2.5)), up = v.y / m(top); return Math.min(1, (0.5 + 0.5 * out) * (0.8 + 0.25 * up)); });
 }
 
+// palm: 9 fronds from the top of the trunk (11 m), each two cards: the first rising, the second arching over (the atlas's
+// frond halves, u 0.5-0.75 and 0.75-1)
+function palmTree(m) {
+  const quads = [], top = 11;
+  for (let j = 0; j < 9; j++) {
+    const a = (j + 0.3 * rand()) / 9 * 2 * Math.PI, l = m(2.4 + 0.6 * rand()), roll = 0.6 * (rand() - 0.5) + 0.7;
+    let at = new THREE.Vector3(0, m(top), 0), lift = 0.55 - 0.3 * rand();
+    for (const [u0, u1, droop] of [[0.5, 0.75, lift], [0.75, 1, -0.5 - 0.4 * rand()]]) {
+      const out = new THREE.Vector3(Math.cos(a) * Math.cos(droop), Math.sin(droop), Math.sin(a) * Math.cos(droop));
+      const side = new THREE.Vector3(-Math.sin(a), 0, Math.cos(a)).applyAxisAngle(out, roll);
+      quads.push([at.clone().addScaledVector(side, -l), out.clone().multiplyScalar(l), side.clone().multiplyScalar(2 * l), [u0, 0, u1, 1]]);
+      at = at.addScaledVector(out, l);
+    }
+  }
+  return cards(quads, v => new THREE.Vector3(v.x, m(3), v.z).normalize(), v => Math.min(1, 0.7 + 0.3 * (v.y / m(top))));
+}
+
+// The start gantry: a truss over the road just past the line, facing the grid, its lights on panels on the side the cars see
 function gantry(f, w, m, tex, mps) {
-  const g = new THREE.Group(), steel = new THREE.MeshStandardMaterial({color: 0x30333a, roughness: 0.5, metalness: 0.6});
+  const g = new THREE.Group(), steel = new THREE.MeshStandardMaterial({color: 0x2c2f35, roughness: 0.5, metalness: 0.6});
   g.position.copy(f.P);
   g.rotation.y = Math.atan2(-f.T.z, f.T.x);
-  const add = (geo, mat, x, y, z) => { const o = new THREE.Mesh(geo, mat); o.position.set(x, y, z); g.add(o); return o; };
+  const add = (geo, mat, x, y, z) => { const o = new THREE.Mesh(geo, mat); o.position.set(x, y, z); o.castShadow = true; g.add(o); return o; };
   const checker = tex.checker.clone();
   checker.repeat.set(1, w * mps / 8);
   checker.needsUpdate = true;
   const line = add(new THREE.PlaneGeometry(m(1.6), w), new THREE.MeshStandardMaterial({map: checker, roughness: 0.8}), 0, 0.035, 0);
   line.rotation.x = -Math.PI / 2;
-  for (const s of [-1, 1]) add(new THREE.BoxGeometry(m(0.5), m(8), m(0.5)), steel, -m(4), m(4), s * (w / 2 + m(3)));
-  add(new THREE.BoxGeometry(m(0.8), m(1.2), w + m(6)), steel, -m(4), m(7.6), 0);
-  // five red lamps, dark until the start sequence lights them (lights(n), from the replay's or simulation's status)
-  const on = new THREE.MeshStandardMaterial({color: 0x330000, emissive: 0xff1a1a, emissiveIntensity: 4});
+  line.castShadow = false;
+  line.receiveShadow = true;
+  const X = m(6), span = w + m(6), top = m(7.8), low = m(6.8);
+  for (const s of [-1, 1]) add(new THREE.BoxGeometry(m(0.7), top, m(0.7)), steel, X, top / 2, s * span / 2);
+  for (const y of [top, low]) for (const dx of [-m(0.35), m(0.35)]) add(new THREE.BoxGeometry(m(0.12), m(0.12), span), steel, X + dx, y, 0);
+  // the truss's web, one merged mesh
+  const web = [], bays = Math.round(span / m(1.6));
+  for (let k = 0; k < bays; k++) for (const dx of [-m(0.35), m(0.35)]) {
+    const z0 = -span / 2 + k * span / bays, z1 = z0 + span / bays, up = k % 2 ? [low, top] : [top, low];
+    const d = new THREE.Vector3(0, up[1] - up[0], z1 - z0), bar = new THREE.BoxGeometry(m(0.06), d.length(), m(0.06));
+    bar.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(UP, d.clone().normalize())).translate(X + dx, (up[0] + up[1]) / 2, (z0 + z1) / 2);
+    web.push(bar);
+  }
+  const trussWeb = new THREE.Mesh(mergeGeometries(web), steel);
+  trussWeb.castShadow = true;
+  g.add(trussWeb);
+  web.forEach(b => b.dispose());
+  // five panels of four lamps, the middle two rows the reds that count down, dark until the start sequence (lights(n), from the
+  // replay's or simulation's status) lights them
+  const on = new THREE.MeshStandardMaterial({color: 0x330000, emissive: 0xff1a1a, emissiveIntensity: 5});
   const off = new THREE.MeshStandardMaterial({color: 0x1a0606, roughness: 0.3});
-  const lamps = [-2, -1, 0, 1, 2].map(i => add(new THREE.SphereGeometry(m(0.32), 16, 12), off, -m(3.55), m(7.6), i * m(1.4)));
-  g.userData.lights = n => lamps.forEach((l, i) => { l.material = i < n ? on : off; });
+  const panelMat = new THREE.MeshStandardMaterial({color: 0x08090a, roughness: 0.6}), lamps = [], lampGeo = new THREE.CircleGeometry(m(0.17), 20).rotateY(-Math.PI / 2);
+  for (let i = -2; i <= 2; i++) {
+    add(new THREE.BoxGeometry(m(0.16), m(1.75), m(0.56)), panelMat, X - m(0.48), low - m(0.4), i * m(0.95));
+    lamps.push([0.25, -0.25].map(dy => add(lampGeo, off, X - m(0.565), low - m(0.4) + m(dy), i * m(0.95))));
+  }
+  g.userData.lights = n => lamps.forEach((pair, i) => pair.forEach(l => { l.material = i < n ? on : off; }));
   g.userData.mats = [on, off];  // dispose() frees both: the traversal only sees the ones in use
   return g;
 }
