@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import {createRace} from '../src/static/sim.js';
 import {buildTrack} from '../src/static/track.js';
-import {autoAero} from '../src/static/circuits.js';
+import {autoAero, biome} from '../src/static/circuits.js';
 import {fitGeo} from '../src/static/satellite.js';
 
 // the "stadium" of test_player: two 1.2 km straights joined by 120 m radius right-hand hairpins (clockwise), metres
@@ -69,4 +69,10 @@ assert.ok(vBank > vFlat * 1.04, `banked hairpin faster: ${vFlat.toFixed(1)} -> $
     assert.ok(Math.hypot(a - x, b - y) < 3, `point off by ${Math.hypot(a - x, b - y)} m`);
   }
 }
+// trees follow the climate: the calendar's table first, latitude for any other circuit
+for (const [id, b] of [['interlagos', 'broadleaf'], ['zandvoort', 'broadleaf'], ['spa', 'conifer'], ['red_bull_ring', 'conifer'], ['marina_bay', 'palm'], ['yas_marina', 'arid'], ['vegas', 'arid']]) assert.equal(biome(id, 0), b, id);
+assert.equal(biome('nowhere', 60), 'conifer');
+assert.equal(biome('nowhere', -50), 'conifer');
+assert.equal(biome('nowhere', 30), 'broadleaf');
+assert.equal(biome('nowhere'), 'broadleaf');
 console.log('ok');

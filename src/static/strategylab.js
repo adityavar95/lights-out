@@ -111,7 +111,12 @@ export function renderStrategyLab(root, laps, results, pits, year, why, round) {
     const x = L => m.l + L / n * (W - m.l - m.r), y = pos => m.t + (pos - 1) / (N - 1) * (H - m.t - m.b);
     const s = svg('svg', {viewBox: `0 0 ${W} ${H}`, class: 'labchart', role: 'img',
       'aria-label': `${label(id)} position by lap: real P${real.finish}, what-if P${res.finish}`});
-    M.neutral.forEach((ntrl, i) => ntrl && s.append(svg('rect', {x: x(i), y: m.t, width: x(1) - x(0), height: H - m.t - m.b, class: 'sc'})));
+    for (let i = 0; i < M.neutral.length; i++) {  // one band per neutral spell, so its hairline edge isn't drawn between laps
+      if (!M.neutral[i]) continue;
+      let j = i; while (M.neutral[j + 1]) j++;
+      s.append(svg('rect', {x: x(i), y: m.t, width: x(j + 1) - x(i), height: H - m.t - m.b, class: 'sc'}));
+      i = j;
+    }
     for (let pos = 1; pos <= N; pos += N > 12 ? 2 : 1) {
       s.append(svg('line', {x1: m.l, x2: W - m.r, y1: y(pos), y2: y(pos), class: 'grid'}));
       const t = svg('text', {x: m.l - 8, y: y(pos), class: 'axis', 'text-anchor': 'end', 'dominant-baseline': 'central'});

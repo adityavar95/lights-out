@@ -1,7 +1,8 @@
 // Run: node tests/test_multiviewer.mjs  — checks the F1 TV multiviewer's telemetry timing (multiviewer.js).
 import assert from 'node:assert/strict';
 import {short, sessionsOf, lead, aerialTiles} from '../src/static/stream.js';
-import {sessionName, telAt, launchAt, sessionStart, renditions, playError, radioList, arrange} from '../src/static/multiviewer.js';
+import {sessionName, telAt, launchAt, sessionStart, renditions, playError, arrange, goLive} from '../src/static/multiviewer.js';
+import {radioList} from '../src/static/radiopanel.js';
 import {broadcastAt, pickVideo} from '../src/static/commentary.js';
 
 assert.equal(sessionName({label: 'Race', title: '2026 United States Grand Prix'}), 'Race');
@@ -118,5 +119,21 @@ assert.deepEqual(sessionsOf(wk).map(short), ['FP1', 'FP2', 'Sprint quali', 'Qual
   assert.ok(Math.max(...tiles.map(a => a.dx + 256)) >= 1920 && Math.max(...tiles.map(a => a.dy + 256)) >= 1080);
   assert.equal(new Set(tiles.map(a => `${a.x},${a.y}`)).size, tiles.length);
   assert.equal(tiles.find(a => a.dx <= 960 && a.dx + 256 > 960 && a.dy <= 540 && a.dy + 256 > 540).x, Math.floor((-46.6997 + 180) / 360 * 65536));
+}
+// Go to live: the reference (F1 Live studio) to its edge, every other live tile to its wall-clock moment, playing; a
+// replay, or a tile with no player yet, untouched
+{
+  // edge: seek range end (video s); wall: wall clock (s) at video 0, which differs per feed
+  const tile = (live, edge, wall) => {
+    const t = {played: 0, video: {currentTime: 5, paused: false, play() { t.played++; return Promise.resolve(); }},
+      player: {isLive: () => live, seekRange: () => ({end: edge}), getPlayheadTimeAsDate: () => new Date((wall + t.video.currentTime) * 1000)}};
+    return t;
+  };
+  const studio = tile(true, 900, 1000), onboard = tile(true, 950, 1010), replay = tile(false, 0, 0), loading = {video: {}};
+  goLive([onboard, studio, replay, loading], studio);
+  assert.deepEqual([studio.video.currentTime, studio.played], [900, 1], 'no goToLive on the player: the seek range end');
+  // studio at wall 1900 -> onboard at 1900 - 1010, not its own edge
+  assert.deepEqual([onboard.video.currentTime, onboard.played], [890, 1]);
+  assert.deepEqual([replay.played, replay.video.currentTime], [0, 5]);
 }
 console.log('multiviewer renditions ok');

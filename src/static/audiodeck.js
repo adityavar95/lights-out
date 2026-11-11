@@ -32,7 +32,7 @@ export function setupAudioDeck(deck, stage, getState) {
   A.radio = el('section', {class: 'glass teamradio', hidden: true, role: 'status', 'aria-live': 'polite'},
     el('header', {}, el('span', {class: 'trdot'}), 'TEAM RADIO', A.who), A.wave, A.text);
   A.mix = el('div', {class: 'deckgroup audiomix', role: 'group', 'aria-label': 'Audio'},
-    A.toggle, slider('engine', 'ENG'), slider('fx', 'FX'), slider('radio', 'RADIO'));
+    A.toggle, slider('master', 'MAIN'), slider('engine', 'ENG'), slider('fx', 'FX'), slider('radio', 'RADIO'));
   deck.append(A.mix);
   stage.append(A.radio);
 }

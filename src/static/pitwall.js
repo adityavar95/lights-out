@@ -5,7 +5,7 @@ import {el, lastBefore, led} from './util.js';
 import {setWeather} from './scene3d.js';
 import {setGhost} from './hud.js';
 import {stintLife} from './tyres.js';
-import {trackWetness, SKIES} from './weather.js';
+import {trackWetness, replayWeather, SKIES} from './weather.js';
 import {PACE} from './strategy.js';
 import {trackPos} from './sim.js';
 
@@ -14,7 +14,16 @@ const SKY = {CLEAR: 'Clear', OVERCAST: 'Overcast', LIGHT_RAIN: 'Light rain', HEA
 const PACES = [[null, 'Auto'], ['PUSH', 'Push'], ['BALANCED', 'Balanced'], ['SAVE', 'Lift & coast']];
 const DIRECTOR = [['GREEN', 'Green flag', ['GREEN']], ['VSC', 'VSC', ['VSC', 'VSC ENDING']], ['SC', 'Safety car', ['SC', 'SC IN']]];
 const PIT_STATE = {ENTRY: 'PIT ENTRY', LANE: 'IN PIT LANE', STOPPED: 'TYRE CHANGE', EXIT: 'PIT EXIT'};
-const DRY = {cloud: 0.1, rain: 0, wetLine: 0, wetOff: 0}, REPLAY_RAIN = {cloud: 0.9, rain: 0.35, wetLine: 0.35, wetOff: 0.5};
+const DRY = {cloud: 0.1, rain: 0, wetLine: 0, wetOff: 0};
+
+// the compounds out on track at t in a GPS replay, from each car's lap and stint (nothing in a lap-timing replay or the sim)
+function tyresOut(S, t) {
+  if (!S.lapsBy || !S.data?.stints) return [];
+  return S.drivers.map(d => {
+    const lp = S.lapsBy[d.id], n = lp ? lastBefore(lp, t) : -1, lap = Math.max(n < 0 ? 0 : lp[n][1], 1);
+    return S.data.stints.find(s => s[0] === d.id && s[1] <= lap && (s[2] ?? 999) >= lap)?.[3];
+  }).filter(Boolean);
+}
 
 let P, getS, chosen = 'MEDIUM', updatedAt = 0, bannerMsg = null;
 
@@ -98,8 +107,7 @@ export function updatePitwall(S) {
   const now = performance.now();
   if (now - updatedAt < 150) return;  // the console only needs ~6 updates a second
   updatedAt = now;
-  const w = S.data?.weather?.[lastBefore(S.data.weather || [], t)];
-  setWeather(R ? {cloud: R.W.cloud, rain: R.W.rain, wetLine: R.W.wetLine, wetOff: R.W.wetOff} : w?.[3] ? REPLAY_RAIN : DRY);
+  setWeather(R ? {cloud: R.W.cloud, rain: R.W.rain, wetLine: R.W.wetLine, wetOff: R.W.wetOff} : S.data?.weather ? replayWeather(S.data.weather, t, tyresOut(S, t)) : DRY);
   if (!R) return setGhost(null);
   // the weather strip above the track: air and track cool under cloud and rain
   S.data.weather[0] = [0, Math.round(26 - 5 * R.W.cloud), Math.round(38 - 16 * Math.max(R.W.cloud - 0.1, 0) - 6 * R.W.rain), R.W.rain > 0.05 ? 1 : 0, 2];

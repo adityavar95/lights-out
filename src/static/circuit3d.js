@@ -379,12 +379,18 @@ export function buildCircuit(world, {pts, map, tex, width, startKnown, ann, corn
 
   // --- trees on the terrain, 20-160 m off the track: conifers and broadleaf crowns of leaf cards (textures3d.js
   // foliage), cut out by alpha. Alpha-to-coverage turns the cut edges into MSAA coverage, so leaves are anti-aliased. ---
-  const trunkGeo = new THREE.CylinderGeometry(m(0.22), m(0.42), m(7), 7).translate(0, m(3.5), 0);
+  // what grows here follows the climate (circuits.js biome): palms (Singapore) are tall and thin, arid scrub (the Gulf, Vegas)
+  // a third as many and low, broadleaf a little wider and lower than conifers (Spa, Red Bull Ring). `cones` holds the
+  // conifer / palm crowns, `leaves` the broadleaf / scrub ones; `pCone` is the share of conifer crowns.
+  const biome = ann?.biome ?? 'broadleaf', palm = biome === 'palm', arid = biome === 'arid';
+  const pCone = {conifer: 0.9, broadleaf: 0.1, palm: 1, arid: 0}[biome];
+  const trunkGeo = palm ? new THREE.CylinderGeometry(m(0.17), m(0.3), m(11), 7).translate(0, m(5.5), 0)
+                        : new THREE.CylinderGeometry(m(0.22), m(0.42), m(7), 7).translate(0, m(3.5), 0);
   seed = 11;
-  const coneGeo = conifer(m), leafGeo = broadleaf(m);
-  const N = 1500, mtx = new THREE.Matrix4();
+  const coneGeo = palm ? palmTree(m) : conifer(m), leafGeo = broadleaf(m);
+  const N = arid ? 500 : palm ? 900 : 1500, mtx = new THREE.Matrix4();
   const trunks = new THREE.InstancedMesh(trunkGeo, new THREE.MeshStandardMaterial({color: 0x4a3a2a, roughness: 1}), N);
-  const crownMat = new THREE.MeshStandardNodeMaterial({map: tex.foliage, alphaTest: 0.5, alphaToCoverage: true, side: THREE.DoubleSide,
+  const crownMat = new THREE.MeshStandardNodeMaterial({map: tex.foliageOf(palm ? 'palm' : arid ? 'arid' : 'lush'), alphaTest: 0.5, alphaToCoverage: true, side: THREE.DoubleSide,
                                                    roughness: 0.8, vertexColors: true});
   // a card's back face keeps the crown's outward normal: three flips it for back faces, which lit half the leaves from inside
   crownMat.normalNode = normalViewGeometry;
@@ -401,14 +407,20 @@ export function buildCircuit(world, {pts, map, tex, width, startKnown, ann, corn
     const p = p3[Math.floor(rand() * p3.length)], ang = rand() * Math.PI * 2, r = m(20 + rand() * 140);
     const x = p.x + Math.cos(ang) * r, z = p.z + Math.sin(ang) * r;
     if (sample.some(q => (q.x - x) ** 2 + (q.z - z) ** 2 < clear)) continue;
-    const s = 1.15 + rand() * 1.05, conifer = rand() < 0.5, crowns = conifer ? cones : leaves;  // 13-24 m conifers, 12-22 m broadleaf
-    mtx.makeRotationY(rand() * Math.PI * 2).scale(new THREE.Vector3(s, s, s)).setPosition(x, groundAt(x, z) - m(0.3), z);
+    const conifer = rand() < pCone, crowns = conifer ? cones : leaves;
+    // 13-24 m conifers; broadleaf 11-20 m and wider; palms 14-20 m; scrub 3-6 m
+    const s = arid ? 0.5 + rand() * 0.4 : palm ? 1.1 + rand() * 0.45 : 1.15 + rand() * 1.05;
+    const sc = conifer || palm ? [s, s, s] : arid ? [1.4 * s, s, 1.4 * s] : [1.15 * s, 0.92 * s, 1.15 * s];
+    mtx.makeRotationY(rand() * Math.PI * 2).scale(new THREE.Vector3(...sc)).setPosition(x, groundAt(x, z) - m(0.3), z);
     trunks.setMatrixAt(k++, mtx);
     crowns.setMatrixAt(crowns.count, mtx);
     // HSL in sRGB, times the foliage texture's greens: in three's linear working space these lightnesses come out pastel
     // conifers dark and blue-green (lighter ones came out lime)
-    crowns.setColorAt(crowns.count++, new THREE.Color().setHSL(conifer ? 0.35 + rand() * 0.05 : 0.23 + rand() * 0.07,
-      conifer ? 0.16 + rand() * 0.12 : 0.2 + rand() * 0.16, conifer ? 0.23 + rand() * 0.06 : 0.33 + rand() * 0.1, THREE.SRGBColorSpace));
+    const [h, sat, lum] = conifer && !palm ? [0.35 + rand() * 0.05, 0.16 + rand() * 0.12, 0.23 + rand() * 0.06]
+      : palm ? [0.25 + rand() * 0.07, 0.3 + rand() * 0.15, 0.33 + rand() * 0.1]
+      : arid ? [0.14 + rand() * 0.04, 0.1 + rand() * 0.12, 0.4 + rand() * 0.1]
+      : [0.15 + rand() * 0.2, 0.2 + rand() * 0.2, 0.3 + rand() * 0.15];  // broadleaf: yellow-green to deep green
+    crowns.setColorAt(crowns.count++, new THREE.Color().setHSL(h, sat, lum, THREE.SRGBColorSpace));
   }
   trunks.count = k;
   for (const t of [trunks, cones, leaves]) add(t).castShadow = true;
@@ -468,6 +480,11 @@ export function buildCircuit(world, {pts, map, tex, width, startKnown, ann, corn
 
   return {
     trackMat, wettable, surface, groundAt, pts, half, night: side.night,
+    // graphics.js settings; hiding also spares them their draw calls in every shadow cascade
+    show({trees, trackside}) {
+      for (const o of [trunks, cones, leaves]) o.visible = trees;
+      for (const o of side.meshes) o.visible = trackside;
+    },
     lights: n => start?.userData.lights(n),  // the start gantry's red lamps lit, 0-5
     // Pit lane (map points of its centre line, entry road to exit road): a strip on the ground beside the track,
     // replacing any earlier one, with a line along each edge. The barrier on its side moves in to become the pit wall
@@ -622,6 +639,23 @@ function conifer(m) {
   }
   return cards(quads, v => new THREE.Vector3(v.x, m(1.2), v.z).normalize(),
                v => { const out = Math.min(1, Math.hypot(v.x, v.z) / m(2.5)), up = v.y / m(top); return Math.min(1, (0.5 + 0.5 * out) * (0.8 + 0.25 * up)); });
+}
+
+// palm: 9 fronds from the top of the trunk (11 m), each two cards: the first rising, the second arching over (the atlas's
+// frond halves, u 0.5-0.75 and 0.75-1)
+function palmTree(m) {
+  const quads = [], top = 11;
+  for (let j = 0; j < 9; j++) {
+    const a = (j + 0.3 * rand()) / 9 * 2 * Math.PI, l = m(2.4 + 0.6 * rand()), roll = 0.6 * (rand() - 0.5) + 0.7;
+    let at = new THREE.Vector3(0, m(top), 0), lift = 0.55 - 0.3 * rand();
+    for (const [u0, u1, droop] of [[0.5, 0.75, lift], [0.75, 1, -0.5 - 0.4 * rand()]]) {
+      const out = new THREE.Vector3(Math.cos(a) * Math.cos(droop), Math.sin(droop), Math.sin(a) * Math.cos(droop));
+      const side = new THREE.Vector3(-Math.sin(a), 0, Math.cos(a)).applyAxisAngle(out, roll);
+      quads.push([at.clone().addScaledVector(side, -l), out.clone().multiplyScalar(l), side.clone().multiplyScalar(2 * l), [u0, 0, u1, 1]]);
+      at = at.addScaledVector(out, l);
+    }
+  }
+  return cards(quads, v => new THREE.Vector3(v.x, m(3), v.z).normalize(), v => Math.min(1, 0.7 + 0.3 * (v.y / m(top))));
 }
 
 // The start gantry: a truss over the road just past the line, facing the grid, its lights on panels on the side the cars see

@@ -64,12 +64,55 @@ function photo(name, metres, tile, fallback, res = '1k') {
 // out at 0.5 by the material. Built as RGBA data, not a canvas texture: a canvas stores premultiplied colour, so the
 // transparent pixels would be black and the mip levels would draw dark fringes round every leaf; here they carry the
 // foliage's mean colour instead.
-function foliage(S = 2048) {
+// kind 'lush' is that atlas (conifers and broadleaf trees); 'palm' (right half: one frond, trunk end at its left edge) and
+// 'arid' (left half: a sparse olive-grey crown) draw their own, in the same 2:1 layout.
+function foliage(kind = 'lush', S = 2048) {
   const c = document.createElement('canvas');
   c.width = 2 * S;
   c.height = S;
   const g = c.getContext('2d', {willReadFrequently: true}), u = S / 1024;
   const shade = (k, warm) => `rgb(${Math.round(255 * k * (0.8 + 0.12 * warm))},${Math.round(255 * k)},${Math.round(255 * k * (0.62 - 0.1 * warm))})`;
+  (kind === 'lush' ? lush : dry)(g, S, u, shade, kind);
+  return foliageTex(g, S);
+}
+
+function dry(g, S, u, shade, kind) {
+  g.lineCap = 'round';
+  if (kind === 'palm') {  // a frond: spine along the middle, leaflets slanting to the tip on both sides, no body under it
+    const mid = S / 2, ox = S;
+    g.strokeStyle = '#5a4c30';
+    g.lineWidth = 7 * u;
+    g.beginPath(); g.moveTo(ox, mid); g.lineTo(ox + S * 0.97, mid); g.stroke();
+    for (let x = 20 * u; x < S * 0.96; x += 7 * u) {
+      const len = 0.46 * S * Math.sin(Math.PI * Math.min(1, x / S * 1.04)) ** 0.55 * (0.85 + 0.15 * rand());
+      for (const s of [-1, 1]) {
+        g.strokeStyle = shade(0.5 + 0.45 * rand() * (x / S + 0.4), rand() * 0.4);
+        g.lineWidth = (5 + 3 * rand()) * u;
+        g.beginPath(); g.moveTo(ox + x, mid); g.lineTo(ox + x + len * 0.55, mid + s * len * (0.9 + 0.1 * rand())); g.stroke();
+      }
+    }
+    return;
+  }
+  // arid acacia / shrub: a flat-topped crown of small olive-grey leaf clumps with gaps, on a few grey-brown stems
+  const cx = S / 2, cy = S / 2, R = 440 * u, grey = (k, a) => `rgb(${Math.round(255 * k * (0.78 + 0.1 * a))},${Math.round(255 * k * (0.78 + 0.08 * a))},${Math.round(255 * k * (0.5 + 0.1 * a))})`;
+  g.strokeStyle = '#5c5240';
+  for (let i = 0; i < 14; i++) {
+    const a = rand() * 2 * Math.PI;
+    g.lineWidth = (3 + 4 * rand()) * u;
+    g.beginPath(); g.moveTo(cx, cy + R * 0.2); g.lineTo(cx + Math.cos(a) * R * 0.85, cy + Math.sin(a) * R * 0.5 - R * 0.1); g.stroke();
+  }
+  for (let i = 0; i < 70; i++) {  // clumps: dark core with lighter leaves on top
+    const a = rand() * 2 * Math.PI, r = R * 0.9 * Math.sqrt(rand()), x = cx + Math.cos(a) * r, y = cy + Math.sin(a) * r * 0.5 - R * 0.1;
+    g.fillStyle = grey(0.38 + 0.1 * rand(), rand());
+    g.beginPath(); g.ellipse(x, y, (50 + 40 * rand()) * u, (28 + 20 * rand()) * u, 0, 0, 2 * Math.PI); g.fill();
+    for (let j = 0; j < 40; j++) {
+      g.fillStyle = grey(0.55 + 0.4 * rand() * (1 - (y - cy + R) / (2 * R)), rand());
+      g.beginPath(); g.ellipse(x + (rand() - 0.5) * 110 * u, y + (rand() - 0.5) * 60 * u, (8 + 6 * rand()) * u, (4 + 2 * rand()) * u, rand() * Math.PI, 0, 2 * Math.PI); g.fill();
+    }
+  }
+}
+
+function lush(g, S, u, shade) {
   // broadleaf: dark inner clumps so the crown is solid inside, then leaves, darker in the middle and underneath
   const R = 470 * u, cx = 512 * u, cy = 512 * u;
   for (let i = 0; i < 40; i++) {
@@ -134,7 +177,9 @@ function foliage(S = 2048) {
   g.beginPath(); g.moveTo(ox, mid); g.lineTo(ox + S * 0.95, mid); g.stroke();
   g.lineWidth = 2.2 * u;
   needles(0, mid, S * 0.95, mid, 18 * u, 900, 0.6);
+}
 
+function foliageTex(g, S) {
   const img = g.getImageData(0, 0, 2 * S, S).data, sum = [0, 0, 0];
   let n = 0;
   for (let i = 0; i < img.length; i += 4 * 61) if (img[i + 3] > 200) { sum[0] += img[i]; sum[1] += img[i + 1]; sum[2] += img[i + 2]; n++; }
@@ -162,7 +207,7 @@ export function textures(high) {
     }),
     // relief for the terrain under its satellite / grass colour: tufts and soil in the normal and roughness maps
     ground: photo('sparse_grass', 3, 0, speckle('#5a7a3a', 2000, 0.2), high ? '4k' : '2k'),
-    foliage: foliage(),
+    foliageOf: (cache => kind => cache[kind] ??= foliage(kind))({}),  // atlas per tree kind, drawn when a circuit first needs it
     grass: canvasTex(256, 256, (g, w, h) => {  // plain speckle: mowing stripes shimmer from a distance
       g.fillStyle = '#427f31';
       g.fillRect(0, 0, w, h);

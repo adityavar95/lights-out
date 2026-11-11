@@ -78,7 +78,7 @@ export function updateDriverDeck(S) {
   D.badge.querySelector('.pad').textContent = input.pad ? `GAMEPAD · ${input.pad.split('(')[0].trim().slice(0, 24)}` : 'NO GAMEPAD';
   D.badge.classList.toggle('active', !!car);
 
-  if (!car) { setRibbon(null); D.status.textContent = 'AI driving every car'; return; }
+  if (!car) { setRibbon(null); D.status.replaceChildren(el('span', {}, 'AI driving')); return; }  // "every car" overran the tower's width
   // the player's input this frame, and its one-shot actions
   const inp = pollInput(dt);
   Object.assign(R.input, {throttle: inp.throttle, brake: inp.brake, steer: inp.steer, clutch: inp.clutch});

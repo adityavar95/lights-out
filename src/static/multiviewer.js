@@ -5,8 +5,9 @@
 // Each tile picks its video quality and audio track from every rendition in the stream, and can carry a see-through
 // telemetry overlay (speed, gear, RPM, throttle, brake, DRS) from OpenF1 car data (2023+ sessions).
 import {get, el, tvHeaders, count, skeleton} from './util.js';
-import {controls, icon} from './tvcontrols.js';
+import {controls, icon, toLive} from './tvcontrols.js';
 import {sessionMarks} from './scrubmarks.js';
+import {radioPanel} from './radiopanel.js';
 
 const SHAKA = '/static/assets/shaka/';
 const FIRST = ['INTERNATIONAL', 'F1 LIVE', 'TRACKER', 'DATA'];  // feed order in the picker
@@ -165,6 +166,13 @@ function setup() {
   M.playBtn = el('button', {class: 'mvmi', onclick: () => { M.more.hidePopover(); playPauseAll(); }},
     icon('playall'), el('span', {}, 'Play or pause all', el('small', {}, 'Lined up with the selected stream first')));
   M.syncBtn = el('button', {class: 'mvbtn', title: 'Line every stream up with the selected one', onclick: sync}, icon('sync'), 'Sync');
+  M.liveBtn = el('button', {class: 'mvbtn mvgolive', hidden: true, title: 'F1 Live studio (else the selected stream) to live, every other stream lined up with it', onclick: () => { goLive(M.tiles, ref()); showGoLive(); }}, 'Go to live');
+  // one team radio panel for the whole field, over the streams; it follows the stream Sync follows
+  M.radio = radioPanel({json, streams: () => M.content?.streams, live: () => !!ref()?.player?.isLive(), duck, wall: () => {
+    const r = ref();
+    if (!r?.player) return null;
+    return r.player.isLive() ? (r.player.getPlayheadTimeAsDate?.()?.getTime() ?? 0) / 1000 || null : videoT0() + r.video.currentTime;
+  }});
   M.teams = el('div', {class: 'mvteams mvpop', popover: '', id: 'mvteams', 'aria-label': 'Team view'});
   M.teamBtn = el('button', {class: 'mvbtn', popovertarget: 'mvteams', title: "Team view: the race feed with a team's two onboards"}, icon('teams'), 'Teams');
   M.more = el('div', {class: 'mvmore mvpop', popover: '', id: 'mvmore', 'aria-label': 'More'});
@@ -206,14 +214,15 @@ function setup() {
     onkeydown: e => { if (!e.target.closest('.mvtile, select, input, summary, [popover]') && !(e.key === ' ' && e.target.closest('button')) && !e.ctrlKey && !e.metaKey && !e.altKey) lead()?.root.dispatchEvent(new KeyboardEvent('keydown', {key: e.key, bubbles: true})); },
     onclose: () => {
     remember(true);
+    M.radio.close();
     // the close event comes a task later: if the viewer was reopened meanwhile, its new tiles stay
     if (!M.dlg.open) for (const t of M.tiles.splice(0)) drop(t);
   }},
     el('header', {class: 'mvhead'},
       el('button', {class: 'mvbtn mvback', title: 'Back (Esc)', onclick: () => M.dlg.close()}, icon('left'), 'Back'),
       el('div', {class: 'mvtitle'}, M.title),
-      el('div', {class: 'mvtools'}, M.layout, M.teamBtn, M.syncBtn, M.addBtn, M.moreBtn)),
-    M.grid, M.picker, M.teams, M.more, M.connect);
+      el('div', {class: 'mvtools'}, M.layout, M.teamBtn, M.radio.btn, M.syncBtn, M.liveBtn, M.addBtn, M.moreBtn)),
+    M.grid, M.radio.root, M.picker, M.teams, M.more, M.connect);
   document.body.append(M.dlg);
   M.dlg.addEventListener('pointerdown', e => {  // an open ⚙ menu closes on a click anywhere else
     for (const d of M.dlg.querySelectorAll('.mvset[open]')) if (!d.contains(e.target)) d.open = false;
@@ -327,6 +336,7 @@ export async function openViewer(video) {
   M.addBtn.disabled = true;
   M.teamBtn.hidden = true;
   setOffset(savedOffset(video.id));
+  M.radio.open(video, M.session);
   M.dlg.style.setProperty('--poster', video.img ? `url("${video.img}?w=1920&h=1080&q=HI&o=L")` : 'none');  // behind a tile until its first frame
   M.dlg.showModal();
   dispatchEvent(new CustomEvent('f1:panel', {detail: M.dlg}));  // the circuits / cars / trace panels close (and stop drawing)
@@ -439,6 +449,7 @@ function relayout() {
   const n = M.tiles.length, main = M.tiles.findIndex(t => t.root.classList.contains('big'));
   for (const t of M.tiles) t.close.hidden = n === 1;
   M.layout.hidden = M.syncBtn.hidden = n < 2;  // a layout and lining streams up mean nothing with one stream
+  showGoLive();
   for (const b of M.layout.children) b.setAttribute('aria-pressed', String((b === M.layout.lastChild) === (main >= 0 && n > 1)));
   if (!n) return void M.grid.replaceChildren(el('p', {class: 'empty'}, 'Add a stream to start watching.'));
   M.grid.querySelector(':scope > .empty')?.remove();
@@ -483,11 +494,7 @@ function tile(s) {
     new Option('Data off', ''), streams.filter(x => x.type === 'obc' && x.number).map(x => new Option(`${x.title} data`, x.number)));
   const vq = el('select', {'aria-label': 'Video quality'}), aq = el('select', {'aria-label': 'Audio track'});
   const t = {pick, drv, vq, aq, video: el('video', {playsinline: ''}), msg: el('p', {class: 'mvmsg'}), player: null,
-    hud: el('div', {class: 'mvtel', hidden: true, 'aria-hidden': 'true'}), now: el('small', {class: 'mvnow'}),
-    radio: el('ol', {class: 'mvradio', hidden: true, 'aria-label': 'Team radio messages'})};
-  t.radioCount = el('span', {class: 'n'});
-  t.radioBtn = el('button', {class: 'mvibtn mvradiobtn', hidden: true, 'aria-pressed': 'false', title: "Team radio: show or hide this driver's messages",
-    'aria-label': 'Team radio', onclick: () => toggleRadio(t)}, icon('radio'), t.radioCount);
+    hud: el('div', {class: 'mvtel', hidden: true, 'aria-hidden': 'true'}), now: el('small', {class: 'mvnow'})};
   t.video.muted = true;
   pick.onchange = () => {
     const x = streams.find(y => String(y.channelId ?? '') === pick.value);
@@ -503,12 +510,12 @@ function tile(s) {
     onclick: () => { M.pickFor = t; M.pickAt = t.chip; M.pickTitle.textContent = 'Switch stream'; M.picker.showPopover(); }},
     el('i', {class: 'mvteam'}), t.chipName, icon('down'));
   t.box = el('div', {class: 'mvvideo'}, t.video);
-  // the top bar: the stream's label (team colour, number, driver; a menu to switch stream), then radio, settings, focus,
+  // the top bar: the stream's label (team colour, number, driver; a menu to switch stream), then settings, focus,
   // remove; like the control bar it only shows while the mouse moves over the tile
-  t.root = el('div', {class: 'mvtile', onpointerdown: () => listen(t)}, t.box, t.hud, t.radio,
+  t.root = el('div', {class: 'mvtile', onpointerdown: () => listen(t)}, t.box, t.hud,
     el('div', {class: 'mvbar'}, t.chip, el('span', {class: 'mvsp'}),
-      t.radioBtn,
-      el('details', {class: 'mvset'}, el('summary', {class: 'mvibtn', title: 'Quality, audio and telemetry', 'aria-label': 'Stream settings'}, icon('tune')),
+      // a class, not .mvbar:has(details[open]): that selector re-styled ~700 elements on every 3D frame, even with the viewer shut
+      el('details', {class: 'mvset', ontoggle: e => e.target.parentElement.classList.toggle('menuopen', e.target.open)}, el('summary', {class: 'mvibtn', title: 'Quality, audio and telemetry', 'aria-label': 'Stream settings'}, icon('tune')),
         el('div', {class: 'mvsetpanel'}, el('label', {}, 'Video quality', vq), el('label', {}, 'Audio', aq),
           el('label', {hidden: !M.session}, 'Telemetry overlay', drv), t.now)),
       el('button', {class: 'mvibtn', title: 'Focus: this stream big, the others beside it', 'aria-label': 'Focus on this stream',
@@ -522,84 +529,6 @@ function tile(s) {
   return t;
 }
 
-// A driver onboard's team radio (/api/f1tv/radio: F1's clips, transcribed on the server): the tile's 📻 button (with the
-// count so far) shows or hides a list of the messages to scroll through; feeds (International, F1 Live, tracker, data)
-// have none. Asked again every 8 s while clips are being transcribed, and all along on a live session, where F1 adds
-// each one ~30 s after it's said.
-async function radioFeed(t) {
-  clearTimeout(t.radioTimer);
-  const s = M.content.streams.find(x => String(x.channelId ?? '') === t.pick.value), num = s?.type === 'obc' && s.number;
-  if (t.radioNum !== num) { t.clips = null; t.radioShown = undefined; }
-  t.radioNum = num;
-  t.radioBtn.hidden = !num || !M.session;
-  t.radio.hidden = t.radioBtn.hidden || t.radioBtn.getAttribute('aria-pressed') !== 'true';
-  if (t.radioBtn.hidden) return;
-  try {
-    const r = await json(`/api/f1tv/radio/${M.video.year}/${M.video.round}/${num}?session=${encodeURIComponent(M.session)}`);
-    if (!M.tiles.includes(t) || t.radioNum !== num) return;  // closed or switched meanwhile
-    t.radioWords = r.transcribe;
-    // a transcribed clip with no words in it (a click, engine noise) isn't a message
-    t.clips = r.clips.filter(c => c.text !== '');
-    t.radioError = r.error;
-    t.radioFails = 0;
-    if (r.pending || t.player?.isLive()) t.radioTimer = setTimeout(() => radioFeed(t), 8000);
-  } catch (e) {
-    if (!M.tiles.includes(t) || t.radioNum !== num) return;
-    t.radioError = e.message;
-    t.clips ??= [];  // so the list can say why
-    t.radioFails = (t.radioFails ?? 0) + 1;
-    t.radioTimer = setTimeout(() => radioFeed(t), Math.min(8000 * 2 ** t.radioFails, 120000));  // 16 s, 32 s… up to 2 min
-  }
-}
-
-function toggleRadio(t) {
-  const on = t.radioBtn.getAttribute('aria-pressed') !== 'true';
-  t.radioBtn.setAttribute('aria-pressed', on);
-  t.radio.hidden = !on;
-  t.radioShown = undefined;  // drawn on the next frame, scrolled to the newest
-}
-
-// the messages said by the playhead's time (a live stream's own clock, a replay's via videoT0): a replay's list grows as
-// the video plays, so it never tells what's coming
-export function radioList(clips, wall) {
-  return clips.filter(c => c.t <= wall);
-}
-
-// One radio clip at a time, fetching or playing, F1's audio fetched with this tab's F1 TV token (an <audio src> can't send it). Its
-// buttons (the box redraws every minute, so found by clip) show ■ while it plays; a second press stops it.
-let playing = null;
-const mark = (url, text, title) => M.dlg.querySelectorAll('.mvplay').forEach(b => {
-  if (b.dataset.url === url) { b.textContent = text; if (title) b.title = title; }
-});
-function stopClip() {
-  playing?.abort.abort();
-  playing?.audio?.pause();  // its onpause resets its buttons
-  playing = null;
-}
-async function playClip(url, t) {
-  const same = playing?.url === url;
-  stopClip();
-  if (same) return;
-  const me = playing = {url, t, abort: new AbortController()};
-  try {
-    const r = await fetch(`/api/f1tv/radio/audio?${new URLSearchParams({u: url})}`, {headers: tvHeaders(), signal: me.abort.signal});
-    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || `HTTP ${r.status}`);
-    const src = URL.createObjectURL(await r.blob()), audio = me.audio = new Audio(src);
-    mark(url, '■');
-    audio.onended = audio.onpause = () => {
-      URL.revokeObjectURL(src);
-      if (playing?.audio === audio) playing = null;
-      mark(url, '▶');
-    };
-    await audio.play();
-  } catch (e) {
-    if (playing !== me) return;  // stopped or replaced: not a failure
-    playing = null;
-    mark(url, '!', e.message);
-  }
-}
-
-
 // the tile you touch is selected: it has the sound (like MultiViewer's audio focus) and is the one Sync follows
 function listen(t) {
   for (const x of M.tiles) {
@@ -607,7 +536,8 @@ function listen(t) {
     x.root.classList.toggle('audio', x === t);
   }
   const s = M.content.streams.find(x => String(x.channelId ?? '') === t.pick.value);
-  M.syncBtn.title = `Line every stream up with ${s?.type === 'obc' ? s.title : FEEDS[s?.title] ?? 'the selected one'}`;
+  M.syncBtn.title = M.tiles.some(isStudio) ? 'Line every stream up with F1 Live studio'
+    : `Line every stream up with ${s?.type === 'obc' ? s.title : FEEDS[s?.title] ?? 'the selected one'}`;
   // the stream you hear: a bright ring as it changes, settling to a quiet one (YouTube TV, Apple TV multiview)
   t.root.classList.add('flash');
   clearTimeout(t.flashTimer);
@@ -664,19 +594,21 @@ async function load(t, at) {
       // resolution (the user's choice; ABR sized to the tile and stepped down). With ABR off shaka still picks the first
       // rendition from the bandwidth estimate, so the estimate is set past any rendition (top: 2160p at 15.4 Mb/s).
       abr: {enabled: false, restrictToElementSize: false, defaultBandwidthEstimate: 1e9, restrictions: {minHeight: 0}}});
-    const l = lead();  // a new stream starts where the selected one is, playing or paused like it
+    const l = ref();  // a new stream starts where F1 Live studio (else the selected one) is, playing or paused like it
     const join = l && l !== t && l.player && !l.player.isLive();
     // load straight at that time: loading from 0 and then seeking fetched the start of the session for nothing
     await t.player.load(p.url, at ?? t.startAt ?? (join ? l.video.currentTime : undefined));
     t.startAt = undefined;
+    showGoLive();
     t.msg.className = 'mvmsg';  // .mvmsg.loading outranks .mvmsg:empty: an empty spinner stayed over the picture
     t.msg.textContent = '';
     fillQuality(t);
     lockTop(t);
-    radioFeed(t);
     // the selected one kept playing while this one buffered: catch up once it plays (usually inside what's buffered)
     if (join && at == null) t.video.addEventListener('playing', () => { if (!l.video.paused) t.video.currentTime = l.video.currentTime; }, {once: true});
     if (!l || l === t || !l.video.paused) t.video.play().catch(() => {});
+    // live: everything follows F1 Live studio, so when it (or any live stream) loads, line the live tiles up with it
+    if (t.player.isLive()) sync();
   } catch (e) {
     t.msg.className = 'mvmsg';
     t.msg.textContent = playError(e);
@@ -776,25 +708,8 @@ async function telemetry(t) {
 function drawTelemetry() {
   M.raf = M.dlg.open ? requestAnimationFrame(drawTelemetry) : 0;
   if (performance.now() - (M.savedAt ?? 0) > 10000) { M.savedAt = performance.now(); remember(); }
+  M.radio.tick();
   for (const t of M.tiles) {
-    if (t.clips) {  // the onboard's 📻 count and radio list, touched only when its messages change
-      const live = t.player?.isLive(), wall = live ? (t.player.getPlayheadTimeAsDate?.()?.getTime() ?? 0) / 1000 : videoT0() + t.video.currentTime;
-      const said = radioList(t.clips, wall), key = said.map(c => `${c.t}${c.text}${c.error}`).join() + (t.radioError ?? '');
-      if (key !== t.radioShown) {
-        t.radioShown = key;
-        t.radioCount.textContent = said.length || '';
-        if (!t.radio.hidden) {
-          const atEnd = t.radio.scrollHeight - t.radio.scrollTop - t.radio.clientHeight < 40;  // reading older ones: stay there
-          t.radio.replaceChildren(...said.map(c => el('li', {},
-            el('button', {class: 'mvplay', 'data-url': c.url, title: 'Play this radio message', 'aria-label': 'Play this radio message',
-              onclick: () => playClip(c.url, t)}, playing?.url === c.url ? '■' : '▶'),
-            el('time', {}, new Date(c.t * 1000).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit'})),
-            el('span', {}, c.text ?? c.error ?? (t.radioWords ? 'transcribing…' : 'Team radio')))),
-            ...(said.length ? [] : [el('li', {class: 'none'}, t.radioError ?? 'No radio yet')]));
-          if (atEnd) t.radio.scrollTop = t.radio.scrollHeight;
-        }
-      }
-    }
     if (!t.tel || !t.parts) continue;
     const r = t.player?.isLive() ? null : telAt(t.tel, videoT0() + t.video.currentTime), key = r && Object.values(r).join();
     if (key === t.shown) continue;
@@ -811,21 +726,57 @@ function drawTelemetry() {
 }
 
 function drop(t) {
-  clearTimeout(t.radioTimer);
-  if (playing?.t === t) stopClip();
   t.player?.destroy();
   t.root.remove();
 }
 
-// line every tile up with the selected one: by wall-clock time on live streams, by position on replays
-function sync() {
-  const l = lead(), date = l?.player?.getPlayheadTimeAsDate?.();
-  for (const t of M.tiles) {
-    if (t === l || !t.player) continue;
-    const d = date && t.player.getPlayheadTimeAsDate?.();
-    t.video.currentTime = d ? t.video.currentTime + (date - d) / 1000 : l.video.currentTime;
+// The tile every other one follows on Sync and Go to live: F1 Live studio when it's on screen (the user's main stream),
+// else the selected one
+const isStudio = t => t.player && M.content?.streams.find(x => String(x.channelId ?? '') === t.pick.value)?.title === 'F1 LIVE';
+const ref = () => M.tiles.find(isStudio) ?? lead();
+
+// the stream you hear down to a quarter under a radio message, back after it
+function duck(on) {
+  if (on && !M.ducked) {
+    const v = lead()?.video;
+    if (v) { M.ducked = {v, vol: v.volume}; v.volume *= .25; }
+  } else if (!on && M.ducked) {
+    M.ducked.v.volume = M.ducked.vol;
+    M.ducked = null;
   }
 }
+
+// line every tile up with the reference: by wall-clock time on live streams, by position on replays
+function sync() {
+  const r = ref();
+  if (!r?.player) return;
+  if (r.player.isLive()) return void liveAt(M.tiles, r);
+  for (const t of M.tiles) if (t !== r && t.player) t.video.currentTime = r.video.currentTime;
+}
+
+// video time -> wall clock (s); without a date, F1 TV's feeds share one epoch, so position is the clock
+const wallOff = t => { const d = t.player.getPlayheadTimeAsDate?.(); return d ? d.getTime() / 1000 - t.video.currentTime : 0; };
+
+// every other live tile to the reference's wall-clock moment, playing like it. Each feed has its own encoder delay, so
+// sending each to its own edge left them seconds apart.
+// shortcut: a feed whose live edge is behind the reference's moment can't get there; shaka holds it at its edge
+function liveAt(tiles, r) {
+  const at = r.video.currentTime + wallOff(r);
+  for (const t of tiles) {
+    if (t === r || !t.player?.isLive()) continue;
+    t.video.currentTime = at - wallOff(t);
+    if (!r.video.paused) t.video.play().catch(() => {});
+  }
+}
+
+// the reference (F1 Live studio when it's on) to its live edge, the other live tiles lined up with it; a replay stays put
+export function goLive(tiles, r = tiles.find(t => t.player?.isLive())) {
+  if (!r?.player?.isLive()) return;
+  toLive(r.player, r.video);
+  r.video.play().catch(() => {});
+  liveAt(tiles, r);
+}
+const showGoLive = () => { M.liveBtn.hidden = !M.tiles.some(t => t.player?.isLive()); };
 
 function playPauseAll() {
   const play = M.tiles.every(t => t.video.paused);

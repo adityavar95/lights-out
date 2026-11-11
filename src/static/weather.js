@@ -45,3 +45,32 @@ export function weatherStep(W, dt, traffic) {
 // wetness a tyre meets, offLine metres from the racing line: the line's water within ~2 m of it, the rest's beyond
 export const wetAt = (W, offLine) => W.wetOff + (W.wetLine - W.wetOff) * Math.exp(-offLine * offLine / 8);
 export const trackWetness = W => (W.wetLine + W.wetOff) / 2;
+
+// Sun elevation in degrees over lat, lon (degrees) at a Date: NOAA's low-order formula, within ~1.5° (no equation of time)
+export function sunElevation(lat, lon, date) {
+  const d = new Date(date), rad = Math.PI / 180;
+  const n = (Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) - Date.UTC(d.getUTCFullYear(), 0, 0)) / 864e5;
+  const decl = 23.44 * rad * Math.sin((360 / 365) * (n - 81) * rad);
+  const hour = (d.getUTCHours() + d.getUTCMinutes() / 60 + lon / 15 - 12) * 15 * rad, phi = lat * rad;
+  return Math.asin(Math.sin(phi) * Math.sin(decl) + Math.cos(phi) * Math.cos(decl) * Math.cos(hour)) / rad;
+}
+// scene3d.js's SKIES index for a sun elevation: Midday, Golden hour under 20°, Night past civil twilight (-6°)
+export const skyFor = elev => elev > 20 ? 0 : elev > -6 ? 1 : 3;
+
+// A replay's weather look at t: OpenF1's rows [t, air, track, rainfall, wind] only say whether rain is falling, so water
+// builds while it does (flooded in ~2 min, as the simulation's balance) and drains for ~25 min after; a field mostly on
+// intermediates or wets says the track is wet whatever the flag (it rained before the start). tyres: the compounds out on track
+export function replayWeather(weather, t, tyres = []) {
+  const step = (w, rain, dt) => rain ? w + (0.9 - w) * (1 - Math.exp(-dt / 120)) : Math.max(0, w - dt / 1500);
+  let wet = 0, last = null;
+  for (const w of weather || []) {
+    if (w[0] > t) break;
+    if (last) wet = step(wet, last[3], w[0] - last[0]);
+    last = w;
+  }
+  if (last) wet = step(wet, last[3], t - last[0]);
+  const inters = tyres.filter(c => c === 'INTERMEDIATE').length, wets = tyres.filter(c => c === 'WET').length;
+  if ((inters + wets) * 2 > tyres.length) wet = Math.max(wet, wets > inters ? 0.7 : 0.35);
+  const raining = !!last?.[3];
+  return {cloud: raining ? 0.9 : wet > 0.05 ? 0.5 + 0.4 * wet : 0.1, rain: raining ? 0.35 : 0, wetLine: 0.7 * wet, wetOff: wet};
+}

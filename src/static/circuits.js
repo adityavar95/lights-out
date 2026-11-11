@@ -73,6 +73,11 @@ export function autoAero(pts, mpu) {
   return {cl, cd: 0.72 + 1.128 * (cl - 0.78), drs: 0.12 + 0.1 * Math.min(1, (cl - 0.78) / 0.27), longest};
 }
 
+// What grows round a circuit (the 3D trees): the calendar's by name, any other by latitude when known
+const BIOME = {spa: 'conifer', red_bull_ring: 'conifer', marina_bay: 'palm', yas_marina: 'arid', bahrain: 'arid', losail: 'arid', jeddah: 'arid', vegas: 'arid',
+  ...Object.fromEntries('interlagos silverstone zandvoort monza hungaroring catalunya imola baku shanghai suzuka villeneuve rodriguez miami americas albert_park'.split(' ').map(id => [id, 'broadleaf']))};
+export const biome = (id, lat) => BIOME[id] ?? (Math.abs(lat) > 45 ? 'conifer' : 'broadleaf');  // NaN / undefined lat: broadleaf
+
 export const aeroLabel = cl => (cl >= 1.2 ? 'Ultra-high downforce' : cl >= 1.05 ? 'High downforce' : cl >= 0.95 ? 'Medium-high downforce'
   : cl >= 0.88 ? 'Medium downforce' : cl >= 0.82 ? 'Medium-low downforce' : 'Ultra-low downforce');
 
@@ -134,7 +139,7 @@ export function annotate(track, pts, mpu) {
   const dist = (i, j) => { const d = Math.abs(cum[i] - cum[j]); return Math.min(d, lap - d); };
   const out = {h: track?.h?.length === n ? track.h : new Array(n).fill(0), bank: new Array(n).fill(0), kerb: new Array(n).fill(''),
                tunnel: null, zones: null, preset, wall: preset?.wall ?? 10, aero: preset?.aero ?? autoAero(pts, mpu),
-               rho: airDensity(track?.circuitId), pitLimit: pitLimit(track?.circuitId)};
+               biome: biome(track?.circuitId, track?.lat), rho: airDensity(track?.circuitId), pitLimit: pitLimit(track?.circuitId)};
   if (!preset || !track.corners?.length) return out;
   // a corner's outline index: nearest point to its position (corners come in F1 coordinates, rotated like the outline)
   const rot = track.rot ?? (([x, y]) => [x, y]);

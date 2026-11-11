@@ -40,6 +40,8 @@ const ICONS = {
 };
 
 // a line icon (stroke follows the text colour); decorative: the button it sits in carries the label
+export const toLive = (p, video) => { if (p.goToLive) p.goToLive(); else video.currentTime = p.seekRange().end; };
+
 export function icon(name) {
   const s = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   for (const [k, v] of Object.entries({viewBox: '0 0 24 24', class: `ico ico-${name}`, 'aria-hidden': 'true', fill: 'none', stroke: 'currentColor',
@@ -77,7 +79,7 @@ export function controls(video, root, player) {
   // LIVE: lit at the live edge; dimmed when behind it, and then a press goes back to the edge
   const live = el('button', {class: 'tvc-live', hidden: true, title: 'Go to live', onclick: () => {
     const p = player();
-    if (p?.goToLive) p.goToLive(); else if (p) video.currentTime = p.seekRange().end;
+    if (p) toLive(p, video);
   }}, 'LIVE');
   const bar = el('div', {class: 'tvc', onpointerdown: e => e.stopPropagation()},
     marks.wrap,

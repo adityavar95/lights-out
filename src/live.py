@@ -141,6 +141,12 @@ def radio() -> tuple:
         return copy.deepcopy(_state.get("SessionInfo")), copy.deepcopy(list(caps.values()) if isinstance(caps, dict) else caps)
 
 
+def driver_list() -> dict:
+    """{racing number: {Tla, FirstName, LastName, TeamName, TeamColour, HeadshotUrl, ...}} from the feed as it stands."""
+    with _lock:
+        return copy.deepcopy(_state.get("DriverList") or {})
+
+
 def status() -> dict | None:
     """{live, title} from the feed as it stands, None when it isn't running. A check, not a poll: it neither opens the
     connection nor keeps it open."""
