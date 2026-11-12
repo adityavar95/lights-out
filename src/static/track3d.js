@@ -52,13 +52,17 @@ export function asphalt(maps, half) {
     .mul(smoothstep(0.45, 0.75, noise(vec2(lat.mul(0.7).add(5), track.y.mul(0.04))))).mul(exp(lat.mul(lat).div(-20)).mul(0.6).add(0.4));
   const jw = max(fwidth(track.x), 1e-4), jd = abs(fract(track.x.div(4.5).add(0.5)).sub(0.5)).mul(4.5);  // metres to a joint
   const joint = clamp(float(0.03).sub(jd).div(jw).add(0.5), 0, 1).mul(min(1, float(0.06).div(jw)));
+  // marbles: rubber crumbs swept off the line into a band 1.5 to 5 m either side of it, more of them as the session runs; a
+  // coarse speckle (~5 cm), faded out by its screen-space size so it never shimmers at a distance
+  const crumbs = smoothstep(1, 2.2, lat.abs()).mul(float(1).sub(smoothstep(3.5, 5.5, lat.abs()))).mul(rubberAmount)
+    .mul(smoothstep(0.72, 0.8, noise(track.mul(24).add(11)))).mul(clamp(float(1).sub(jw.mul(60)), 0, 1));
   const wet = mix(wetOff, wetLine, exp(lat.mul(lat).div(-8)));
   const puddle = smoothstep(0.55, 0.75, noise(track.mul(0.09).add(3)));
   const water = clamp(wet.mul(1.4).sub(0.15).add(puddle.mul(wet)), 0, 1);
 
   mat.colorNode = materialColor.rgb.mul(mix(texture(maps.map, uvA), texture(maps.map, uvB), bmix).rgb)
     .mul(noise(track.mul(0.12)).mul(0.16).add(0.92)).mul(rubber.mul(-0.6).add(1))
-    .mul(marks.mul(-0.3).add(1)).mul(joint.mul(-0.2).add(1)).mul(mix(1, 0.45, sqrt(water)));
+    .mul(marks.mul(-0.3).add(1)).mul(joint.mul(-0.2).add(1)).mul(crumbs.mul(-0.55).add(1)).mul(mix(1, 0.45, sqrt(water)));
   // bare aggregate ~0.72, polished rubber 0.28, a water film 0.035
   const rough = mix(texture(maps.roughnessMap, uvA).g, texture(maps.roughnessMap, uvB).g, bmix).mul(0.72)
     .mul(noise(track.mul(0.3).add(7)).mul(0.15).add(0.88));
