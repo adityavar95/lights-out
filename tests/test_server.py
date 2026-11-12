@@ -151,6 +151,16 @@ this = date.today().year
 assert jolpica._settled(this - 1, None) and jolpica._settled(this, 1)
 assert not jolpica._settled(this, None) and not jolpica._settled(this, 2) and not jolpica._settled(this, 9)
 jolpica.races = _races
+# W3: the season as an iCalendar file: UTC times, the race two hours, a session with no time left out
+_real_races = jolpica.races
+jolpica.races = lambda y: ({"round": "22", "raceName": "Qatar Grand Prix", "date": "2026-11-29", "time": "16:00:00Z",
+                            "Circuit": {"circuitName": "Lusail", "Location": {"locality": "Lusail", "country": "Qatar"}},
+                            "Qualifying": {"date": "2026-11-28", "time": "18:00:00Z"}, "Sprint": {"date": "2026-11-28"}},)
+_ics = jolpica.calendar_ics(2026)
+assert _ics.count("BEGIN:VEVENT") == 2 and "Sprint" not in _ics and _ics.endswith("END:VCALENDAR\r\n")
+assert "DTSTART:20261129T160000Z\r\nDTEND:20261129T180000Z\r\nSUMMARY:Race · Qatar Grand Prix" in _ics
+assert "DTSTART:20261128T180000Z\r\nDTEND:20261128T190000Z" in _ics and "UID:2026-22-Qualifying@lightsout" in _ics
+jolpica.races = _real_races
 # Jolpica down: the calendar server.py last saved, held 5 minutes before Jolpica is tried again; none saved: the error
 import tempfile
 real_j = (jolpica.jolpica_fetch, jolpica.LAST, jolpica._pages, jolpica.jolpica_client, jolpica.SETTLED)
@@ -667,6 +677,27 @@ assert live._thread is None  # nothing opened the connection
 live._status.update(last_request=0.0, error="old", connected=True)
 live._run()  # idle: stops straight away
 assert not live._state and live._status["error"] is None and not live._status["connected"]
+
+# L1: a recorded feed plays back into the same state; pings aren't recorded
+import tempfile
+real = (live.RECORD_DIR, live._status["last_request"])
+with tempfile.TemporaryDirectory() as tmp:
+    live.RECORD_DIR = Path(tmp)
+    live._record({"type": 3, "result": {"SessionStatus": {"Status": "Inactive"}}})
+    live._record({"type": 6})
+    live._record({"type": 1, "target": "feed", "arguments": ["SessionStatus", {"Status": "Started"}]})
+    (file,) = Path(tmp).iterdir()
+    assert len(file.read_text().splitlines()) == 2
+    live._status["last_request"] = time.time()
+    waits = []
+    def _nap(s):  # the end-of-file hold: go idle so _play returns
+        waits.append(s)
+        live._status["last_request"] = 0.0
+    live._play(str(file), 2.0, _nap)
+    assert live._state["SessionStatus"] == {"Status": "Started"} and len(waits) == 1
+live._state.clear()
+live.RECORD_DIR = real[0]
+live._status.update(last_request=real[1], connected=False)
 
 # S-L6: after F1 rejects a token, no other is taken up for a while, so forged ones can't force reconnects
 real = live._thread

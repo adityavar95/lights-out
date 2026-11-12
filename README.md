@@ -105,7 +105,7 @@ Watching a race tells you what happened. Lights Out lets you **look inside it**:
 
 ## 📸 A tour of Lights Out
 
-The app has three sections, switched in the header: **Races** (real races), **Simulate** (physics races) and **Stream** (F1 TV).
+The app has three sections, switched in the header: **Races** (real races), **Play** (drive a physics race yourself) and **Stream** (F1 TV).
 
 ### 🎬 3D race replay
 
@@ -146,9 +146,9 @@ Pick any race, press ▶ and watch the cars move round a true-scale 3D circuit w
 - [With F1 TV connected](#-f1-tv), cars move on real live GPS and the focused car shows its real telemetry
 - Picking a session that's running right now opens it live
 
-### 🕹️ Simulate: a physics race on any circuit, in any era
+### 🕹️ Play: drive a physics race on any circuit, in any era
 
-The **Simulate** view runs a full physics race on the real circuit, with a grid from the real results, qualifying or standings. Watch the AI race, call the strategy from the pit wall, or take the wheel yourself.
+The **Play** view is a racing game on the real circuit, with a grid from the real results, qualifying or standings. Pick a circuit, a car and a driver, then race the AI, set a time-trial lap, or spectate and call the strategy from the pit wall.
 
 <p align="center">
 <img src="docs/screenshots/simulation.jpg" alt="Physics simulation at Austin with the driver deck, pit wall, weather and race director panels" width="100%">
@@ -496,7 +496,7 @@ F1/
 │   ├── radio.py         # Team radio clips and faster-whisper transcription
 │   └── static/          # Frontend: vanilla JS modules, no build step
 │       ├── index.html, launcher.html, style.css, circuitdeck.css
-│       ├── app.js            # Races / Simulate / Stream, calendar, hero, tabs
+│       ├── app.js            # Races / Play / Stream, calendar, hero, tabs
 │       ├── replay.js         # Replay engine (GPS, lap timing, live)
 │       ├── scene3d.js        # three.js scene, cameras, shadows, ground
 │       ├── circuit3d.js, track3d.js, cars3d.js, rb22.js, post.js, vfx.js, mirror.js

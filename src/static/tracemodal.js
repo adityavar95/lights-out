@@ -19,7 +19,7 @@ const LAPS = [['current', 'Live current lap'], ['previous', 'Previous lap'], ['f
 const ZOOMS = [['Full lap', 0, 1], ['Sector 1', 0, 1 / 3], ['Sector 2', 1 / 3, 2 / 3], ['Sector 3', 2 / 3, 1]];
 const TEAMMATE = '#38f0ff';  // B's colour when both laps are the same team's (or the same car's)
 const READ = [['Speed', 'kmh', 0, ' km/h'], ['Throttle', 'throttle', 0, '%'], ['Brake', 'brake', 0, '%'], ['RPM', 'rpm', 0, ''],
-              ['Gear', 'gear', 0, ''], ['Time', 't', 3, ' s']];
+              ['Gear', 'gear', 0, ''], ['Lat G', 'gLat', 1, ' g'], ['Long G', 'gLong', 1, ' g'], ['Time', 't', 3, ' s']];
 
 let M, getS, ctl;
 let rec = null, ref = null;  // the race's recorder; the saved reference lap (module-level: outlives the race it came from)

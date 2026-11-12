@@ -29,7 +29,7 @@ import f1auth
 import f1tv
 import ledgers
 import radio
-from jolpica import JOLPICA, driver_career, jolpica_fetch, races
+from jolpica import JOLPICA, calendar_ics, driver_career, jolpica_fetch, races
 from replay import CACHE, OpenF1Locked, ReplayUnavailable, elevation, find_session, laps_replay, pitlane, replay, save, saved_replay, scheduled_session, session_events, season_session_rows, session_telemetry, telemetry
 import live
 from tracks import _geo_track, mv_track, track
@@ -95,6 +95,17 @@ def seasons():
             return json.loads(SEASONS.read_text())
         except (OSError, ValueError):
             return [str(y) for y in range(1950, date.today().year + 1)]
+
+
+@app.get("/api/calendar/{year}.ics")
+def calendar(year: int):
+    """Every session of the season for a calendar app (the hero's Add to calendar)."""
+    check_season(year)
+    try:
+        body = calendar_ics(year)
+    except Exception as e:
+        raise HTTPException(502, f"Jolpica could not give the {year} calendar: {e}")
+    return Response(body, media_type="text/calendar", headers={"Content-Disposition": f'attachment; filename="grand-prix-{year}.ics"'})
 
 
 @app.get("/api/season/{year}")

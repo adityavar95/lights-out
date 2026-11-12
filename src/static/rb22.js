@@ -329,5 +329,5 @@ export function buildRB22({paint, accent, ink, helmet, num, stripe, light}) {
           tyre: [hubs[0][2], hubs[0][3]], len: all.max.x - all.min.x, wb: fx - rx, width: all.max.z - all.min.z, hubs,
           eye, look: new THREE.Vector3(eye.x + 15, 0.55, 0), tcam, tcamLook: new THREE.Vector3(tcam.x + 15, 0.4, 0),
           exhaust: new THREE.Vector3(lamp + 0.1, 0.42, 0), plank: [rx + 0.2, fx - 1.0],
-          fronts: hubs.slice(0, 2).map(([x, z]) => new THREE.Vector3(x, 0.05, z)), pose: driver.pose, dispose};
+          fronts: hubs.slice(0, 2).map(([x, z]) => new THREE.Vector3(x, 0.05, z)), pose: driver.pose, head: driver.head, dispose};
 }

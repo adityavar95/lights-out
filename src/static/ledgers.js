@@ -1,7 +1,7 @@
 // The Results tab's sections, each fetched when it is opened: the pit-stop league table, the overtake ledger, and from a
 // session's own laps (quali.js) qualifying's evolution and practice's long runs.
-import {el, failed, get, skeleton, teamColor, th, trackStatus, lastBefore, csvButton, fmtLap} from './util.js';
-import {qualiEvolution, longRuns, MIN_RUN, SPREAD, LIMIT} from './quali.js';
+import {el, failed, get, skeleton, teamColor, th, trackStatus, lastBefore, csvButton, fmtLap, fmtClock} from './util.js';
+import {qualiEvolution, longRuns, idealLaps, MIN_RUN, SPREAD, LIMIT} from './quali.js';
 
 export const PIT_WINDOW = 30;  // s either side of a stop: OpenF1's stop date is near the car leaving the lane
 export const MAX_STOP = 60;    // s of pit-lane time: longer is a red flag or a garage repair, not a pit stop
@@ -170,6 +170,51 @@ async function overtakeParts(year, round, results) {
       el('td', {}, driverCell(label(r.a))), el('td', {}, driverCell(label(r.b))), el('td', {class: 'num'}, r.position ?? '')))) : none('None reported in this race.')];
 }
 
+// What the stewards did, from race control's messages [t, category, flag, text]. Wordings as OpenF1 has them (2023+):
+// "CAR 4 (NOR) TIME 1:31.2 DELETED - TRACK LIMITS AT TURN 4 ...", "BLACK AND WHITE FLAG FOR CAR 4 (NOR) - ...",
+// "... INCIDENT INVOLVING CARS 4 (NOR) AND 81 (PIA) NOTED - CAUSING A COLLISION", "... UNDER INVESTIGATION ...",
+// "... REVIEWED NO FURTHER INVESTIGATION ...", "5 SECOND TIME PENALTY FOR CAR 4 (NOR) - ...".
+// Returns {rows: [{t, kind, codes, text}], tally: Map code -> {penalty, noted, deleted, warning}}; a decision made after
+// the session isn't in this feed.
+const STEWARD_KINDS = [['deleted', /DELETED/], ['warning', /BLACK AND WHITE FLAG/], ['cleared', /NO FURTHER (ACTION|INVESTIGATION)/],
+  ['served', /PENALTY SERVED/], ['penalty', /PENALTY/], ['noted', /UNDER INVESTIGATION|WILL BE INVESTIGATED|NOTED/]];
+export const STEWARD_NAMES = {deleted: 'Lap deleted', warning: 'Warning', cleared: 'No action', served: 'Penalty served', penalty: 'Penalty', noted: 'Investigated'};
+export function stewards(rc) {
+  const rows = [], tally = new Map(), seen = new Set();
+  for (const [t, , , text] of rc ?? []) {
+    const kind = STEWARD_KINDS.find(([, re]) => re.test(text ?? ''))?.[0];
+    if (!kind) continue;
+    const codes = [...text.matchAll(/\b\d+ \(([A-Z]{3})\)/g)].map(m => m[1]);
+    if (!codes.length) continue;
+    rows.push({t, kind, codes, text: text.replace(/^FIA STEWARDS: /, '').replace(/ ?\(?\d\d:\d\d:\d\d\)?( \([A-Z]{3}\))?$/, '')});
+    if (kind === 'cleared' || kind === 'served') continue;
+    // one incident is noted, then put under investigation: counted once per car and reason
+    const reason = text.split(' - ')[1]?.replace(/\s*\(?\d\d:\d\d:\d\d.*$/, '') ?? '';
+    for (const c of codes) {
+      const key = `${kind}|${c}|${reason}`;
+      if (kind === 'noted' && seen.has(key)) continue;
+      seen.add(key);
+      const row = tally.get(c) ?? tally.set(c, {penalty: 0, noted: 0, deleted: 0, warning: 0}).get(c);
+      row[kind]++;
+    }
+  }
+  return {rows, tally};
+}
+
+function stewardParts(year, round, d) {
+  const {rows, tally} = stewards(d.race_control), label = payloadLabel(d.drivers), by = Object.fromEntries((d.drivers ?? []).map(x => [x.code, x]));
+  const cell = code => driverCell({code, color: by[code]?.color ?? 'var(--muted)'});
+  if (!rows.length) return [none('Race control shows no penalties, investigations or deleted laps in this race.')];
+  const head = ['Driver', 'Penalties', 'Investigated', 'Laps deleted', 'Warnings'], log = ['Time', 'What', 'Driver', 'Message'];
+  const order = [...tally].sort((a, b) => b[1].penalty - a[1].penalty || b[1].noted - a[1].noted || b[1].deleted - a[1].deleted);
+  return [note('From race control during the race: a penalty or decision given afterwards is not in this feed. A time opens the replay at that moment.'),
+    bar('By driver', csvButton(`stewards_${year}_${round}`, log, () => rows.map(r => [fmtClock(r.t), STEWARD_NAMES[r.kind], r.codes.join(' '), r.text]))),
+    table(head, order.map(([code, n]) => el('tr', {}, el('td', {}, cell(code)), [n.penalty, n.noted, n.deleted, n.warning].map(v => el('td', {class: 'num'}, v || ''))))),
+    el('h3', {}, 'As it happened'),
+    table(log, rows.map(r => el('tr', {}, el('td', {class: 'num'}, el('a', {href: `#${year}/${round}/replay?t=${Math.max(0, Math.round(r.t) - 10)}`}, fmtClock(r.t))),
+      el('td', {}, STEWARD_NAMES[r.kind]), el('td', {}, r.codes.flatMap(cell)), el('td', {class: 'small'}, r.text))))];
+}
+
 // A session's laps (/api/sessionlaps), drawn by draw(data). They come from its GPS replay: when that isn't built yet the box
 // asks first, since a build is ~30 requests of OpenF1's 30 a minute.
 function sessionBox(year, round, session, draw) {
@@ -203,16 +248,29 @@ function qualiParts(year, round, d) {
       r.times.map((t, k) => el('td', {class: 'num'}, t === null ? '' : t === bests[k] ? el('b', {}, fmtLap(t)) : [fmtLap(t), el('span', {class: 'muted small'}, ` +${secs(t - bests[k])}`)]))))),
     el('h3', {}, 'The fastest lap, as it fell'),
     table(fallHead, falls.map((f, i) => el('tr', {}, el('td', {class: 'num'}, split ? names[f.part] : i + 1), el('td', {}, driverCell(label(f.num))),
-      el('td', {class: 'num'}, fmtLap(f.time)), el('td', {class: 'num'}, f.gain === null ? '' : signed(-f.gain)))))];
+      el('td', {class: 'num'}, fmtLap(f.time)), el('td', {class: 'num'}, f.gain === null ? '' : signed(-f.gain))))),
+    ...idealParts(year, round, d, label)];
+}
+
+// best sectors and the lap they'd make, for any session with sector times
+function idealParts(year, round, d, label) {
+  const {rows, bests} = idealLaps(d), head = ['#', 'Driver', 'Sector 1', 'Sector 2', 'Sector 3', 'Ideal lap', 'Best lap', 'Left on track'];
+  if (!rows.length) return [];
+  return [el('h3', {}, 'Ideal lap'),
+    note("Each driver's best three sectors of the session added together, against their best real lap. Bold is the session's best sector."),
+    bar('Best sectors', csvButton(`ideal_${year}_${round}_${d.session.replace(/ /g, '')}`, head, () => rows.map((r, i) => [i + 1, label(r.num).code, ...r.sectors, fmtLap(r.ideal), fmtLap(r.best), +r.lost.toFixed(3)]))),
+    table(head, rows.map((r, i) => el('tr', {}, el('td', {class: 'num'}, i + 1), el('td', {}, driverCell(label(r.num))),
+      r.sectors.map((s, k) => el('td', {class: 'num'}, s === bests[k] ? el('b', {}, s.toFixed(3)) : s.toFixed(3))),
+      el('td', {class: 'num'}, fmtLap(r.ideal)), el('td', {class: 'num'}, fmtLap(r.best)), el('td', {class: 'num'}, r.lost ? signed(r.lost) : ''))))];
 }
 
 function runParts(year, round, d) {
   const runs = longRuns(d), label = payloadLabel(d.drivers), head = ['Driver', 'Tyre', 'Tyre age', 'Laps', 'Count', 'Mean', 'Trend (s/lap)'];
-  if (!runs.length) return [none(`Nobody ran ${MIN_RUN} steady laps in a row in this session.`)];
+  if (!runs.length) return [none(`Nobody ran ${MIN_RUN} steady laps in a row in this session.`), ...idealParts(year, round, d, label)];
   return [note(`Runs of ${MIN_RUN} or more laps in a row on one set of tyres, each within ${SPREAD * 100} % of the run's median: a push lap, a cool-down or traffic ends a run. Fastest mean first. Tyre age is the set's laps when its stint began. Trend is how the lap time moved per lap: fuel burning off quickens a car and tyre wear slows it, and this is the two together. Fuel loads aren't known, so the means don't compare cars exactly.`),
     bar('Long runs', csvButton(`longruns_${year}_${round}_${d.session.replace(/ /g, '')}`, head, () => runs.map(r => [label(r.num).code, r.compound ?? '', r.age ?? '', `${r.from}-${r.to}`, r.laps, fmtLap(r.mean), +r.slope.toFixed(3)]))),
     table(head, runs.map(r => el('tr', {}, el('td', {}, driverCell(label(r.num))), el('td', {}, r.compound ?? ''), el('td', {class: 'num'}, r.age ?? ''),
-      el('td', {class: 'num'}, `${r.from}–${r.to}`), el('td', {class: 'num'}, r.laps), el('td', {class: 'num'}, fmtLap(r.mean)), el('td', {class: 'num'}, signed(r.slope)))))];
+      el('td', {class: 'num'}, `${r.from}–${r.to}`), el('td', {class: 'num'}, r.laps), el('td', {class: 'num'}, fmtLap(r.mean)), el('td', {class: 'num'}, signed(r.slope))))), ...idealParts(year, round, d, label)];
 }
 
 // one practice session at a time, Practice 2 first where there is one: teams run their race simulations in it
@@ -230,6 +288,7 @@ export function resultLedgers(year, round, results, jol, sessions = []) {
   const practice = sessions.filter(s => s.startsWith('Practice'));
   return [
     ...(results.length ? [section('Pit-stop league table', () => pitParts(year, round, results, jol)), section('Overtake ledger', () => overtakeParts(year, round, results))] : []),
+    year >= 2023 && results.length && section('Stewards', async () => [sessionBox(year, round, 'Race', d => stewardParts(year, round, d))]),
     year >= 2023 && sessions.includes('Qualifying') && section('Qualifying evolution', async () => [sessionBox(year, round, 'Qualifying', d => qualiParts(year, round, d))]),
     year >= 2023 && practice.length && section('Practice long runs', async () => practiceParts(year, round, practice)),
   ].filter(Boolean);

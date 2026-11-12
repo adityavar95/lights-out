@@ -1,7 +1,7 @@
 // Run: node tests/test_player.mjs  — player driving physics (steering, assists, gearbox) and AI racecraft.
 import assert from 'node:assert/strict';
 import {createRace} from '../src/static/sim.js';
-import {steer} from '../src/static/player.js';
+import {steer, rumbleFor} from '../src/static/player.js';
 import {rpmOf} from '../src/static/vehicle.js';
 import {resolveContacts, CAR_W} from '../src/static/racecraft.js';
 
@@ -40,6 +40,12 @@ assert.ok(Math.abs(car.delta) < 0.002, 'self-centring');
   assert.ok(Math.abs(sliding.delta - free) < 0.002, `into the slide: backed off to zero front slip (${sliding.delta} vs ${free})`);
   hold(sliding, -1);
   assert.ok(Math.abs(sliding.delta - (free - peak)) < 0.002, `counter-steer: full window (${sliding.delta})`);
+  // RAW: the wheel angle you ask for, shrunk with speed (no slip-angle target), at any speed
+  const raw = {v: 60, delta: 0, kPath: 0, vy: 0, r: 0};
+  for (let i = 0; i < 120; i++) steer(raw, {steer: 1}, 1 / 60, spec, true);
+  const lock = spec.maxLock * 0.92 / (1 + (60 / spec.driver.vRef) ** 2);
+  assert.ok(Math.abs(raw.delta - lock) < 0.002, `raw full lock = speed-sensitive lock: ${raw.delta} vs ${lock}`);
+  assert.ok(raw.delta < grip.delta, 'raw at speed turns less than the assist, which asks for the tyres\' peak');
 }
 
 // handover mid-race: the car carries on (no reset), and with the throttle pinned on the straight it gains speed and
@@ -115,4 +121,27 @@ const [front, rear] = crash.cars;
 Object.assign(rear, {s: front.s - 3, d: front.d, v: front.v + 10});
 resolveContacts(crash);
 assert.ok(rear.damage > 0.3 && front.damage === 0, `damage ${rear.damage} / ${front.damage}`);
+// the surface under the player: a lap's worth of grass picks rubber up (grip -8 %), which wears off over ~1.5 km; the AI
+// has no such state
+{
+  const r = race(['A', 'B']), c = r.cars[0];
+  takeOver(r, c);
+  Object.assign(r.input, {throttle: 0.6, brake: 0, steer: 0});
+  c.d = r.T.half + 3;  // out on the grass
+  run(r, 0.2);
+  assert.equal(c.dirt, 1, 'tyres dirty after leaving the track');
+  Object.assign(c, {d: 0, psi: 0, vy: 0, r: 0});
+  run(r, 1.5);
+  assert.ok(c.dirt > 0 && c.dirt < 1, `dirt wearing off: ${c.dirt}`);
+  assert.equal(r.cars[1].dirt, undefined, 'the AI keeps no dirt');
+}
+
+// gamepad rumble: nothing on a clean straight; kerbs and the grass shake the strong motor, slides and lock-ups the weak one
+assert.deepEqual(rumbleFor({v: 80, kerb: 0, d: 0, contact: 0, spin: 0}), {strong: 0, weak: 0});
+assert.equal(rumbleFor({v: 80, kerb: 0.012, contact: 0}).strong, 0.5);
+assert.equal(rumbleFor({v: 80, kerb: 0.05, sausage: true, contact: 0}).strong, 0.9);
+assert.ok(rumbleFor({v: 60, dirt: 1, contact: 0}).strong > 0.6 && rumbleFor({v: 0, dirt: 1, contact: 0}).strong === 0, 'grass: only while moving');
+assert.equal(rumbleFor({v: 50, contact: 0.2}).strong, 1);
+assert.ok(rumbleFor({v: 50, absOn: true}).weak > 0.5 && rumbleFor({v: 50, spin: 0.4}).weak === 0.4 && rumbleFor({v: 50, escOn: true}).weak > 0);
+
 console.log('ok');

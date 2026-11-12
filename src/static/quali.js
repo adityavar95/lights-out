@@ -27,6 +27,22 @@ export function deleted(rc) {
   return out;
 }
 
+// The ideal lap: each driver's three best sectors of the session added up, against their best real lap. Rows
+// [{num, sectors: [s1, s2, s3], ideal, best, lost}] fastest ideal first, and the session's best in each sector.
+// A deleted lap's sectors still count: the feed doesn't say which sector left the track.
+export function idealLaps({laps}) {
+  const by = new Map();
+  for (const [, num, , time, ...secs] of laps) {
+    const d = by.get(num) ?? by.set(num, {num, sectors: [Infinity, Infinity, Infinity], best: Infinity}).get(num);
+    secs.forEach((s, i) => { if (s > 0 && s < d.sectors[i]) d.sectors[i] = s; });
+    if (time > 0 && time < d.best) d.best = time;
+  }
+  const rows = [...by.values()].filter(d => d.sectors.every(Number.isFinite) && Number.isFinite(d.best))
+    .map(d => { const ideal = d.sectors.reduce((a, b) => a + b); return {...d, ideal, lost: Math.max(0, d.best - ideal)}; })
+    .sort((a, b) => a.ideal - b.ideal);
+  return {rows, bests: [0, 1, 2].map(i => Math.min(...rows.map(r => r.sectors[i])))};
+}
+
 // Each driver's best lap in Q1, Q2 and Q3 (a lap counts for the part it started in, so one begun before the flag stands and a
 // knocked-out car's in-lap isn't a Q2 time), each part's best, and every time the session's fastest lap fell.
 // split: false when race control doesn't show exactly three parts; then it's one table of bests, not mislabelled ones.

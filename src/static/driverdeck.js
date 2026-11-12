@@ -4,10 +4,12 @@
 import {el, led} from './util.js';
 import {nextCamera} from './onboard.js';
 import {setRibbon} from './scene3d.js';
-import {enableInput, pollInput, input} from './input.js';
+import {enableInput, pollInput, input, rumble} from './input.js';
+import {rumbleFor} from './player.js';
 import {trackWetness} from './weather.js';
 
 const SWITCHES = [
+  ['steer', 'STEERING', [['ASSIST', 'ASSIST'], ['RAW', 'RAW']]],  // RAW: you catch the slides
   ['tc', 'TRACTION', [['OFF', 'OFF'], ['MED', 'MED'], ['FULL', 'FULL']]],
   ['abs', 'ABS', [[false, 'OFF'], [true, 'ON']]],
   ['gearbox', 'GEARBOX', [['AUTO', 'AUTO'], ['MANUAL', 'MANUAL']]],
@@ -16,7 +18,7 @@ const SWITCHES = [
   ['brakeAssist', 'BRAKE ASSIST', [['OFF', 'OFF'], ['LOW', 'LOW'], ['HIGH', 'HIGH']]],
   ['line', 'RACING LINE', [['ON', 'ON'], ['CORNERS', 'CORNERS'], ['OFF', 'OFF']]],
 ];
-const KEYHELP = 'W/S throttle·brake · A/D steer · E/Q gears · X clutch · R/Space DRS · F overtake · P pit · C camera';
+export const KEYHELP = 'W/S throttle·brake · A/D steer · E/Q gears · X clutch · R/Space DRS · F overtake · P pit · C camera · Esc pause';
 
 let D, getS, lastFrame = performance.now();
 
@@ -26,9 +28,7 @@ export function setupDriverDeck(dock, getState) {
   D = {
     master: el('button', {class: 'neu master', onclick: () => {
       const S = getS(), R = S?.sim;
-      if (!R || !S.selected) return;
-      R.setPlayer(R.player === S.selected ? null : S.selected);
-      enableInput(!!R.player);
+      if (R && S.selected) drive(R, R.player === S.selected ? null : S.selected);
     }}, led(), el('span')),
     rows: SWITCHES.map(([key, label, opts]) => {
       const btns = opts.map(([value, text]) => el('button', {class: 'neu', onclick: () => { if (sim()) sim().assists[key] = value; }}, text));
@@ -53,6 +53,13 @@ export function setupDriverDeck(dock, getState) {
   dock.append(D.panel);
 }
 
+// Play's Start: the player takes car id; open: the panel expanded, so its key help is seen
+export function drive(R, id, open = false) {
+  R.setPlayer(id);
+  enableInput(!!R.player);
+  if (open && D.panel.classList.contains('collapsed')) D.toggle.click();
+}
+
 // a compound for a pit request from the cockpit: wets / inters for the weather, else a different dry one
 function pitCompound(R, car) {
   const w = trackWetness(R.W);
@@ -74,6 +81,7 @@ export function updateDriverDeck(S) {
   D.master.lastChild.textContent = !sel ? 'SELECT A CAR TO DRIVE' : driving ? `MANUAL DRIVE (PLAYER) · ${sel.code}` : `AI AUTOPILOT (SPECTATE) · ${sel.code}`;
   for (const r of D.rows) r.btns.forEach((b, i) => b.setAttribute('aria-pressed', R.assists[r.key] === r.opts[i][0]));
   D.paceVal.textContent = `${Math.round(R.ai.pace * 100)}%`;
+  if (document.activeElement !== D.pace) D.pace.value = Math.round(R.ai.pace * 100);  // Play's difficulty sets it too
   D.aggrVal.textContent = R.ai.aggression < 0.25 ? 'conservative' : R.ai.aggression > 0.75 ? 'max attack' : 'balanced';
   D.badge.querySelector('.pad').textContent = input.pad ? `GAMEPAD · ${input.pad.split('(')[0].trim().slice(0, 24)}` : 'NO GAMEPAD';
   D.badge.classList.toggle('active', !!car);
@@ -82,6 +90,7 @@ export function updateDriverDeck(S) {
   // the player's input this frame, and its one-shot actions
   const inp = pollInput(dt);
   Object.assign(R.input, {throttle: inp.throttle, brake: inp.brake, steer: inp.steer, clutch: inp.clutch});
+  rumble(rumbleFor(car));
   if (inp.actions.has('up')) R.input.up = true;
   if (inp.actions.has('down')) R.input.down = true;
   if (inp.actions.has('drs')) R.input.drs = true;

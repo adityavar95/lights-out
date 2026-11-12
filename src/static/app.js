@@ -2,19 +2,20 @@
 // real sessions, results, standings, live timing); Simulate drops the browser chrome for a full-window physics race
 // on the chosen circuit (circuit and car pickers on the stage, season = the cars' era).
 import {get, rows, el, flag, fmtDate, teamColor, count, failed, skeleton} from './util.js';
-import {setupReplay, showRace, showLive, setSessions, intro, setCinematic, play, replayKind, REPLAY_KINDS, moment, openMoment, stageCommands} from './replay.js';
+import {setupReplay, showRace, showLive, setSessions, intro, setCinematic, play, replayKind, REPLAY_KINDS, moment, openMoment, stageCommands, ended} from './replay.js';
 import {renderResults, renderLapChart, renderStandings} from './charts.js';
 import {seasonTrends} from './seasonview.js';
 import {setupExplorer} from './explorer.js';
 import {renderStrategyLab} from './strategylab.js';
 import {renderDrivers, decided} from './drivers.js';
-import {showStream, noStream, upcoming, until, at, when} from './stream.js';
+import {showStream, noStream, upcoming, until, at, when, SESSIONS} from './stream.js';
 import {setupGlass} from './glass.js';
 import {capturing} from './input.js';
 import {setupPalette, openPalette, openSheet, openCounts, copyLink} from './palette.js';
 import {parseHash, formatHash, held} from './share.js';
 import {resultLedgers} from './ledgers.js';
 import {setupDownloads, startDownload, canDownload} from './downloads.js';
+import {spoilerFree, setSpoilerFree, hides, reveal, recent} from './spoilers.js';
 
 const $ = id => document.getElementById(id);
 const A = {year: null, round: null, races: [], mode: 'watch', section: 'analytics'};
@@ -156,10 +157,35 @@ function sortTable(th) {
   }));
 }
 
+// Spoiler-free mode (spoilers.js): the races of this season whose result is still hidden. Standings and Drivers are
+// season totals, so any hidden race hides them; the other tabs and the podium go by the race on screen.
+const hiddenRaces = () => A.races.filter(r => hides(A.year, r.round, r.date));
+const hidden = (round = A.round) => hiddenRaces().some(r => r.round === String(round));
+const SEASON_TABS = ['standings', 'drivers'];
+function redraw() {  // after a reveal or a change of the mode: the podium and every tab again, the replay untouched
+  drawn = {};
+  A.podium?.();
+  drawTab(active);
+}
+function revealRaces(list) {
+  for (const r of list) reveal(A.year, r.round);
+  redraw();
+}
+function setSpoilers(on) {
+  setSpoilerFree(on);
+  redraw();
+}
+
 async function drawTab(name) {
   if (!TABS[name] || drawn[name] || !A.round) return;
   drawn[name] = true;
   const panel = $(`tab-${name}`), key = `${A.year}/${A.round}`;
+  const veiled = SEASON_TABS.includes(name) ? hiddenRaces() : hiddenRaces().filter(r => r.round === String(A.round));
+  if (veiled.length) {
+    return panel.replaceChildren(el('div', {class: 'empty'},
+      el('p', {}, `Hidden while spoiler-free mode is on: you haven't watched ${veiled.length > 1 ? `${veiled.length} recent races` : `the ${veiled[0].raceName}`} to the flag.`),
+      el('button', {class: 'tvbtn', onclick: () => revealRaces(veiled)}, 'Show anyway')));
+  }
   panel.replaceChildren(skeleton());
   try {
     const draw = await TABS[name](A.round);
@@ -218,7 +244,7 @@ function startIntro(r, shown) {
       + 'Follow any driver, ride onboard, rewind any lap.'),
     el('div', {class: 'introbtns'},
       el('button', {class: 'tvbtn', onclick: go('intro_explore')}, 'Explore this race →'),
-      el('button', {class: 'ighost', onclick: go('intro_simulate', () => setView('sim'))}, 'Simulate a race'),
+      el('button', {class: 'ighost', onclick: go('intro_simulate', () => setView('sim'))}, 'Drive a race'),
       el('button', {class: 'ighost', onclick: go('intro_stream', () => setView('stream'))}, 'Watch on F1 TV')));
   $('intro').querySelector('.tvbtn').focus({preventScroll: true});
   document.querySelector('.topbar').addEventListener('click', endIntro, {once: true});
@@ -358,16 +384,31 @@ async function selectRace(round, sim = A.mode === 'sim') {
       el('h1', {}, r.raceName),
       el('span', {class: 'muted'}, `Round ${r.round} · ${new Date(r.date + 'T00:00:00').toLocaleDateString(undefined, {day: 'numeric', month: 'short', year: 'numeric'})}`
         + ` · ${r['Circuit.circuitName']}, ${r['Circuit.Location.locality']}`)),
+    // a weekend still to finish: every session in the reader's own time, and the season as a calendar file
+    r.date >= today() && el('div', {class: 'herosched'},
+      ...SESSIONS.map(([k, name]) => [name, at(r, k)]).filter(([, d]) => d).map(([name, d]) =>
+        el('span', {class: d < new Date() ? 'muted' : ''}, el('b', {}, name), ` ${d.toLocaleString(undefined, {weekday: 'short', hour: '2-digit', minute: '2-digit'})}`)),
+      el('a', {href: `/api/calendar/${A.year}.ics`, download: `grand-prix-${A.year}.ics`, title: `Every ${A.year} session, for your calendar app`}, 'Add to calendar')),
     el('div', {class: 'heroside'}, podium, el('button', {class: 'tvbtn', onclick: () => setSection('stream', round),
       title: 'Watch this race weekend live or replayed on F1 TV'}, '▶ F1 TV')));
   const fillPodium = res => {
     if (A.round !== round) return;
+    if (res.length && hidden(round)) {
+      return podium.replaceChildren(el('button', {class: 'spoilbtn', title: 'Spoiler-free mode is on. Show this result.',
+        onclick: () => revealRaces([r])}, 'Result hidden · Show'));
+    }
     podium.replaceChildren(...(res.length ? res.slice(0, 3).map(x =>
       el('div', {class: `pp p${x.position}`}, el('span', {class: 'pnum'}, `P${x.position}`),
         el('span', {class: 'chip', style: `background:${teamColor(x['Constructor.constructorId'], x['Constructor.name'])}`}),
         el('b', {}, x['Driver.code'] || x['Driver.familyName']))) : [r.date >= today() ? countdown(r) : el('span', {class: 'muted'}, 'No results yet')]));
+    // where the mode is found: beside a recent result, which is what it would have hidden
+    if (res.length && !spoilerFree() && recent(r.date, today())) {
+      podium.append(el('button', {class: 'spoilbtn', title: 'Spoiler-free mode: hide the results of recent races until you have watched them to the flag',
+        onclick: () => setSpoilers(true)}, 'Hide results'));
+    }
   };
-  jol('results', round).then(fillPodium).catch(() => fillPodium([]));
+  A.podium = () => jol('results', round).then(fillPodium).catch(() => fillPodium([]));
+  A.podium();
 
   $('racebtn').replaceChildren(el('span', {class: 'rnd'}, ordinal(+r.round)), flag(r['Circuit.Location.country'], 40),
     el('b', {}, r['Circuit.Location.country']), el('span', {class: 'caret', 'aria-hidden': 'true'}, '▾'));
@@ -390,20 +431,20 @@ async function selectRace(round, sim = A.mode === 'sim') {
   }).catch(() => {});
 }
 
-// the command palette's list (palette.js). Circuits and Cars live in Simulate; the trace and cinematic on the stage of the current mode
+// the command palette's list (palette.js). Circuits and Cars live in Play; the trace and cinematic on the stage of the current mode
 function commands() {
   const stage = () => { if (A.section !== 'analytics') setSection('analytics'); activate('replay'); };
   const open = panel => document.querySelector(`[aria-controls=${panel}]`).click();
   return [
-    ...[['analytics', 'Races'], ['sim', 'Simulate'], ['stream', 'Stream']].map(([v, label]) => ({label, hint: 'View', run: () => setView(v)})),
+    ...[['analytics', 'Races'], ['sim', 'Play'], ['stream', 'Stream']].map(([v, label]) => ({label, hint: 'View', run: () => setView(v)})),
     ...(A.round ? [...document.querySelectorAll('[role=tab]')].map(b => ({label: b.textContent, hint: 'Tab', run: () => {
       setView('analytics');
       A.bounced = false;
       activate(b.dataset.tab);
     }})) : []),
     ...(canDownload() ? [{label: 'Download assets', hint: 'About 600 MB', run: startDownload}] : []),
-    {label: 'Circuits', hint: 'Simulate', run: () => { setView('sim'); open('circuitdeck'); }},
-    {label: 'Cars', hint: 'Simulate', run: () => { setView('sim'); open('carsdeck'); }},
+    {label: 'Circuits', hint: 'Play', run: () => { setView('sim'); open('circuitdeck'); }},
+    {label: 'Cars', hint: 'Play', run: () => { setView('sim'); open('carsdeck'); }},
     ...(A.round ? [{label: 'Telemetry trace', hint: 'Shift T', run: () => { stage(); open('tracedeck'); }},
       {label: 'Race highlights', hint: 'H', run: () => { stage(); stageCommands.highlights(); }},
       {label: 'Telemetry drawer', hint: 'T', run: () => { stage(); stageCommands.drawer(); }},
@@ -411,6 +452,8 @@ function commands() {
       {label: 'Next graphics quality', hint: 'G', run: () => { stage(); stageCommands.tier(); }},
       {label: 'Cinematic view', hint: 'Replay', run: () => { stage(); setCinematic(); }}] : []),
     {label: 'Switch theme', run: () => $('themebtn').click()},
+    ...('Notification' in globalThis ? [{label: `Session start notices: turn ${notices() ? 'off' : 'on'}`, hint: 'When a session goes live', text: 'notify notification session start live alert', run: () => setNotices(!notices())}] : []),
+    {label: `Spoiler-free mode: turn ${spoilerFree() ? 'off' : 'on'}`, hint: 'Hides recent results until watched', text: 'spoiler free mode hide results', run: () => setSpoilers(!spoilerFree())},
     {label: 'Keyboard shortcuts', hint: '?', run: openSheet},
     {label: 'Usage counts', run: openCounts},
     {label: 'Copy link', run: copyView},
@@ -512,7 +555,10 @@ async function init() {
   A.intro = location.hash === '#intro' || (!location.hash && !stored('f1seen'));
   A.firstSeason = true;  // the first season loaded checks for a race new since the last visit
   // shortcut: polled, since the replay's time moves in a dozen places; replay.js could say so itself if a second reader appears
-  setInterval(() => pending?.open && syncHash(true), 1000);
+  setInterval(() => {
+    pending?.open && syncHash(true);
+    if (ended() && hidden()) revealRaces([race(A.round)]);  // watched to the flag: nothing left to spoil
+  }, 1000);
   addEventListener('hashchange', () => {
     takeToken();
     const open = [...document.querySelectorAll('dialog')].filter(d => d.matches(':modal'));
@@ -577,8 +623,17 @@ async function init() {
 
 // header button, only while a session is running: it opens F1's live timing. (Between sessions it used to offer the last
 // session's final state, which is the race the page already shows.)
+// Session start notices (off until asked for from the command palette): a browser notification when a session goes live
+// while this tab is out of view. The status check is a cheap one, so with notices on it keeps running in a hidden tab.
+const notices = () => { try { return localStorage.getItem('lo-notify') === '1' && globalThis.Notification?.permission === 'granted'; } catch (e) { return false; } };
+async function setNotices(on) {
+  if (on && (await globalThis.Notification?.requestPermission?.()) !== 'granted') return;  // refused, or no notifications here (the desktop app)
+  try { localStorage.setItem('lo-notify', on ? '1' : '0'); } catch (e) { /* storage blocked: stays off */ }
+}
+let wasLive;  // undefined until the first check: a session already running when the page opens isn't news
+
 async function checkLive() {
-  if (document.hidden) return;
+  if (document.hidden && !notices()) return;
   try {
     const res = await fetch('/api/live/status');  // not /api/live, which opens F1's feed and holds it open for an idle tab
     if (!res.ok) return;
@@ -587,6 +642,8 @@ async function checkLive() {
     btn.classList.toggle('on', live);
     btn.textContent = '● LIVE';
     btn.title = title ?? '';
+    if (live && wasLive === false && document.hidden && notices()) new Notification('Live now', {body: title ?? '', tag: 'lo-live'});
+    wasLive = live;
   } catch (e) { /* live timing unreachable: keep the button hidden */ }
 }
 

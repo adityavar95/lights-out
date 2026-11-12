@@ -55,6 +55,15 @@ export function compoundOf(rows, num, stint) {
   return rows?.find(([n, a, b]) => n === String(num) && a <= mid && mid <= (b ?? Infinity))?.[3] ?? null;
 }
 
+// One car's stints for the tyre strategy bars, from the same rows: [{compound, from, to, share}] in order, share being
+// the stint's part of the laps the car ran (the bar's width). An open last stint ends at `laps`.
+export function stintBars(rows, num, laps) {
+  const mine = (rows ?? []).filter(([n, a]) => n === String(num) && a).sort((x, y) => x[1] - y[1])
+    .map(([, from, to, compound]) => ({compound: compound ?? null, from, to: to ?? laps}));
+  const total = mine.reduce((t, s) => t + Math.max(1, s.to - s.from + 1), 0);
+  return mine.map(s => ({...s, share: Math.max(1, s.to - s.from + 1) / total}));
+}
+
 // Everyone with MIN_LAPS clean laps, fastest median clean lap first
 export function paceRanking(M) {
   return M.ids.map(id => {

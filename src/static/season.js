@@ -102,6 +102,19 @@ export function raceMax(year, round, rounds) {
 }
 export const sprintMax = year => (year < 2021 ? 0 : year === 2021 ? 3 : 8);  // same source
 
+// Points by finishing position since 2010 (a sprint's since 2022): the live table below is always this season's
+export const POINTS = [25, 18, 15, 12, 10, 8, 6, 4, 2, 1], SPRINT_POINTS = [8, 7, 6, 5, 4, 3, 2, 1];
+
+// The championship if the session ended now. before: Map code -> points going in; board: [{code, pos, out}], the order
+// on track. Returns Map code -> {points, rank, was}. A car that is out scores nothing (a classified retirement can, rarely).
+export function asItStands(before, board, table = POINTS) {
+  const now = new Map(before);
+  for (const b of board) now.set(b.code, (now.get(b.code) ?? 0) + (b.out ? 0 : table[b.pos - 1] ?? 0));
+  const rank = m => new Map([...m].sort((a, b) => b[1] - a[1]).map(([c], i) => [c, i + 1]));
+  const was = rank(before), is = rank(now);
+  return new Map([...now].map(([c, points]) => [c, {points, rank: is.get(c), was: was.get(c) ?? null}]));
+}
+
 // A sprint's rows number 1, 2, 3... by sprint; the calendar says which weekends those were
 const sprintWeekends = calendar => calendar.filter(c => c['Sprint.date']).map(c => +c.round);
 
@@ -128,6 +141,23 @@ export function maxRemaining(year, calendar, racesRun, sprintsRun) {
   const rounds = calendar.length, races = calendar.filter(c => +c.round > racesRun), sprints = sprintWeekends(calendar).slice(sprintsRun);
   return {races: races.length, sprints: sprints.length,
     points: races.reduce((t, c) => t + raceMax(year, +c.round, rounds), 0) + sprints.length * sprintMax(year)};
+}
+
+// What settles the title at the next race weekend: the leader is champion once the lead is more than everything left
+// after it. Returns null when nothing is left or nobody else is alive, else {round, leader, rivals: [{id, by, possible}]}:
+// the leader must outscore each rival by `by` points that weekend (0 or less: that rival is already out of reach after
+// it whatever happens); possible is false when the weekend doesn't offer that many.
+export function clinch(totals, year, calendar, racesRun, sprintsRun) {
+  const next = calendar.find(c => +c.round === racesRun + 1), now = maxRemaining(year, calendar, racesRun, sprintsRun);
+  if (!next || !totals.size) return null;
+  const sprintToCome = sprintWeekends(calendar).indexOf(+next.round) >= sprintsRun;
+  const offer = raceMax(year, +next.round, calendar.length) + (sprintToCome ? sprintMax(year) : 0), after = now.points - offer;
+  const [[leader, top], ...rest] = [...totals].sort((a, b) => b[1] - a[1]);
+  const rivals = rest.filter(([, p]) => top - p <= now.points).map(([id, p]) => {
+    const by = Math.floor(after - (top - p)) + 1;
+    return {id, by, possible: by <= offer};
+  });
+  return rivals.length ? {round: +next.round, leader, rivals} : null;
 }
 
 // alive: leader − driver ≤ points remaining. A tie at the very end stays alive: countback isn't points.

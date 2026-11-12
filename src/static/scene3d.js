@@ -5,7 +5,7 @@ import {CSS2DRenderer, CSS2DObject} from 'three/addons/renderers/CSS2DRenderer.j
 import {SkyMesh} from 'three/addons/objects/SkyMesh.js';
 import {CSMShadowNode} from 'three/addons/csm/CSMShadowNode.js';
 import {HDRLoader} from 'three/addons/loaders/HDRLoader.js';
-import {float, reference, renderGroup, texture, vec2} from 'three/tsl';
+import {float, reference, renderGroup, texture, vec2, vec4, mrt} from 'three/tsl';
 import {buildCar} from './cars3d.js';
 import {brakeStep, brakeGlow} from './telemetry.js';
 import {loadRB22, rb22Ready, STEERING_RATIO} from './rb22.js';
@@ -543,6 +543,36 @@ function warmCockpit(token) {
   }, 1000);  // after the first frames with the new grid
 }
 
+// Play's time-trial ghost: the best lap's car, see-through and unlit (so no csmSync), with no tag, sound or effects.
+// p, ahead: map points now and 0.5 s on; null hides it. Built on first use, dropped with the cars (disposeCars).
+let ghost = null;
+export function setGhost(p, ahead, year) {
+  if (!p || !map || !circuit) { if (ghost) ghost.group.visible = false; return; }
+  if (!ghost) {
+    const car = buildCar('#ffffff', null, year, tex.blob), mat = new THREE.MeshBasicNodeMaterial({color: 0xcfe8ff, transparent: true, opacity: 0.32, depthWrite: false});
+    mat.mrtNode = mrt({velocity: vec4(0)});  // no motion vector of its own (post.js blur), like vfx.js's effects
+    car.group.traverse(o => {
+      if (!o.isMesh) return;
+      if (o.layers.mask !== 1) o.visible = false;  // the contact-shadow planes (layer 1): a ghost casts none
+      o.material = mat;
+      o.castShadow = o.receiveShadow = false;
+    });
+    ghost = {...car, mat, hint: undefined};
+    world.add(car.group);
+  }
+  const road = circuit.surface(p, ghost.hint), at = new THREE.Vector3((p[0] - map.cx) * map.k, road.y + 0.02, (p[1] - map.cy) * map.k);
+  ghost.hint = road.i;
+  const next = toScene(ahead, 0.02, ghost.hint);
+  if (at.distanceTo(next) > 0.01) {  // a ghost parked at the line (its lap over) keeps its heading
+    ghost.yaw = Math.atan2(-(next.z - at.z), next.x - at.x);
+    ghost.pitch = Math.atan2(next.y - at.y, Math.hypot(next.x - at.x, next.z - at.z));
+  }
+  ghost.group.visible = true;
+  ghost.group.position.copy(at);
+  ghost.group.rotation.set(road.roll, ghost.yaw ?? 0, ghost.pitch ?? 0, 'YZX');
+  ghost.group.scale.setScalar(1 / map.mps);
+}
+
 // does this car have a steering wheel of its own in the cockpit view?
 export const hasCockpitWheel = id => !!cars[id]?.steeringWheel;
 
@@ -556,6 +586,7 @@ function disposeCars() {
   }
   cars = {};
   crews.clear();
+  if (ghost) { world.remove(ghost.group); ghost.dispose(); ghost.mat.dispose(); ghost = null; }
 }
 
 // mode: overview (free orbit) | chase (TV) | follow (game chase cam) | onboard (cockpit, driver's eye) | tcam (on the airbox) | heli (helicopter)
@@ -674,7 +705,13 @@ export function audioScene() {
 // racing-line ribbon for the player: [{pos: [x, y] map, state 0 green / 1 amber / 2 red} | null], or null to hide it
 export function setRibbon(pts) {
   let hint;  // consecutive points: each search starts where the last one ended
-  if (vfx && map) vfx.ribbon(pts && pts.map(p => p && {p: toScene(p.pos, m(0.12), hint = circuit?.surface(p.pos, hint).i), state: p.state}), m(0.6));
+  // roll: the road's banking at each sample, so the ribbon's two edges follow it (a flat strip on a banked corner sinks one edge)
+  if (vfx && map) vfx.ribbon(pts && pts.map(p => {
+    if (!p) return p;
+    const road = circuit?.surface(p.pos, hint);
+    hint = road?.i;
+    return {p: toScene(p.pos, m(0.12), hint), state: p.state, roll: road?.roll ?? 0};
+  }), m(0.6));
 }
 
 export function setTyre(id, color) {
@@ -724,11 +761,21 @@ function chassis(c, turn, moved, f) {
     c.steeringWheel.rotation.x = -c.delta * STEERING_RATIO;
     c.pose();  // the driver's hands go with it
   }
-  const gLat = THREE.MathUtils.clamp(c.v * c.v * k / 9.81, -6, 6);
+  // The simulation's own forces when it drives the car (its gLat is + to the right, this file's + to the left), else
+  // estimated from the car's motion
+  const sim = f?.g, gLat = sim ? -sim.gLat : THREE.MathUtils.clamp(c.v * c.v * k / 9.81, -6, 6);
   c.gLat = (c.gLat ?? 0) + (gLat - (c.gLat ?? 0)) * 0.1;
   c.body.rotation.x = 0.004 * c.gLat;                                    // ~0.25 deg/g, outside of the corner down
-  c.body.rotation.z = 0.003 * THREE.MathUtils.clamp(c.acc / 9.81, -6, 3);  // nose down under braking
-  c.body.position.y = -0.02 * Math.min(1, (c.v / 90) ** 2);              // ~20 mm of aero compression at 320 km/h
+  c.body.rotation.z = 0.003 * THREE.MathUtils.clamp(sim ? sim.gLong : c.acc / 9.81, -6, 3);  // nose down under braking
+  // ride height: the simulation's heave (aero compression, bottoming, a 2022+ car's porpoising) and a jolt over the kerbs
+  const heave = sim ? THREE.MathUtils.clamp(sim.z, -0.01, 0.06) : 0.02 * Math.min(1, (c.v / 90) ** 2);  // ~20 mm at 320 km/h
+  c.body.position.y = -heave + (sim?.kerb ? sim.kerb * 0.35 * Math.sin(performance.now() * 0.06) : 0);
+  if (c.head) {  // the driver's neck: into the corner (~2 deg/g, up to 10) and forward under braking (~1.5 deg/g), over ~0.1 s
+    const hd = c.headFx ??= {r: 0, p: 0}, gRight = sim ? sim.gLat : -c.gLat, gLong = sim ? sim.gLong : c.acc / 9.81, deg = Math.PI / 180;
+    hd.r += (THREE.MathUtils.clamp(2 * gRight, -10, 10) * deg - hd.r) * 0.15;
+    hd.p += (THREE.MathUtils.clamp(1.5 * gLong, -8, 3) * deg - hd.p) * 0.15;
+    c.head.rotation.set(hd.r, 0, hd.p);  // x: roll to the right, z: + noses up, so braking (gLong < 0) pitches it forward
+  }
   c.halo.rotation.copy(c.body.rotation);
   c.halo.position.y = c.body.position.y;
 }
@@ -824,16 +871,28 @@ export function updateCars(pos, ahead, focus, rate = 1, progress = 1, fx = null)
       camera.lookAt(controls.target);
       // The head pitches forward under braking (~0.7 deg/g), rolls into the corner, looks to the apex: from the simulation
       // while driving, else from the car's measured motion, so a replay feels the same.
-      const g = fx?.[id]?.cam ?? {gLat: c.gLat ?? 0, gLong: c.acc / 9.81, steer: -(c.delta ?? 0), v: c.v}, cf = c.camFx ??= {p: 0, r: 0, y: 0};
+      // (cam.gLat is + to the right; the replay's measured c.gLat is + to the left, hence the sign)
+      const g = fx?.[id]?.cam ?? {gLat: -(c.gLat ?? 0), gLong: c.acc / 9.81, steer: -(c.delta ?? 0), v: c.v}, cf = c.camFx ??= {p: 0, r: 0, y: 0, x: 0, z: 0, kick: 0, shift: false};
+      // the head moves as well as turns: ~1 cm/g towards the corner's inside, ~1.2 cm/g forward under braking; and each
+      // gear change (drive cut, then back) nods it ~0.3 deg
+      cf.x += (THREE.MathUtils.clamp(g.gLat, -6, 6) * 0.01 - cf.x) * 0.15;
+      cf.z += (THREE.MathUtils.clamp(g.gLong, -6, 3) * 0.012 - cf.z) * 0.15;
+      const shifting = !!fx?.[id]?.g?.shift;
+      if (shifting && !cf.shift) cf.kick = -0.005;
+      cf.shift = shifting;
+      cf.kick *= Math.exp(-dt / 0.12);
       cf.p += (THREE.MathUtils.clamp(g.gLong * 0.012, -0.07, 0.03) - cf.p) * 0.15;
       cf.r += (THREE.MathUtils.clamp(-g.gLat * 0.01, -0.06, 0.06) - cf.r) * 0.15;
       cf.y += (THREE.MathUtils.clamp(-g.steer * 0.8, -0.2, 0.2) - cf.y) * 0.1;
       // engine vibration through the tub rises with revs (which go with speed), aero buffeting above 300 km/h, a jolt on a kerb
       const engine = g.v > 1 ? 0.0004 + 0.0005 * Math.min(1, g.v / 90) : 0.00015, aero = g.v > 83 ? 0.0015 * (g.v - 83) / 10 : 0;
       const onKerb = fx?.[id]?.g?.kerb ?? (Math.abs(road.lat) > circuit.half - m(0.4) ? 0.5 : 0);
-      const buzz = engine + aero + 0.008 * onKerb;
+      const jolt = fx?.[id]?.g ? (onKerb ? 0.004 + 0.06 * onKerb : 0) : 0.008 * onKerb;  // as hard as the follow camera's, from the simulation's kerb height
+      const buzz = engine + aero + jolt;
+      camera.translateX(m(cf.x));
+      camera.translateZ(m(cf.z));  // local +z is backwards: braking (z < 0) moves the eye forward
       camera.rotateY(cf.y);
-      camera.rotateX((mode === 'onboard' ? -0.07 : 0) + cf.p + (Math.random() - 0.5) * buzz);  // onboard: the road, not half a frame of sky
+      camera.rotateX((mode === 'onboard' ? -0.07 : 0) + cf.p + cf.kick + (Math.random() - 0.5) * buzz);  // onboard: the road, not half a frame of sky
       camera.rotateZ(cf.r + (Math.random() - 0.5) * buzz);
       // the speed tunnel: 4 degrees wider at 340 km/h with the rear wing open, a little less with it shut
       const widen = 4 * Math.min(1, (c.v / 94.4) ** 2) * (fx?.[id]?.drs ? 1 : 0.65);

@@ -143,7 +143,7 @@ const one = list => mergeGeometries(list.map(g => (g.index ? g.toNonIndexed() : 
 
 // The driver seated at head, hands on the steering wheel (a Group whose rotation.x turns it, in the same frame as the
 // driver). helmet / accent / suit: colours. Adds the body and arms to `parent` and the gloves to the wheel. Returns
-// {materials (this driver's own, to dispose), pose()}: pose() puts the arms where the wheel's grips are now.
+// {materials (this driver's own, to dispose), head (the helmet's group, pivoting at the neck), pose()}: pose() puts the arms where the wheel's grips are now.
 export function seatDriver(parent, wheel, head, {helmet, accent, suit}) {
   const key = [...head.toArray(), ...wheel.position.toArray()].map(v => v.toFixed(3)).join();
   if (!shared.has(key)) {
@@ -154,7 +154,12 @@ export function seatDriver(parent, wheel, head, {helmet, accent, suit}) {
   }
   const G = shared.get(key), mats = {helmet: helmetMaterial(helmet, accent), suit: suitMaterial(suit)};
   const mesh = (geo, mat) => Object.assign(new THREE.Mesh(geo, mat), {castShadow: true, receiveShadow: true});
-  parent.add(mesh(G.helmet, mats.helmet), mesh(G.visor, VISOR), mesh(G.gear, GEAR), mesh(G.suit, mats.suit));
+  // the head turns about the neck (a pivot just below the helmet), which chassis() rolls and pitches with the g-forces;
+  // its meshes are offset back by the pivot, so at rest they sit exactly where the merged geometry put them
+  const neck = V(0.03, -0.22, 0).add(head), headGroup = new THREE.Group();
+  headGroup.position.copy(neck);
+  for (const m of [mesh(G.helmet, mats.helmet), mesh(G.visor, VISOR), mesh(G.gear, GEAR)]) { m.position.copy(neck).negate(); headGroup.add(m); }
+  parent.add(headGroup, mesh(G.suit, mats.suit));
   wheel.add(mesh(G.gloves, mats.suit));
   const arms = [-1, 1].map(side => {
     const upper = mesh(G.upper, mats.suit), fore = mesh(G.fore, mats.suit);
@@ -176,5 +181,5 @@ export function seatDriver(parent, wheel, head, {helmet, accent, suit}) {
     }
   };
   pose();
-  return {materials: [mats.helmet, mats.helmet.map, mats.suit], pose};
+  return {materials: [mats.helmet, mats.helmet.map, mats.suit], pose, head: headGroup};
 }

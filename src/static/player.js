@@ -7,7 +7,8 @@ import {autoShift, REAR_STIFF} from './vehicle.js';
 // rules: OPEN lets every assist work in any era; ERA allows only what was legal that season (TC 1991-93 and 2001-07,
 // launch control with it, ABS 1992-93). clutch: AUTO clutches and blips for you; MANUAL needs the clutch (X / pad L3) to
 // change gear in an H-pattern car, and a blip of throttle on each downshift or the rear wheels snatch.
-export const ASSISTS = {tc: 'MED', abs: true, gearbox: 'AUTO', clutch: 'AUTO', brakeAssist: 'LOW', line: 'ON', rules: 'OPEN'};
+// steer: ASSIST asks for front grip (see steer below); RAW is the wheel angle you ask for, for a pad or wheel that can catch a slide
+export const ASSISTS = {tc: 'MED', abs: true, gearbox: 'AUTO', clutch: 'AUTO', brakeAssist: 'LOW', line: 'ON', rules: 'OPEN', steer: 'ASSIST'};
 const MODERN = {maxLock: 0.35, wb: 3.6, driver: {vRef: 30, steerTau: 0.06}};
 
 // Steering. The input (-1..1, + = right) is never applied raw:
@@ -18,7 +19,7 @@ const MODERN = {maxLock: 0.35, wb: 3.6, driver: {vRef: 30, steerTau: 0.06}};
 //              under aero load), so a keyboard tap becomes a smooth input
 //   centring:  self-aligning torque. The front tyres' pneumatic trail pulls the wheels towards zero front slip, the
 //              direction the front axle is really going; with the hands coming off the wheel it is unwound quickly
-export function steer(car, input, h, c = MODERN) {
+export function steer(car, input, h, c = MODERN, raw = false) {
   const v = car.v, lock = c.maxLock * 0.92 / (1 + (v / c.driver.vRef) ** 2);
   // zero front slip: the wheels point where the front axle is going, atan((v_y + a r) / u) (the kinematic path's angle
   // at walking pace, where the tyres don't slip)
@@ -29,7 +30,7 @@ export function steer(car, input, h, c = MODERN) {
   // fronts (understeer), and a digital key can't wind on so much lock that the car snaps round when it bites. Steering
   // into the rotation is backed off as the rear nears its own peak (braking moves load onto the fronts, which would
   // then out-pull it and spin the car); counter-steer always gets the full window.
-  const peak = c.profile?.tyre.slipPeak, w = peak ? Math.min(1, Math.max(0, (v - 5) / 10)) : 0;
+  const peak = c.profile?.tyre.slipPeak, w = peak && !raw ? Math.min(1, Math.max(0, (v - 5) / 10)) : 0;  // raw: the low-speed branch at every speed
   const rear = Math.abs(car.slipR ?? 0) * REAR_STIFF / (peak || 1), into = input.steer * (car.r ?? 0) > 0;
   const win = into ? Math.min(1, Math.max(0, 1 - 3 * (rear - 0.6))) : 1;
   const target = (1 - w) * input.steer * lock + (w && w * (free + input.steer * peak * win));
@@ -42,7 +43,7 @@ export function steer(car, input, h, c = MODERN) {
 // brake down to for what's ahead}.
 export function playerControls(R, car, h, X, env) {
   const c = car.spec, inp = R.input, A = R.assists, legal = A.rules === 'ERA' ? c.aids : {tc: true, abs: true, launch: true};
-  steer(car, inp, h, c);
+  steer(car, inp, h, c, A.steer === 'RAW');
   X.steer = car.delta / c.maxLock;
   X.kappa = null;  // the player's car runs the full tyre dynamics
   X.fyNeed = c.mass * Math.abs(car.v * (car.r ?? 0)) * 1.15;  // TC keeps back the cornering force the car is pulling, and some
@@ -71,4 +72,15 @@ export function playerControls(R, car, h, X, env) {
   X.clutch = inp.clutch ?? 0;
   if (A.gearbox === 'AUTO') X.gearShift = autoShift(car, c, brake);
   else { X.gearShift = inp.up ? 1 : inp.down ? -1 : 0; inp.up = inp.down = false; }
+}
+
+// What a gamepad should feel, 0..1 each: the strong (low-frequency) motor for kerbs, the grass and contact; the weak one for
+// the tyres, a front lock-up or ABS, wheelspin and the stability control stepping in. off: the player's `dirt` (sim.js) is 1
+// only while the car is off the track.
+export function rumbleFor(car) {
+  const kerb = car.kerb > 0 ? (car.sausage ? 0.9 : 0.5) : 0, off = car.dirt === 1 ? 0.7 * Math.min(1, car.v / 60) : 0;
+  return {
+    strong: Math.max(kerb, off, car.contact > 0 ? 1 : 0),
+    weak: Math.max(car.absOn || car.locked ? 0.6 : 0, Math.min(1, car.spin ?? 0), car.escOn ? 0.3 : 0),
+  };
 }

@@ -163,6 +163,6 @@ async function preview(card, id) {
     badge('ELEVATION', rise > 0.5 ? `${rise.toFixed(0)} m` : '—'),
     badge('AERO', preset?.aeroLabel ?? aeroLabel(ann.aero.cl)), record ? badge(preset?.record ? 'LAP RECORD' : 'FASTEST LAP', record) : null);
   card.where = {year: where.year, round: where.round};
-  card.title = `Simulate at ${where.raceName} ${where.year}`;
+  card.title = `Race at ${where.raceName} ${where.year}`;
   card.disabled = false;
 }

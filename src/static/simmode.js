@@ -5,6 +5,7 @@ import {createRace, gridOrder} from './sim.js';
 import {radar, CAR_L} from './racecraft.js';
 import {setPitLane} from './scene3d.js';
 import {pitTrace} from './strategy.js';
+import {lapsFor} from './playsetup.js';
 
 export const SIM = 'Simulation';
 
@@ -17,7 +18,7 @@ const entry = r => {
 };
 
 // entry list in grid order: the race's grid, else qualifying order, else the championship order (upcoming races)
-async function entries(year, round) {
+export async function entries(year, round) {
   const jol = (kind, q = `?round=${round}`) => get(`/api/jolpica/${year}/${kind}${q}`).then(rows).catch(() => []);
   let list = (await jol('results')).map(r => ({...entry(r), grid: +r.grid || 99, laps: +r.laps || 0}));  // grid 0 = pit-lane start
   if (!list.length) list = (await jol('qualifying')).map(r => ({...entry(r), grid: +r.position}));
@@ -36,15 +37,18 @@ export async function realPitLane(year, round, proj, width = 13) {
 
 // proj: the replay's track projection {pts, mpu, ann}; track: circuits.js fetchCircuit result (width, pit losses).
 // proj.ann (circuits.js annotate) gives the physics elevation, banking, kerbs, DRS zones and the aero trim.
-export async function simSession(year, round, proj, track) {
+// laps: Play's choice (playsetup.js LAPS), else the full distance; solo: Play's time trial, that driver alone, no lap limit
+export async function simSession(year, round, proj, track, {laps, solo} = {}) {
   if (!proj) throw new Error('No track outline for this circuit, so there is nothing to simulate on.');
-  const [list, pitLane] = await Promise.all([entries(year, round), realPitLane(year, round, proj, track?.width)]);
+  let [list, pitLane] = await Promise.all([entries(year, round), realPitLane(year, round, proj, track?.width)]);
+  if (solo) list = list.filter(e => e.id === solo);
   if (!list.length) throw new Error('No entry list for this race yet.');
   const ann = proj.ann;
   // the real race distance (the winner's laps) unless it was cut short or the outline is off: then sim.js's 305 km
   const full = Math.ceil(305e3 / (proj.cum.at(-1) * proj.mpu)), run = Math.max(0, ...list.map(e => e.laps ?? 0));
+  const distance = Math.abs(run - full) <= full * 0.1 ? run : full;
   const race = createRace({year, mapPts: proj.pts, mpu: proj.mpu, width: track?.width, drivers: list.map(e => e.id),
-                           laps: Math.abs(run - full) <= full * 0.1 ? run : undefined, ann, aero: ann.aero, pitLoss: track?.pitLoss, pitLane});
+                           laps: solo ? Infinity : laps ? lapsFor(laps, distance) : distance, fuel: solo ? 0.1 : 1, ann, aero: ann.aero, pitLoss: track?.pitLoss, pitLane});
   // race control's messages array is the feed itself, so the race-control list and banner see them as they happen
   const data = {mode: 'sim', session: SIM, drivers: list, total_laps: race.total, duration: 1e9, intervals: [], stints: [],
                 race_control: race.control.messages, pits: {}, weather: [[0, 26, 38, 0, 2]]};  // air 26 C, track 38 C
@@ -65,7 +69,7 @@ export function simState(race, byId) {
     // game chase cam follows)
     fx[c.id] = {sparks: Math.max(c.sparks, c.contact > 0 ? 1 : 0), smoke: c.smoke, spray: c.spray, light: c.ers.harvesting || c.ers.derate,
                 cam: c.player ? {gLat: c.gLat, gLong: c.gLong, steer: c.delta, v: c.v} : null,
-                g: {gLat: c.gLat, gLong: c.gLong, kerb: c.kerb}, drs: c.drs.open || c.aeroX > 0.5};
+                g: {gLat: c.gLat, gLong: c.gLong, kerb: c.kerb, z: c.z, shift: c.shiftT > 0}, drs: c.drs.open || c.aeroX > 0.5};
   }
   const board = race.board().map(({car, pos, lap, gap, lapsDown}) => ({
     d: byId[car.id], pos, lap, gap, tyre: car.tyre.compound, age: car.lapsDone - (car.stintLap ?? 0), out: false,

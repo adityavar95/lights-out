@@ -8,10 +8,12 @@ without one the feed silently leaves them out. They arrive as base64 raw-deflate
 import base64
 import copy
 import json
+import os
 import threading
 import time
 import zlib
-from datetime import datetime
+from datetime import datetime, timezone
+from pathlib import Path
 
 import requests
 from websockets.sync.client import connect
@@ -82,6 +84,37 @@ def _put(topic: str, data):
     _state[key] = {field: [e for e in samples if _utc(e[stamp]) > newest - BUFFER]}
 
 
+# LIGHTSOUT_LIVE_RECORD=1 appends every feed message to .cache/live/<utc date>.jsonl as {"t": unix time, "m": message};
+# LIGHTSOUT_LIVE_PLAY=<that file> plays one back at its own pace in place of F1's socket (LIGHTSOUT_LIVE_SPEED times
+# faster), so live features can be worked on between race weekends. Position/CarData keep their recorded timestamps.
+RECORD_DIR = Path(__file__).resolve().parent.parent / ".cache" / "live"
+
+
+def _record(msg: dict):
+    if msg.get("type") not in (1, 3):  # pings and closes aren't feed data
+        return
+    RECORD_DIR.mkdir(parents=True, exist_ok=True)
+    with open(RECORD_DIR / f"{datetime.now(timezone.utc):%Y-%m-%d}.jsonl", "a", encoding="utf-8") as f:
+        f.write(json.dumps({"t": time.time(), "m": msg}, separators=(",", ":")) + "\n")
+
+
+def _play(path: str, speed: float = 1.0, sleep=time.sleep):
+    """Feed a recorded file through _handle with the recording's gaps (divided by speed), until idle or its end."""
+    _status.update(connected=True, error=None)
+    last = None
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            if _idle():
+                return
+            row = json.loads(line)
+            if last is not None:
+                sleep(max(0.0, min(row["t"] - last, 30.0)) / speed)  # a break in the recording isn't waited out
+            last = row["t"]
+            _handle(row["m"])
+    while not _idle():  # the end of the file: hold the last state, like a finished session
+        sleep(1)
+
+
 def _handle(msg: dict):
     if msg.get("type") == 3 and isinstance(msg.get("result"), dict):  # Subscribe reply: the full current state
         with _lock:
@@ -103,7 +136,10 @@ def _idle() -> bool:
 def _run():
     while not _idle():
         try:
-            tok = _status["token"] = f1auth.valid(_status["token"])  # an expired one is dropped
+            if os.environ.get("LIGHTSOUT_LIVE_PLAY"):
+                _play(os.environ["LIGHTSOUT_LIVE_PLAY"], float(os.environ.get("LIGHTSOUT_LIVE_SPEED", 1)))
+                break
+            tok =_status["token"] = f1auth.valid(_status["token"])  # an expired one is dropped
             auth = {"Authorization": f"Bearer {tok}"} if tok else {}
             _status["auth"] = bool(tok)
             neg = requests.post(f"https://{HOST}/negotiate?negotiateVersion=1", headers=auth, timeout=15)
@@ -126,7 +162,10 @@ def _run():
                     except TimeoutError:
                         continue
                     for part in filter(None, raw.split(RS)):
-                        _handle(json.loads(part))
+                        msg = json.loads(part)
+                        if os.environ.get("LIGHTSOUT_LIVE_RECORD"):
+                            _record(msg)
+                        _handle(msg)
         except Exception as e:
             _status.update(connected=False, error=str(e))
             time.sleep(5)

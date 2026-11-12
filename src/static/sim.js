@@ -89,8 +89,10 @@ export function gridOrder(list) {
 
 // ann: circuits.js annotate() output (elevation, banking, kerbs, zones); aero: the circuit's wing trim {cl, cd, drs}
 // (multipliers on ClA / CdA, DRS drag cut); pitLoss: MultiViewer's real pit losses, which size the pit lane.
-export function createRace({year, mapPts, mpu, width, drivers, laps, compounds, ann, aero, pitLoss, pitLane}) {
+// fuel: share of the race fuel load aboard (Play's time trial: a qualifying load, with laps Infinity)
+export function createRace({year, mapPts, mpu, width, drivers, laps, compounds, ann, aero, pitLoss, pitLane, fuel = 1}) {
   const T = buildTrack(mapPts, mpu, width, ann), c = carSpec(year);
+  c.fuel *= fuel;
   // Circuit aero trim: Monaco runs maximum wing (more downforce, more drag), Monza "skinny" wings (~360 km/h)
   c.ClA *= aero?.cl ?? 1;
   c.CdA *= aero?.cd ?? 1;
@@ -124,6 +126,7 @@ export function createRace({year, mapPts, mpu, width, drivers, laps, compounds, 
              W: createWeather(), control: createControl(c.overtake ? 'OVERTAKE' : 'DRS', year >= 2024 ? 1 : 2),
              ai: {pace: 1, aggression: 0.5}, assists: {...ASSISTS}, input: {throttle: 0, brake: 0, steer: 0, clutch: 0}, player: null,
              wing: 0,  // pit-wall trim, -5..+5 clicks
+             gravel: ann?.preset?.runoff === 'gravel',  // the circuit's traps on the corners' outsides: slower than grass for the player
              // the circuit's real pit lane from GPS when there is one, else one alongside the main straight
              pit: Object.assign((pitLane && lanePath(T, pitLane)) ?? pitLayout(T, pitLoss ? laneFor(+pitLoss.normal, ann?.pitLimit ?? PIT_LIMIT) : 400), {limit: ann?.pitLimit ?? PIT_LIMIT})};
   for (const car of cars) R.laps[car.id] = [];
@@ -221,8 +224,20 @@ export function createRace({year, mapPts, mpu, width, drivers, laps, compounds, 
     const win = [comp.window[0] + c.warm, comp.window[1] + c.warm];  // the era's rubber (eras.js tyre.warm)
     const skill = car.player ? 1 : car.skill * R.ai.pace;  // the AI pace slider (80-110 %) scales the AI cars' grip
     const off = !pit && Math.abs(car.d) > T.half + 1.6;
-    const mu = c.mu * skill * comp.grip * surf.grip * thermalGrip(temp, win) * wearGrip(health) * (car.slide > 0 ? 0.65 : 1) * (off ? 0.55 : 1);
-    const N = Math.max(0.2 * c.mass * G, c.mass * G * pitchCos + vertical + A.down);
+    // The player's car feels the surface; the AI never leaves the track on purpose and its plan knows only the flat 0.55.
+    // Off: gravel on a corner's outside (a gravel circuit) 0.5, else grass 0.45 (0.3 wet). Rubber picked up there costs 8 %
+    // until ~1.5 km have cleaned it off. A flat kerb ripples the load +-8 % (zero mean: lap times hold), a sausage kerb
+    // unsettles the tyres for 0.15 s (the slide grip loss).
+    let offMu = off ? 0.55 : 1, ripple = 1;
+    const trap = car.player && off && R.gravel && Math.abs(ks) > 1 / 150 && car.d * ks < 0;
+    if (car.player) {
+      car.dirt = off ? 1 : Math.max(0, (car.dirt ?? 0) - v * h / 1500);
+      if (off) offMu = trap ? 0.5 : 0.45 * (1 - 0.3 * trackWetness(R.W));
+      if (kerb && !sausage) ripple = 1 + 0.08 * Math.sin(car.s * 6.9) * Math.sin(car.s * 2.3 + 1);
+      if (sausage && !(car.slide > 0)) car.slide = 0.15;
+    }
+    const mu = c.mu * skill * comp.grip * surf.grip * thermalGrip(temp, win) * wearGrip(health) * (car.slide > 0 ? 0.65 : 1) * offMu * (1 - 0.08 * (car.dirt ?? 0));
+    const N = Math.max(0.2 * c.mass * G, c.mass * G * pitchCos + vertical + A.down) * ripple;
     const muN = mu * (N / (c.mass * G)) ** -c.loadSens, aGrip = muN * N / c.mass;  // load sensitivity (cornerSpeed)
     const help = bankHelp(T, car.s, k);  // banking towards the corner's inside carries g sin(beta) of the cornering load
     // the driver's pace mode sets how much of that grip they plan to use (pushing, standard, saving tyres)
@@ -306,7 +321,7 @@ export function createRace({year, mapPts, mpu, width, drivers, laps, compounds, 
       const closing = car.block && car.block.gap < 10 + 0.15 * v && v > car.block.o.v + 1;
       X.fyNeed = closing ? 0 : c.mass * v * v * Math.abs(X.kappa);
     }
-    const s0 = car.s, out = vehicleStep(R, car, X, h, {T, k, mu: muN, N, down: A.down, drag: A.drag, slope, sinBank, off, rail: !!pit, dRail: dTarget});
+    const s0 = car.s, out = vehicleStep(R, car, X, h, {T, k, mu: muN, N, down: A.down, drag: A.drag, slope, sinBank, off: trap ? 'gravel' : off, rail: !!pit, dRail: dTarget});
     const {a, aLat, throttle, brake} = out;
 
     // --- DRS: armed when crossing a detection point within 1.000 s of the car ahead, opens in the zone on throttle,
@@ -479,6 +494,7 @@ export function createRace({year, mapPts, mpu, width, drivers, laps, compounds, 
     return [a[0] + (b[0] - a[0]) * w, a[1] + (b[1] - a[1]) * w];
   };
   R.pos = car => onLane(car, 0) ?? trackPos(T, car.s, car.d);
+  R.at = (s, d) => trackPos(T, s, d);  // a point on track (map units): Play's ghost car
   // where the car points: along the track, plus its own heading psi when the player has it sliding or spinning
   R.posAhead = (car, dt) => onLane(car, Math.max(car.v, 1) * dt)
     ?? trackPos(T, car.s + Math.max(car.v, 1) * dt * Math.cos(car.psi), car.d + Math.max(car.v, 1) * dt * Math.sin(car.psi));
