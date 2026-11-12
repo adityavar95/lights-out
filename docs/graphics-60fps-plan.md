@@ -91,11 +91,11 @@ Not checked by eye: the helmet's number (no camera gets close enough to the helm
 ## 5. Phase 3: environment
 
 15. Grass: mowing stripes, a detail normal map, tufts at the track edge.
-16. Asphalt: skid marks into braking zones, marbles off the line, patch seams, worn kerb paint.
-17. Trees: a sharper atlas, crossed cards with normals, wind sway in the vertex shader.
+16. Asphalt: skid marks into braking zones (first slice built: rear tyres that lock leave dark marks, `vfx.js` `skid`, cleared per circuit; the replay only locks where the simulation says so, so AI marks are rare), marbles off the line, patch seams, worn kerb paint.
+17. Trees: a sharper atlas, crossed cards with normals, wind sway in the vertex shader (built: a 2 %-of-height lean in a ripple that runs up each crown, `circuit3d.js` crownMat.positionNode; the sway itself is not checked on screen, only that the trees render with no errors).
 18. Ground: a detail texture over the satellite image, keyed by the vegetation mask that already exists.
 19. Stands: an instanced crowd with flags; marshals at their posts; a pit building with garages.
-20. Air: height fog for distance, cloud shadows drifting over the ground, sun shafts at golden hour, floodlight cones at night.
+20. Air: height fog for distance, cloud shadows drifting over the ground (built: `circuit3d.js` ground shader, strength set by `scene3d.js` `setWeather`; not yet judged at overview distance), sun shafts at golden hour, floodlight cones at night (built: a faint additive cone under each tower, opacity with the night, `trackside.js`; not seen in a frame yet).
 
 ## 6. Phase 4: cars and image
 

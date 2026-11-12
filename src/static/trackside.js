@@ -3,7 +3,7 @@
 // from the road frames (circuit3d.js frames: P centre, T along, N left, B up), in scene units through m().
 import * as THREE from 'three';
 import {mergeGeometries} from 'three/addons/utils/BufferGeometryUtils.js';
-import {normalGeometry, positionGeometry, step, vec2, vec3, mix, floor, fwidth, smoothstep, abs} from 'three/tsl';
+import {normalGeometry, positionGeometry, step, vec2, vec3, vec4, mix, floor, fwidth, smoothstep, abs, mrt} from 'three/tsl';
 import {noise} from './track3d.js';
 
 const mtx = new THREE.Matrix4(), quat = new THREE.Quaternion(), scale = new THREE.Vector3(1, 1, 1), basis = new THREE.Matrix4();
@@ -107,11 +107,20 @@ export function buildTrackside({F, runs, half, wall, m, armco}) {
   for (let d = 0, i = 0; i < n; i++) if (dist[i] >= d) { poles.push(i); d += m(700); }
 
   // floodlight towers beside the track; their lamps stay off until a night sky turns them on
+  let lampBeam = null;
   const lamp = new THREE.MeshStandardNodeMaterial({color: 0x20242c, emissive: 0xfff2d8, emissiveIntensity: 0});
   const towers = poles.map((i, k) => ({p: at(F[i], (k % 2 ? 1 : -1) * (half + wall + m(14)), 0), f: F[i]})).filter(t => clear(t.p, m(8)));
   if (towers.length) {
     made.push(instanced(new THREE.CylinderGeometry(m(0.22), m(0.35), m(26), 8).translate(0, m(13), 0), steel, towers));
     made.push(instanced(new THREE.BoxGeometry(m(6), m(2.6), m(0.5)).translate(0, m(26.5), 0), lamp, towers, {shadow: false}));
+    // the light on the track under each tower: a faint cone from the lamp to the ground, additive, on layer 1 with no motion
+    // vector; its opacity follows the night (night() below)
+    const beam = new THREE.MeshBasicNodeMaterial({color: 0xfff2d8, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, fog: false});
+    beam.mrtNode = mrt({velocity: vec4(0)});
+    const cone = instanced(new THREE.ConeGeometry(m(16), m(26.5), 24, 1, true).translate(0, m(13.25), 0), beam, towers, {shadow: false});
+    cone.layers.set(1);
+    made.push(cone);
+    lampBeam = beam;
   }
 
   // marshal posts every ~330 m just behind the barrier, alternate sides: an orange cabin, a roof, a dark light panel facing the track
@@ -220,7 +229,7 @@ export function buildTrackside({F, runs, half, wall, m, armco}) {
         if (points.some(q => (q.x - p.x) ** 2 + (q.z - p.z) ** 2 < reach)) for (const o of standMeshes) { o.setMatrixAt(i, none); o.instanceMatrix.needsUpdate = true; }
       });
     },
-    night: v => { lamp.emissiveIntensity = v; },
+    night: v => { lamp.emissiveIntensity = v; if (lampBeam) lampBeam.opacity = Math.min(0.12, v * 0.015); },
     dispose(world) {
       if (posts) { world.remove(posts); posts.dispose(); }
       stanchionGeo.dispose();

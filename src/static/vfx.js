@@ -6,9 +6,11 @@ import {Fn, If, Discard, uniform, attribute, instancedBufferAttribute, instanced
         screenUV, viewportSharedTexture, viewportDepthTexture, viewportLinearDepth, linearDepth, positionView, cameraPosition, cameraFar, cameraNear, mrt} from 'three/tsl';
 import {noise} from './track3d.js';
 
-const MAX_SPARKS = 2000, MAX_SMOKE = 600, MAX_SPRAY = 1500, MAX_RAIN = 4000;
+const MAX_SPARKS = 2000, MAX_SMOKE = 600, MAX_SPRAY = 1500, MAX_RAIN = 4000, MAX_SKIDS = 4000;
 const rnd = (a, b) => a + Math.random() * (b - a);
 const noVelocity = {velocity: vec4(0)};  // see post.js: an effect has no motion vector of its own
+const skidMat = new THREE.MeshBasicNodeMaterial({color: 0x0b0b0c, transparent: true, opacity: 0.6, depthWrite: false, fog: false, polygonOffset: true, polygonOffsetFactor: -2});
+skidMat.mrtNode = mrt(noVelocity);
 
 // ---------- heat haze ----------
 
@@ -264,6 +266,14 @@ export function createVfx(scene) {
   // anything on screen that moves by itself (live particles, rain, the player's ribbon)
   self.busy = () => !sp.clean || smoke.busy() || spray.busy() || drops > 0 || ribbon.visible;
 
+  // Tyre marks: one dark quad per rear tyre per frame while it locks or slides, laid on the road in the car's frame. An
+  // instanced mesh on layer 1 with no motion vector, like the other effects. They stay until the ring buffer comes round
+  // or the circuit changes (clearSkids).
+  const skids = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2), skidMat, MAX_SKIDS);
+  skids.count = 0; skids.frustumCulled = false; skids.layers.set(1); scene.add(skids);
+  let skidNext = 0;
+  self.skid = (matrix) => { skids.setMatrixAt(skidNext, matrix); skidNext = (skidNext + 1) % MAX_SKIDS; skids.count = Math.min(skids.count + 1, MAX_SKIDS); skids.instanceMatrix.needsUpdate = true; };
+  self.clearSkids = () => { skidNext = 0; skids.count = 0; };
   self.update = (dt, camera, sun, heightPx) => {
     const k = 1 / self.mps, g = 9.81 * k, P = sp.pos, Vl = sp.vel, at = sPos.array, vs = sVel.array, col = sCol.array, quiet = idle(sp, dt);
     uSparkWidth.value = 0.012 * k;

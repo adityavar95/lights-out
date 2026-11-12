@@ -37,7 +37,7 @@ const SKIES = [
 // One renderer for the race and the showroom, each with its own CanvasTarget: two WebGPU devices couldn't share pipelines,
 // textures or the PMREM environment, and every shader the showroom needs would compile twice.
 let container, renderer, mainSurface, pmrem, labels, scene, camera, controls, world, sun, csm, post, vfx, hemi, deck = null, cars = {}, map = null, tex = null;
-let carsToken = 0, mode = 'overview', chased = null, glide = 1, trackMat = null, simRate = 0, lastUpdate = 0, wettable = [], circuit = null, fly = null;
+let cloudShadow = null, carsToken = 0, mode = 'overview', chased = null, glide = 1, trackMat = null, simRate = 0, lastUpdate = 0, wettable = [], circuit = null, fly = null;
 // the circuit before this one, disposed after the new one has drawn: its materials hold the compiled shaders the new
 // one reuses (disposing first deleted them, and every race switch recompiled them all: ~0.3 s)
 let stale = null;
@@ -497,6 +497,7 @@ function restartOrGiveUp() {
   container.append(Object.assign(document.createElement('p'), {className: 'empty', textContent: 'The graphics device keeps failing. Reload the page to try again.'}));
 }
 export function setTrack(pts, span, corners, startKnown, mpu, width = 13, ann = null) {
+  vfx.clearSkids();
   cancelGround?.();  // its imagery is for the circuit going away (up to 256 MB)
   stale?.dispose();  // a second switch before a frame was drawn
   stale = circuit;
@@ -510,6 +511,8 @@ export function setTrack(pts, span, corners, startKnown, mpu, width = 13, ann = 
   ann ??= {h: new Array(n).fill(0), bank: new Array(n).fill(0), kerb: new Array(n).fill(''), tunnel: null, wall: 10, preset: null};
   circuit = buildCircuit(world, {pts, map, tex, width, startKnown, ann, corners, SIZE});
   trackMat = circuit.trackMat;
+  cloudShadow = circuit.cloud;
+  if (weather) cloudShadow.value = 0.6 * Math.max(0, weather.cloud - 0.1) / 0.9 + 0.2;
   circuit.night(sky0.lamps);
   applyDetail();
   wettable = circuit.wettable;  // scenery that turns darker and glossier in the rain
@@ -682,6 +685,7 @@ export function setWeather({cloud, rain, wetLine, wetOff}) {
     trackMat.userData.normalScale.value = 1 - 0.8 * wet;  // the water film smooths over the aggregate
   }
   for (const m of wettable) m.roughness = 0.9 - 0.6 * wet;
+  if (cloudShadow) cloudShadow.value = 0.2 + 0.6 * Math.max(0, cloud - 0.1) / 0.9;  // darker under more cloud; the sky at 0 is a clear one
   vfx.rain = rain;
 }
 
@@ -780,6 +784,15 @@ function effects(c, at, next, simDt, dt, fx) {
   for (const d of c.discs) d.userData.brakeTemp.value = brakeGlow(c.brakeC);
   const brake = fx ? Math.sqrt(fx.smoke) : THREE.MathUtils.smoothstep(-c.acc, 48, 65);
   if (!gfx.particles) return;
+  // tyre marks: each rear tyre that is locking or sliding lays a stretch of mark a frame, in the car's own frame
+  if (brake > 0.1 && c.v > 5 && c.wheels) {
+    const len = Math.min(c.v * dt, 1.5), [, tw] = c.tyre;  // metres this frame, the tyre's width
+    c.group.updateMatrixWorld();
+    for (const w of c.wheels) if (!w.front) {
+      const local = new THREE.Matrix4().compose(new THREE.Vector3(w.pivot.position.x - len / 2, 0.004, w.pivot.position.z), new THREE.Quaternion(), new THREE.Vector3(len, 1, tw * 0.9));
+      vfx.skid(local.premultiply(c.group.matrixWorld));
+    }
+  }
   const count = perSecond => Math.floor(perSecond * dt + Math.random());  // whole particles this frame, right on average
   const sparks = fx ? fx.sparks : THREE.MathUtils.smoothstep(v, 70, 85) * (0.2 + brake) * (Math.random() < 0.4);  // bursts, as over bumps
   const nSparks = count(900 * sparks), nSmoke = c.fronts.map(() => count(45 * brake * brake)), nSpray = count(260 * (fx?.spray ?? 0));
