@@ -3,6 +3,7 @@ import os
 # Before numpy loads (via livef1/pandas): OpenBLAS commits a buffer per CPU thread, ~740 MB on a 32-thread CPU, and
 # nothing here does matrix maths
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+import ipaddress
 import json
 import mimetypes
 import re
@@ -29,7 +30,7 @@ import f1tv
 import ledgers
 import radio
 from jolpica import JOLPICA, driver_career, jolpica_fetch, races
-from replay import CACHE, OpenF1Locked, ReplayUnavailable, elevation, find_session, laps_replay, pitlane, replay, save, scheduled_session, session_events, season_session_rows, session_telemetry, telemetry
+from replay import CACHE, OpenF1Locked, ReplayUnavailable, elevation, find_session, laps_replay, pitlane, replay, save, saved_replay, scheduled_session, session_events, season_session_rows, session_telemetry, telemetry
 import live
 from tracks import _geo_track, mv_track, track
 
@@ -110,6 +111,11 @@ def season_sessions(year: int):
     return table(season(year).season_table.reset_index())
 
 
+def _session_names(session: str) -> list[str]:
+    # OpenF1 called 2023's sprint qualifying "Sprint Shootout"
+    return [session, "Sprint Shootout"] if session == "Sprint Qualifying" else [session]
+
+
 @app.get("/api/season/{year}/f1schedule")
 def f1_schedule(year: int):
     check_season(year)
@@ -124,6 +130,8 @@ def jolpica(year: int, kind: str, round: int | None = None):
     if kind not in JOLPICA:
         raise HTTPException(404, f"Unknown kind '{kind}'. Use one of: {', '.join(JOLPICA)}")
     check_season(year, round)
+    if kind in ("laps", "pitstops") and round is None:
+        raise HTTPException(400, "Pick a round: a season of lap times is over 200 Jolpica requests.")
     fetch = lambda: jolpica_fetch(year, kind, round)
     try:
         rows = last_or_fetch(f"{year}_{kind}_{round}", fetch) if year >= date.today().year else fetch()
@@ -293,11 +301,38 @@ def race_replay(year: int, round: int, session: str = "Race", laps: bool = False
     """laps: the lap-timing replay even for a 2023+ race, which the page plays while the GPS one builds."""
     race = race_info(year, round)
     try:
-        return raw_json(laps_replay(year, round) if laps and session == "Race" else replay(year, race, session))
+        if laps and session == "Race":
+            return raw_json(laps_replay(year, round))
+        stored = saved_replay(year, race["date"], session)
+        return Response(stored, media_type="application/json") if stored else raw_json(replay(year, race, session))
     except ReplayUnavailable as e:
         raise HTTPException(409, LIVE_NOW) if _is_live(race, session) else HTTPException(404, str(e))
     except Exception as e:
         raise HTTPException(502, f"Replay data request failed: {e}")
+
+
+NOT_BUILT = "NOT_BUILT"  # quali.js's sections ask before a build: ~30 OpenF1 requests
+
+
+@app.get("/api/sessionlaps/{year}/{round}")
+def session_laps(year: int, round: int, session: str = "Qualifying", build: bool = False):
+    """A session's laps, stints, race control and drivers out of its GPS replay, without the 2 MB of positions: the
+    Results tab's qualifying evolution and long runs. From the replay on disk; build=1 builds one that isn't there."""
+    if year < 2023:
+        raise HTTPException(404, f"No session timing for {year}: OpenF1's records start in 2023")
+    race = race_info(year, round)
+    try:
+        stored = saved_replay(year, race["date"], session)
+        if not stored and not build:
+            raise HTTPException(404, NOT_BUILT)
+        data = json.loads(stored) if stored else replay(year, race, session)
+    except ReplayUnavailable as e:
+        raise HTTPException(409, LIVE_NOW) if _is_live(race, session) else HTTPException(404, str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(502, f"Replay data request failed: {e}")
+    return raw_json({k: data.get(k) for k in ("session", "drivers", "laps", "stints", "race_control")})
 
 
 def _openf1_ledger(year: int, round: int, fetch):
@@ -326,6 +361,11 @@ def race_overtakes(year: int, round: int):
 @app.get("/api/stationary/{year}/{round}")
 def race_stationary(year: int, round: int):
     return _openf1_ledger(year, round, ledgers.stationary)
+
+
+@app.get("/api/stints/{year}/{round}")
+def race_stints(year: int, round: int):
+    return _openf1_ledger(year, round, ledgers.stints)
 
 
 @app.get("/api/f1tv/account")
@@ -389,7 +429,7 @@ def event_marks(year: int, round: int, session: str = "Race"):
     """A session's important events for the F1 TV viewer's seek bars."""
     check_season(year, round)
     race = race_info(year, round)
-    names = [session, "Sprint Shootout"] if session == "Sprint Qualifying" else [session]
+    names = _session_names(session)
     try:
         s = next((x for n in names if (x := find_session(year, race["date"], n))), None) if year >= 2023 else None
         if s is None:
@@ -409,7 +449,7 @@ def f1tv_telemetry(year: int, round: int, driver: int, session: str = "Race"):
     race = race_info(year, round)
     try:
         # OpenF1 called 2023's sprint qualifying "Sprint Shootout"
-        names = [session, "Sprint Shootout"] if session == "Sprint Qualifying" else [session]
+        names = _session_names(session)
         s = next((x for n in names if (x := find_session(year, race["date"], n))), None) if year >= 2023 else None
         if s is None:
             raise ReplayUnavailable("Car telemetry needs a 2023 or later session (OpenF1 data).")
@@ -429,11 +469,21 @@ def f1tv_radio(year: int, round: int, session: str = "Race", driver: int | None 
         return {"clips": [], "drivers": {}, "pending": 0, "error": None}  # OpenF1 has team radio from 2023
     race = race_info(year, round)
     try:
-        names = [session, "Sprint Shootout"] if session == "Sprint Qualifying" else [session]
+        names = _session_names(session)
         s = next((x for n in names if (x := find_session(year, race["date"], n))), None)
         return radio.radio(s, session, year, driver, f1auth.valid(x_f1_token))
     except Exception as e:
         raise HTTPException(502, f"Team radio request failed: {e}")
+
+
+@app.post("/api/f1tv/radio/model", status_code=202)
+def f1tv_radio_model(request: Request):
+    """Starts the speech model's download (radio.fetch_model): the radio panel's button, after the reader agrees to 2.5 GB."""
+    origin = request.headers.get("origin")
+    if origin and urlsplit(origin).netloc != request.headers.get("host"):  # another site's page can't start a 2.5 GB download
+        raise HTTPException(403, "Cross-origin download")
+    radio.fetch_model()
+    return Response(status_code=202)
 
 
 # registered before /api/f1tv/{year}/{round}, which would take /radio/audio for a year and refuse it
@@ -526,13 +576,38 @@ def car_telemetry(year: int, round: int, driver: int, start: str, duration: floa
         raise HTTPException(502, f"Telemetry request failed: {e}")
 
 
+def by_address(host: str | None) -> bool:
+    """Whether a request's Host is localhost or an IP address. A page on a domain re-pointed at this computer (DNS
+    rebinding) is same-origin with the server and passes every Origin check; it can't be reached by an address."""
+    if host == "localhost" or (host or "").endswith(".localhost"):
+        return True
+    try:
+        ipaddress.ip_address(host)
+        return True
+    except ValueError:
+        return False
+
+
+# the import map is index.html's only inline script: its exact text is allowed by hash in the policy below
+import base64, hashlib
+IMPORTMAP_HASH = "'sha256-" + base64.b64encode(hashlib.sha256(re.search(r'<script type="importmap">(.*?)</script>', (Path(__file__).parent / "static" / "index.html").read_text(encoding="utf8"), re.S).group(1).encode("utf8")).digest()).decode() + "'"
+
+
 @app.middleware("http")
 async def revalidate_static(request, call_next):
+    if not by_address(request.url.hostname):
+        return Response("Open Lights Out by its address (http://127.0.0.1:8086), not a name.", status_code=400)
     # Without it browsers cache old modules heuristically and mix them with new ones after an edit, and one missing
     # export blanks the whole app. no-cache still serves 304s for unchanged files.
     response = await call_next(request)
     if request.url.path == "/" or request.url.path.startswith("/static/"):
         response.headers["Cache-Control"] = "no-cache"
+    if request.url.path == "/" or request.url.path.endswith(".html"):
+        # report-only while the page's inline scripts and handlers are moved out: violations show in the console
+        response.headers["Content-Security-Policy-Report-Only"] = (
+            f"default-src 'self'; script-src 'self' 'wasm-unsafe-eval' {IMPORTMAP_HASH}; style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data: blob: https:; media-src 'self' blob: https:; connect-src 'self' https:; "
+            "worker-src 'self' blob:; frame-ancestors 'none'")
     return response
 
 

@@ -1,7 +1,16 @@
 // Run: node tests/test_pace.mjs  — race trace, tyre-wear fits and undercut ledger (pace.js) on synthetic races.
 import assert from 'node:assert/strict';
 import {raceModel} from '../src/static/whatif.js';
-import {raceTrace, fuelPerLap, ols, stintPace, paceRanking, undercuts} from '../src/static/pace.js';
+import {raceTrace, fuelPerLap, ols, stintPace, paceRanking, undercuts, compoundOf} from '../src/static/pace.js';
+
+{  // a fitted stint's compound: OpenF1's stint on at its middle lap, whichever side of the stop each source puts the pit lap
+  const rows = [['1', 1, 18, 'MEDIUM', 0], ['1', 19, null, 'HARD', 3], ['44', 1, 57, null, 0]];
+  assert.equal(compoundOf(rows, 1, {from: 1, to: 19}), 'MEDIUM');
+  assert.equal(compoundOf(rows, '1', {from: 20, to: 57}), 'HARD');   // an open-ended last stint
+  assert.equal(compoundOf(rows, 44, {from: 1, to: 57}), null);       // OpenF1 gave no compound
+  assert.equal(compoundOf(rows, 16, {from: 1, to: 57}), null);
+  assert.equal(compoundOf(null, 1, {from: 1, to: 19}), null);
+}
 
 const fmt = s => `${Math.floor(s / 60)}:${(s % 60).toFixed(3).padStart(6, '0')}`;
 const close = (a, b, tol, msg) => assert.ok(Math.abs(a - b) < tol, `${msg}: ${a} vs ${b}`);

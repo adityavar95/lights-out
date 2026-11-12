@@ -47,6 +47,14 @@ export function stintPace(M, id) {
   });
 }
 
+// The compound a car ran in a fitted stint ({from, to} laps), from /api/stints' rows [number, first lap, last lap,
+// compound, age]: the one on at the stint's middle lap, since the two sources split a stop's in- and out-lap differently.
+// null without one (no rows, or OpenF1 left the compound out).
+export function compoundOf(rows, num, stint) {
+  const mid = Math.floor((stint.from + stint.to) / 2);
+  return rows?.find(([n, a, b]) => n === String(num) && a <= mid && mid <= (b ?? Infinity))?.[3] ?? null;
+}
+
 // Everyone with MIN_LAPS clean laps, fastest median clean lap first
 export function paceRanking(M) {
   return M.ids.map(id => {

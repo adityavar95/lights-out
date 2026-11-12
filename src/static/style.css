@@ -625,7 +625,12 @@ summary.mvibtn::-webkit-details-marker { display: none; }
 .mvrpall, .mvrpauto { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border: 0; border-radius: 999px;
   background: rgb(255 255 255 / .1); color: var(--mv-text); font: inherit; font-size: 12px; cursor: pointer; transition: background .15s; }
 .mvrpall[hidden] { display: none; }
+.mvrpneed { display: flex; align-items: center; gap: 12px; padding: 8px 12px; border-radius: 8px; background: rgb(255 255 255 / .08);
+  color: var(--mv-dim); font-size: 12px; line-height: 1.4; }
+.mvrpneed[hidden] { display: none; }
 :is(.mvrpall, .mvrpauto):hover { background: rgb(255 255 255 / .2); }
+.mvrpneed .mvrpall { flex: none; background: var(--mv-text); color: #000; }
+.mvrpneed .mvrpall:hover { background: var(--mv-text); opacity: .85; }
 .mvrpauto .ico { width: 15px; height: 15px; }
 .mvrpauto[aria-checked=true] { background: var(--mv-text); color: #000; }
 /* driver profiles: headshot in a ring of team colour, code under it; glows for a while after they speak, pulses on air */

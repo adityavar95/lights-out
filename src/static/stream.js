@@ -292,12 +292,15 @@ export async function showStream(year, races, round = null) {
   if (!S.listening) {
     S.listening = true;
     addEventListener('f1:watched', refreshWatched);
+    // only while Stream is what's on screen: the second timer's ask is an F1 TV search every time (the server keeps it 5 min)
+    const away = () => document.hidden || document.body.dataset.section !== 'stream';
     setInterval(() => {  // Coming up stays true however long the page is open
+      if (away()) return;
       for (const c of document.querySelectorAll('.scount[data-at]')) +c.dataset.at > Date.now() ? c.textContent = until(+c.dataset.at) : c.closest('.sched').remove();
       for (const c of document.querySelectorAll('.sbillcount[data-at]')) if (+c.dataset.at > Date.now()) c.textContent = until(+c.dataset.at);
       if (S.year) refreshLead();  // a session started or ended
     }, 30e3);
-    setInterval(() => { if (S.year) loadNext(S.year); }, 300e3);
+    setInterval(() => { if (S.year && !away()) loadNext(S.year); }, 300e3);
   }
   await connection();  // before the cards: they open here or on F1 TV by it
   if (S.year !== year || S.races !== races) build(year, races);

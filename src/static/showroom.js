@@ -5,6 +5,7 @@
 import * as THREE from 'three';
 import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
 import {SkyMesh} from 'three/addons/objects/SkyMesh.js';
+import {RoomEnvironment} from 'three/addons/environments/RoomEnvironment.js';
 import {mergeGeometries} from 'three/addons/utils/BufferGeometryUtils.js';
 import {attribute, float, fract, mix, smoothstep, time, vec3} from 'three/tsl';
 import {el} from './util.js';
@@ -85,7 +86,16 @@ const flowMaterial = (() => {
 
 function environment(pmrem, kind) {
   S.envs[kind] ??= (() => {
-    // shortcut: every rig bakes this sky, since a RoomEnvironment bake fails to compile on WebGPU (empty output struct, cause not found) and blacked out whole frames
+    // A warm-up leaves its target and MRT on the renderer (scene3d.js clearWarmTarget): baked under that MRT, which matches
+    // nothing in the bake's target, the room compiled to an empty output struct and blacked out whole frames.
+    const {renderer} = shared();
+    renderer.setRenderTarget(null);
+    renderer.setMRT(null);
+    if (kind === 'room') {  // the garage and the wind tunnel: a lit room's soft boxes in the paint, not a horizon
+      const room = new RoomEnvironment(), texture = pmrem.fromScene(room, 0.04).texture;
+      room.dispose();
+      return texture;
+    }
     const sky = new SkyMesh(), envScene = new THREE.Scene();
     sky.scale.setScalar(50);
     sky.turbidity.value = 6;
@@ -169,6 +179,10 @@ function setFlow(on) {
 // host: the element to fill. Returns once the view exists; call again after the device is up to reuse it.
 async function create(host) {
   await ready;
+  if (!shared().pmrem) {  // no GPU device: the environments can't be baked, so say why instead of an empty panel
+    host.append(Object.assign(document.createElement('p'), {className: 'empty', textContent: '3D view needs WebGPU or WebGL2.'}));
+    return;
+  }
   const canvas = el('canvas', {style: 'display:block;width:100%;height:100%'});
   const surface = new THREE.CanvasTarget(canvas);
   surface.setPixelRatio(Math.min(devicePixelRatio, 2));
@@ -224,6 +238,7 @@ const draw = () => {
 
 export async function openShowroom(host) {
   if (!S) await create(host);
+  if (!S) return;  // no device: create said so in host
   S.open = true;
   setDeck({surface: S.surface, draw});
 }
@@ -234,9 +249,9 @@ export function closeShowroom() {
   setDeck(null);
 }
 
-export const nextRig = () => S && setRig((S.rig + 1) % RIGS.length);
 
 export async function showCar(color, year, team, load) {
+  if (!S) return;
   const token = ++S.token;
   await load?.();
   if (token !== S.token) return;

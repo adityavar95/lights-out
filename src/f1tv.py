@@ -1,15 +1,20 @@
 """F1 TV videos of a race from F1 TV's public catalogue search (listing needs no sign-in).
 
-Playback stays on f1tv.formula1.com: its streams are DRM-protected and the site refuses to be framed
-(X-Frame-Options: SAMEORIGIN), so the browser opens each video there, signed in with the user's F1 TV subscription.
-A session's live stream and its replay are the same content id.
+Playback runs in the app: CONTENT/PLAY with the user's subscription token gives the stream, which shaka plays
+through this server's licence proxy. A session's live stream and its replay are the same content id.
 """
+import json
+import re
 import time
 from datetime import date
 import unicodedata
 from urllib.parse import urlparse
 
 import requests
+
+from replay import CACHE, save
+
+DISK = CACHE.parent / "f1tv"  # past seasons' weekends (videos)
 
 SEARCH = "https://f1tv.formula1.com/2.0/R/ENG/WEB_DASH/ALL/PAGE/SEARCH/VOD/F1_TV_Pro_Annual/2"
 SITE = "https://f1tv.formula1.com"
@@ -30,9 +35,13 @@ def _search(**filters) -> list:
 MEETING_ALIASES = {"Brazilian Grand Prix": "São Paulo Grand Prix"}
 
 
+def _ascii(name: str) -> str:
+    return unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode()
+
+
 def _stem(name: str) -> str:
     """'Malaysian Grand Prix' and F1 TV's 'Malaysia Grand Prix' (or 'São Paulo' / 'Sao Paulo') both give 'malays'."""
-    return unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode().lower().replace(" ", "")[:6]
+    return _ascii(name).lower().replace(" ", "")[:6]
 
 
 def _fresh(hit, year: int) -> bool:
@@ -55,6 +64,13 @@ def videos(year: int, race_name: str) -> list:
     hit = _cache.get((year, race_name))
     if _fresh(hit, year):
         return hit[1]
+    # A past season's weekend is kept on disk: every restart searched all ~24 again, and F1 TV blocks an IP after a few
+    # hundred searches. The whole name, not _stem: United States and United States West share those six letters.
+    # shortcut: a video F1 TV adds to a past season later isn't seen; delete .cache/f1tv to search again
+    past = year < date.today().year and DISK / f"{year}_{re.sub(r'[^a-z0-9]', '', _ascii(race_name).lower())}.json"
+    if past and past.exists():
+        _cache[(year, race_name)] = (time.time(), json.loads(past.read_text()))
+        return _cache[(year, race_name)][1]
     items = _search(filter_season=year, filter_Meeting_Name=race_name)
     if not items and race_name in MEETING_ALIASES:
         items = _search(filter_season=year, filter_Meeting_Name=MEETING_ALIASES[race_name])
@@ -72,6 +88,8 @@ def videos(year: int, race_name: str) -> list:
                     "img": m.get("pictureUrl") and f"{SITE}/image-resizer/image/{m['pictureUrl']}", "duration": m.get("duration") or 0})
     out.sort(key=lambda v: (v["kind"] != "REPLAY", v["start"] or float("inf"), v["title"] or ""))
     _cache[(year, race_name)] = (time.time(), out)
+    if past and out:
+        save(past, out)
     return out
 
 
@@ -139,7 +157,8 @@ def license(url: str, challenge: bytes, subscription_token: str, entitlement_tok
         raise F1TVError(f"Not an F1 TV licence server: {u.hostname}")
     headers = {"User-Agent": UA, "ascendontoken": subscription_token, "Content-Type": "application/octet-stream",
                **({"entitlementtoken": entitlement_token} if entitlement_token else {})}
-    r = requests.post(url, data=challenge, headers=headers, timeout=(5, 20))
+    # no redirects: requests would carry ascendontoken (not a header it strips) to whatever host one named
+    r = requests.post(url, data=challenge, headers=headers, timeout=(5, 20), allow_redirects=False)
     return r.status_code, r.content, r.headers.get("content-type", "application/octet-stream")
 
 

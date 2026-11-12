@@ -1,4 +1,5 @@
 """Jolpica (Ergast successor) access through livef1's bundled client, flattened to one dict per row."""
+import json
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
@@ -78,7 +79,8 @@ def driver_career(driver_id: str) -> dict:
     """Every race result of one driver (each with its race's season, round, name and date) and their final standing in
     each of those seasons. Jolpica only answers standings per season, so those are the seasons' own standings tables
     (disk-cached once a season is over, and shared with the Drivers tab's season view)."""
-    active = any(d["driverId"] == driver_id for d in jolpica_fetch(date.today().year, "drivers"))
+    this = date.today().year  # last year's list too: this year's is empty until its first race weekend
+    active = any(d["driverId"] == driver_id for y in (this, this - 1) for d in jolpica_fetch(y, "drivers"))
     results = _pages((jolpica_client if active else SETTLED).query().driver(driver_id), "get_results",  # retired: it won't change
                      lambda d: walk(d.get("Races", []), ["Results"]))
     seasons = sorted({int(r["season"]) for r in results})
@@ -89,7 +91,26 @@ def driver_career(driver_id: str) -> dict:
 
 
 @lru_cache(maxsize=None)
+def _races(year: int) -> tuple:
+    return tuple(jolpica_fetch(year, "races"))
+
+
+LAST = Path(__file__).resolve().parent.parent / ".cache" / "jolpica"  # server.last_or_fetch's answers
+_down: dict = {}  # year -> (read at, races) from the saved list, while Jolpica isn't answering
+
+
 def races(year: int) -> tuple:
     """A season's races. The circuit selector scans several seasons per card, and Jolpica allows ~500 requests an hour.
-    shortcut: kept for the server's lifetime, so a mid-season calendar change shows after a restart."""
-    return tuple(jolpica_fetch(year, "races"))
+    shortcut: kept for the server's lifetime, so a mid-season calendar change shows after a restart.
+    Jolpica down: the last list server.py saved, for 5 minutes at a time, so each request doesn't wait out a timeout first."""
+    hit = _down.get(year)
+    if hit and time.time() - hit[0] < 300:
+        return hit[1]
+    try:
+        return _races(year)
+    except Exception:
+        saved = LAST / f"{year}_races_None.json"
+        if not saved.exists():
+            raise
+        _down[year] = (time.time(), tuple(json.loads(saved.read_text())))
+        return _down[year][1]

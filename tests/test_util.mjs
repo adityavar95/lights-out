@@ -25,6 +25,27 @@ answer = () => ({ok: true, json: async () => ({})});
 await get('/api/x');
 assert.equal(calls['/api/x'], 2);
 
+// at most 200 answers are kept: the oldest goes, and is fetched again when asked for
+for (let i = 0; i < 201; i++) await get(`/api/old/${i}`);
+await get('/api/old/200'); await get('/api/old/0');
+assert.equal(calls['/api/old/200'], 1);
+assert.equal(calls['/api/old/0'], 2);
+
+// across New Year, the new season's list is fetched again once it is over 5 minutes old
+const RealDate = Date;
+let clock = new RealDate(year, 11, 31, 23, 59).getTime();  // local time, as getFullYear reads it
+globalThis.Date = class extends RealDate {
+  constructor(...a) { super(...(a.length ? a : [clock])); }
+  static now() { return clock; }
+};
+const nextYear = `/api/jolpica/${year + 1}/races`;
+await get(nextYear);
+clock += 6 * 60e3;  // now 6 minutes later, and into the new year
+await get(nextYear);
+assert.equal(calls[nextYear], 2);
+globalThis.Date = RealDate;
+Date.now = realNow;
+
 // plain words for the browser's network errors and bare statuses; a server's own message stands
 assert.match(plain(new TypeError('Failed to fetch')), /Can't reach the server/);
 assert.match(plain('NetworkError when attempting to fetch resource.'), /Can't reach the server/);

@@ -20,7 +20,11 @@ function draw({state, done, total, failed, missing}) {
 }
 
 async function refresh() {
-  const s = await (await fetch('/api/assets')).json();
+  const s = await fetch('/api/assets').then(r => r.json()).catch(() => null);
+  if (!s) {  // no answer: mid-download (the server restarting, say) ask again, or the button stays on "Downloading" for good
+    if (watched) setTimeout(refresh, 5000);
+    return;
+  }
   draw(s);
   if (s.state === 'running') setTimeout(refresh, 1000);
 }

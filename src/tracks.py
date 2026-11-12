@@ -1,9 +1,12 @@
 """Track outlines: MultiViewer (the same source livef1 uses, F1 timing coordinates), else an OpenF1 lap (same
 coordinates), else GeoJSON."""
+import json
 import math
 from functools import lru_cache
 
 import requests
+
+from replay import CACHE, save
 
 MV_URL = "https://api.multiviewer.app/api/v1/circuits"
 MV_HEADERS = {"User-Agent": "LiveF1/user"}
@@ -40,9 +43,26 @@ def _get(url: str, **kw):
     return r.json()
 
 
+DISK = CACHE.parent / "tracks"
+
+
+def _kept(name: str, url: str, **kw):
+    """The url's JSON, saved as it comes; the saved copy when the request fails. Outlines used to live in memory only,
+    so a restart without a connection had no circuit to draw under a replay that was itself on disk."""
+    path = DISK / f"{name}.json"
+    try:
+        data = _get(url, **kw)
+    except requests.RequestException:
+        if not path.exists():
+            raise
+        return json.loads(path.read_text())
+    save(path, data)
+    return data
+
+
 @lru_cache(maxsize=None)
 def _mv_years() -> dict:
-    return {int(k): v["years"] for k, v in _get(MV_URL, headers=MV_HEADERS).items()}
+    return {int(k): v["years"] for k, v in _kept("mv_years", MV_URL, headers=MV_HEADERS).items()}
 
 
 def _clean_loop(x: list, y: list, idx: list) -> tuple:
@@ -79,7 +99,7 @@ def _clean_loop(x: list, y: list, idx: list) -> tuple:
 
 @lru_cache(maxsize=None)
 def _mv_track(key: int, year: int) -> dict:
-    d = _get(f"{MV_URL}/{key}/{year}", headers=MV_HEADERS)
+    d = _kept(f"mv_{key}_{year}", f"{MV_URL}/{key}/{year}", headers=MV_HEADERS)
     x, y, minisectors = _clean_loop(d["x"], d["y"], d.get("miniSectorsIndexes", []))
     return {
         "source": "multiviewer",
@@ -92,7 +112,7 @@ def _mv_track(key: int, year: int) -> dict:
 
 @lru_cache(maxsize=None)
 def _geojson() -> list:
-    return _get(GEOJSON_URL)["features"]
+    return _kept("geojson", GEOJSON_URL)["features"]
 
 
 def _geo_track(lat: float, lng: float) -> dict | None:

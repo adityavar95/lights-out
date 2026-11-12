@@ -38,6 +38,10 @@ export function parseHash(hash = '') {
   return clean({year, round, tab, t: number(params.get('t')), focus: params.get('focus'), session: params.get('session'), cmp: pairs(params.get('cmp'))});
 }
 
+// whether the replay (replay.js moment()) is still where a link put it: its session, and its time once there is one
+export const held = (link, now) => (link.session ?? 'Race') === (now.session ?? 'Race')
+  && (link.t === undefined || now.t === undefined || Math.abs(now.t - link.t) <= 1);
+
 export function formatHash(state) {
   const s = clean(state);
   if (s.stream) return '#stream';

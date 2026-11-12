@@ -1,13 +1,15 @@
 // Shared helpers: fetching, team colours, flags, formatting.
 
-const cache = new Map();
+const cache = new Map(), MAX = 200;
 // live URLs carry a one-off ?ts=, so nothing rereads them: 1 is as good as none
 const KEEP = [['/api/replay/', 2], ['/api/telemetry/', 4], ['/api/f1tv/telemetry/', 8], ['/api/live', 1]];  // [url prefix, how many kept]
 // this season's tables and F1 TV lists change as weekends run, past seasons' don't (5 min: the server's own cache of them)
-const FRESH = new RegExp(`^/api/(jolpica|season|f1tv)/${new Date().getFullYear()}\\b`), TTL = 5 * 60e3;
+const TTL = 5 * 60e3;
+// the year is read on each call: a tab open past New Year must not keep the old season as "this season"
+const fresh = url => new RegExp(`^/api/(jolpica|season|f1tv)/${new Date().getFullYear()}\\b`).test(url);
 
 export async function get(url) {
-  if (!cache.has(url) || (FRESH.test(url) && Date.now() - cache.get(url).at > TTL)) {
+  if (!cache.has(url) || (fresh(url) && Date.now() - cache.get(url).at > TTL)) {
     cache.set(url, Object.assign(fetch(url).then(async res => {
       const body = await res.json().catch(() => ({}));
       // FastAPI's validation errors (422) send detail as a list
@@ -18,6 +20,7 @@ export async function get(url) {
     // replays (several MB) and telemetry (0.3-3 MB a driver) keep their last few, not every one opened since the page loaded
     const keep = KEEP.find(([prefix]) => url.startsWith(prefix));
     if (keep) for (const k of [...cache.keys()].filter(k => k.startsWith(keep[0])).slice(0, -keep[1])) cache.delete(k);
+    if (cache.size > MAX) cache.delete(cache.keys().next().value);  // the oldest: every race opened left its tables here for the tab's life
   }
   return cache.get(url);
 }

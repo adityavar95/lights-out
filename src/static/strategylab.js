@@ -1,8 +1,8 @@
 // Strategy Lab tab: move one driver's pit stops in a real race and see where they'd have finished (whatif.js), or
 // search every 1-3 stop plan for the best one.
-import {el, svg, teamColor, th, csvButton} from './util.js';
+import {el, svg, teamColor, th, csvButton, get} from './util.js';
 import {raceModel, simulate, optimise, ranked, PASS, SC_LOSS} from './whatif.js';
-import {fuelPerLap, paceRanking, undercuts} from './pace.js';
+import {fuelPerLap, paceRanking, undercuts, compoundOf} from './pace.js';
 
 const code = r => r['Driver.code'] || r['Driver.familyName'].slice(0, 3).toUpperCase();
 const chip = color => el('span', {class: 'chip', style: `background:${color}`});
@@ -135,8 +135,10 @@ export function renderStrategyLab(root, laps, results, pits, year, why, round) {
     return s;
   }
 
-  function paceCard() {
+  // tyres: /api/stints' rows once they've landed; undefined while they load (and before 2023), null when they can't be had
+  function paceCard(tyres) {
     const rows = paceRanking(M).filter(r => info[r.id]), hasStops = pits.length > 0, fuel = fuelPerLap(M.n);
+    const tyre = (r, s) => { const c = s && compoundOf(tyres, info[r.id].number, s); return c ? c[0] + c.slice(1).toLowerCase() : ''; };
     const intro = el('p', {class: 'muted small'}, 'Clean laps only: no lap 1, in-laps, out-laps or SC/VSC laps, and none 2 s off the driver\'s stint median. The median is not adjusted for fuel or traffic, so compare drivers who ran the whole race.');
     if (!rows.length) return el('div', {class: 'card lab'}, el('h2', {}, 'Race pace and tyre wear'), intro, el('p', {class: 'empty'}, 'Nobody has 5 clean laps in this race.'));
     const stints = r => r.stints.filter(s => s.slope !== null || s.n > 0);  // a red flag's tyre change makes a stint with no laps to fit
@@ -146,10 +148,10 @@ export function renderStrategyLab(root, laps, results, pits, year, why, round) {
       el('p', {class: 'muted small'}, hasStops
         ? `Each stint: the lap time's slope on tyre age in s/lap, ± its standard error, from at least 5 clean laps. "est." adds ${fuel.toFixed(3)} s/lap for fuel burn (0.03 s/kg × 110 kg over ${M.n} laps, the same on every stint), because a car getting lighter hides tyre loss. The slope is measured; the "est." figure is an estimate, and cars before 2014 carried more fuel.`
         : `${NO_STOPS(year)}, so stints can't be split and tyre wear isn't fitted: this is the pace ranking only.`),
-      el('p', {class: 'muted small'}, year < 2023 ? 'No tyre compounds: OpenF1\'s records of them start in 2023.'
-        : 'Tyre compounds aren\'t shown: here they only come with a full GPS replay, about 30 requests to build, too many to spend on a table.'),
+      (year < 2023 || tyres === null) && el('p', {class: 'muted small'}, year < 2023 ? 'No tyre compounds: OpenF1\'s records of them start in 2023.'
+        : 'No tyre compounds: OpenF1 isn\'t answering for this race right now.'),
       el('div', {class: 'ledgerbar'}, csvButton(`pace_${year}_${round}`, head, () => rows.map((r, i) => [i + 1, label(r.id), +r.median.toFixed(3), i ? +(r.median - rows[0].median).toFixed(3) : '', r.n,
-        ...Array.from({length: k}, (_, j) => stintText(stints(r)[j]))]))),
+        ...Array.from({length: k}, (_, j) => [tyre(r, stints(r)[j]), stintText(stints(r)[j])].filter(Boolean).join(' '))]))),
       el('div', {class: 'tablewrap'}, el('table', {class: 'data'},
         el('thead', {}, el('tr', {}, head.map(th))),
         el('tbody', {}, rows.map((r, i) => el('tr', {},
@@ -158,14 +160,14 @@ export function renderStrategyLab(root, laps, results, pits, year, why, round) {
           el('td', {class: 'num'}, lapTime(r.median)),
           el('td', {class: 'num'}, i ? `+${(r.median - rows[0].median).toFixed(3)}` : ''),
           el('td', {class: 'num'}, r.n),
-          ...Array.from({length: k}, (_, j) => el('td', {class: 'stintcell'}, stintCell(stints(r)[j])))))))));
+          ...Array.from({length: k}, (_, j) => el('td', {class: 'stintcell'}, stintCell(stints(r)[j], tyre(r, stints(r)[j]))))))))));
   }
 
   const stintText = s => (!s ? '' : `L${s.from}-${s.to} ${s.slope === null ? `${s.n} clean` : `${s.slope.toFixed(3)} s/lap ±${s.se.toFixed(3)}, est. ${s.corrected.toFixed(3)}`}`);
 
-  function stintCell(s) {
+  function stintCell(s, tyre) {
     if (!s) return null;
-    const laps = el('span', {class: 'muted small'}, `L${s.from}–${s.to}`);
+    const laps = el('span', {class: 'muted small'}, `${tyre ? `${tyre} · ` : ''}L${s.from}–${s.to}`);
     if (s.slope === null) return [laps, el('br'), el('span', {class: 'muted small'}, `${s.n} clean: too few`)];
     return [laps, ' ', `${slope(s.slope)} ±${s.se.toFixed(3)}`, el('br'), el('span', {class: 'muted small'}, `est. ${slope(s.corrected)}`)];
   }
@@ -191,6 +193,9 @@ export function renderStrategyLab(root, laps, results, pits, year, why, round) {
   }
 
   draw();
+  let pace = paceCard();
+  // one OpenF1 request (then on the server's disk): the table is there at once and the compounds join it
+  if (year >= 2023) get(`/api/stints/${year}/${round}`).catch(() => null).then(rows => { const now = paceCard(rows); pace.replaceWith(now); pace = now; });
   root.replaceChildren(el('div', {class: 'card lab'},
     el('h2', {}, 'Strategy lab'),
     el('p', {class: 'muted small'}, 'Replay this race with different pit stops. Drag a stop to another lap, add or remove one, or let the lab try every plan. It reruns the real lap times, so the real strategy gives the real result.'),
@@ -200,5 +205,5 @@ export function renderStrategyLab(root, laps, results, pits, year, why, round) {
         el('p', {class: 'legend-line muted small'}, el('span', {class: 'key real'}), 'real race ', el('span', {class: 'key whatif'}), 'what-if ', '● stop'),
         notes),
       el('div', {}, best, el('h3', {}, 'What-if finishing order'), order))),
-    paceCard(), ledgerCard());
+    pace, ledgerCard());
 }

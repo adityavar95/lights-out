@@ -2,6 +2,7 @@
 page can't start without, fetched on the first page load. `start`: skies, textures and satellite tiles for every circuit
 (~600 MB), which the page gets at lower resolution or from Esri until someone chooses to download them (downloads.js, or
 scripts/fetch_assets.py before a build). The page's own modules name what's needed; files already here are skipped."""
+import hashlib
 import json
 import os
 import re
@@ -23,6 +24,7 @@ FONTS = ["family=Geist:wght@400;500&family=Geist+Mono:wght@400;500&family=Titill
          "family=Titillium+Web:ital,wght@0,400;0,600;0,700;1,900"]
 CHROME = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130.0 Safari/537.36"}  # Google sends others no woff2
 
+HASHES = json.loads((STATIC / "asset_hashes.json").read_text(encoding="utf8"))  # three.js file -> sha256, see write_three_hashes
 _core_done = False
 _core_lock = threading.Lock()
 _lock = threading.Lock()
@@ -33,8 +35,8 @@ def _read(name: str) -> str:
     return (STATIC / name).read_text(encoding="utf8")
 
 
-def fetch(url: str, dest: Path) -> Path:
-    """Atomic: a download killed midway must not pass for a finished file on the next run."""
+def fetch(url: str, dest: Path, sha: str | None = None) -> Path:
+    """Atomic: a download killed midway must not pass for a finished file on the next run. sha: the file must hash to it."""
     if dest.exists():
         return dest
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -45,14 +47,16 @@ def fetch(url: str, dest: Path) -> Path:
             with tmp.open("wb") as f:
                 for chunk in r.iter_content(1 << 20):
                     f.write(chunk)
+        if sha and hashlib.sha256(tmp.read_bytes()).hexdigest() != sha:
+            raise RuntimeError(f"{url} does not match its recorded sha256")
         os.replace(tmp, dest)
     finally:
         tmp.unlink(missing_ok=True)
     return dest
 
 
-def _three() -> None:
-    """The two builds, every addon the app imports, and whatever those import in turn."""
+def _three_walk(text_of) -> set[str]:
+    """Every three.js file the page loads: the two builds, the addons the app imports, and what those import in turn."""
     app = "".join(p.read_text(encoding="utf8") for p in STATIC.glob("*.js"))
     queue = ["build/three.webgpu.js", "build/three.tsl.js"]
     queue += ["examples/jsm/" + a for a in re.findall(r"""(?:from\s*|import\(\s*)['"]three/addons/([^'"]+)""", app)]
@@ -62,10 +66,23 @@ def _three() -> None:
         if path in seen:
             continue
         seen.add(path)
-        src = re.sub(r"/\*.*?\*/", "", fetch(THREE + path, ASSETS / "three" / path).read_text(encoding="utf8"), flags=re.S)
+        src = re.sub(r"/\*.*?\*/", "", text_of(path), flags=re.S)
         # relative imports only: three, three/webgpu and three/tsl are the import map's own entries
         for dep in re.findall(r"""(?:from|import)\s*['"](\.{1,2}/[^'"]+)['"]""", src):
             queue.append(os.path.normpath(os.path.join(os.path.dirname(path), dep)).replace("\\", "/"))
+    return seen
+
+
+def _three() -> None:
+    # HASHES[path] raises KeyError for a file with no recorded hash: a three.js bump needs write_three_hashes first
+    _three_walk(lambda p: fetch(THREE + p, ASSETS / "three" / p, HASHES[p]).read_text(encoding="utf8"))
+
+
+def write_three_hashes() -> None:
+    """Run after a three.js bump, on files you trust: records the sha256 of each file _three() loads."""
+    paths = _three_walk(lambda p: (ASSETS / "three" / p).read_text(encoding="utf8"))
+    out = {p: hashlib.sha256((ASSETS / "three" / p).read_bytes()).hexdigest() for p in sorted(paths)}
+    (STATIC / "asset_hashes.json").write_text(json.dumps(out, indent=1) + "\n", encoding="utf8")
 
 
 def _fonts() -> None:
@@ -92,7 +109,9 @@ def core() -> None:
             return
         _three()
         _fonts()
-        iso = re.search(r"const ISO = \{(.*?)\};", _read("util.js"), re.S).group(1)
+        iso_m = re.search(r"const ISO = \{(.*?)\};", _read("util.js"), re.S)
+        assert iso_m, "no ISO table in util.js"
+        iso = iso_m.group(1)
         jobs = {f"https://flagcdn.com/w40/{c}.png": ASSETS / "flags" / "w40" / f"{c}.png" for c in set(re.findall(r": '([a-z]{2})'", iso))}
         jobs[SHAKA] = ASSETS / "shaka" / "shaka-player.compiled.js"
         with ThreadPoolExecutor(6) as pool:
@@ -103,7 +122,9 @@ def core() -> None:
 def _heavy() -> dict[str, Path]:
     """Sky presets, photo sets at both tiers' resolutions, and the tiles scripts/tile_list.py listed."""
     jobs = {}
-    for name in re.findall(r"hdri\('(\w+)'\)", _read("scene3d.js")):
+    hdris = re.findall(r"hdri\('(\w+)'\)", _read("scene3d.js"))
+    assert hdris, "no sky presets found in scene3d.js"
+    for name in hdris:
         jobs[f"{PH}/HDRIs/hdr/4k/{name}_4k.hdr"] = ASSETS / "hdri" / f"{name}_4k.hdr"
     photos = re.findall(r"photo\('(\w+)'.*?high \? '(\w+)' : '(\w+)'\)", _read("textures3d.js"))
     assert photos, "no photo sets found in textures3d.js"

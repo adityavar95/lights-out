@@ -43,13 +43,20 @@ def _path(url: str) -> Path:
     return DIR / f"{hashlib.sha1(url.encode()).hexdigest()}.json"
 
 
+_texts: dict = {}  # url -> {text}: a sentence each, so a poll doesn't open several hundred files
+
+
 def entry(url: str) -> dict | None:
     """A clip's transcript, {text}, or None while it has none."""
-    try:
-        e = json.loads(_path(url).read_text())
-        return e if "text" in e else None
-    except (OSError, ValueError):
-        return None
+    if url not in _texts:
+        try:
+            e = json.loads(_path(url).read_text())
+        except (OSError, ValueError):
+            return None
+        if "text" not in e:
+            return None
+        _texts[url] = e
+    return _texts[url]
 
 
 def _load():
@@ -60,11 +67,42 @@ def _load():
     global _model
     if _model is None:
         import onnx_asr  # heavy import: only once a clip needs it
-        from huggingface_hub import snapshot_download
-        d = snapshot_download(MODEL_REPO, local_dir=MODEL_DIR, allow_patterns=["*.json", "*.txt", "nemo128.onnx",
-                                                                               "encoder-model.onnx*", "decoder_joint-model.onnx"])
-        _model = onnx_asr.load_model(MODEL, d, providers=["CPUExecutionProvider"])
+        _model = onnx_asr.load_model(MODEL, _download(), providers=["CPUExecutionProvider"])
     return _model
+
+
+MODEL_FILES = ("nemo128.onnx", "encoder-model.onnx", "encoder-model.onnx.data", "decoder_joint-model.onnx")
+_fetch_state = {"thread": None, "error": None}
+
+
+def _download() -> str:
+    from huggingface_hub import snapshot_download
+    return snapshot_download(MODEL_REPO, local_dir=MODEL_DIR, allow_patterns=["*.json", "*.txt", "nemo128.onnx",
+                                                                             "encoder-model.onnx*", "decoder_joint-model.onnx"])
+
+
+def model_state() -> str:
+    """'ready' (the model's files are here: a download moves each into place only once it's whole), 'downloading',
+    'failed' (the last download stopped) or 'missing'. Nothing is transcribed, so nothing downloaded, until it's ready:
+    2.5 GB is the reader's to agree to (fetch_model, from the radio panel's button)."""
+    if all((MODEL_DIR / f).exists() for f in MODEL_FILES):
+        return "ready"
+    t = _fetch_state["thread"]
+    return "downloading" if t and t.is_alive() else "failed" if _fetch_state["error"] else "missing"
+
+
+def fetch_model() -> None:
+    """Starts the model's download in the background, unless it's here or already coming; a stopped one resumes."""
+    def run():
+        try:
+            _download()
+            _fetch_state["error"] = None
+        except Exception as e:
+            _fetch_state["error"] = str(e)
+    with _lock:
+        if model_state() in ("missing", "failed"):
+            _fetch_state["thread"] = threading.Thread(target=run, daemon=True)
+            _fetch_state["thread"].start()
 
 
 def decode(audio):
@@ -139,7 +177,7 @@ def queue_clips(urls: list, token: str | None):
             _worker = threading.Thread(target=_work, daemon=True)
             _worker.start()
         for u in urls:
-            if u not in _queued and not _waiting(u, token) and not _path(u).exists():
+            if u not in _queued and u not in _texts and not _waiting(u, token) and not _path(u).exists():
                 _errors.pop(u, None)
                 _queued.add(u)
                 _jobs.put((u, token))
@@ -220,18 +258,21 @@ TRANSCRIBE = True
 
 
 def radio(session: dict | None, session_name: str, year: int, driver: int | None, token: str | None) -> dict:
-    """{clips: [{t (when it was said), url, driver, text, error}], pending, error, transcribe}, plus drivers
+    """{clips: [{t (when it was said), url, driver, text, error}], pending, error, transcribe, model}, plus drivers
     (radio.drivers) when it's every driver's (driver None): what the viewer's radio panel shows. url: F1's audio, played
     through /api/f1tv/radio/audio; text null with transcription off, or while it's being transcribed; error: why this
-    clip has no words (it's tried again after RETRY s), else null."""
+    clip has no words (it's tried again after RETRY s), else null; model: model_state(), and no clip is transcribed
+    until it's 'ready' (the panel asks before the 2.5 GB download)."""
     cs = clips(session, session_name, year, driver)
-    if TRANSCRIBE:
+    state = model_state()
+    if TRANSCRIBE and state == "ready":
         queue_clips([u for _, u, _ in reversed(cs)], token)  # newest first: on a live session that's what's being said
     why = lambda u: _errors[u][1] if u in _errors else None
     out = [{"t": t, "url": u, "driver": d, "text": (e := entry(u)) and e["text"] if TRANSCRIBE else None, "error": why(u)}
            for t, u, d in cs]
     errs = {why(u) for _, u, _ in cs if u in _errors}
-    r = {"clips": out, "pending": sum(1 for _, u, _ in cs if u in _queued), "error": next(iter(errs), None), "transcribe": TRANSCRIBE}
+    r = {"clips": out, "pending": sum(1 for _, u, _ in cs if u in _queued), "error": next(iter(errs), None), "transcribe": TRANSCRIBE,
+         "model": state}
     if driver is None:
         r["drivers"] = drivers(session, session_name, year)
     return r

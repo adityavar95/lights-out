@@ -28,10 +28,17 @@ export function radioPanel({wall, live, streams, duck, json}) {
   const all = el('button', {class: 'mvrpall', hidden: true, title: 'Every driver again', onclick: () => select(R.sel)}, 'All drivers');
   const grid = el('div', {class: 'mvrpgrid', role: 'group', 'aria-label': 'Drivers'});
   const feed = el('ol', {class: 'mvrpfeed', 'aria-label': 'Team radio messages', 'aria-live': 'polite'});
+  // the words come from a 2.5 GB speech model: asked for here, never fetched unasked (the clips play without it)
+  const need = el('div', {class: 'mvrpneed', role: 'note', hidden: true});
+  // shortcut: a refused POST (403, 500) leaves the note as it was with no message; say why if that's ever seen
+  const getModel = async () => {
+    await fetch('/api/f1tv/radio/model', {method: 'POST'}).catch(() => {});
+    poll();  // says downloading, or why it isn't
+  };
   const root = el('aside', {class: 'mvrp', id: 'mvradiopanel', hidden: true, 'aria-label': 'Team radio'},
     el('header', {}, el('div', {class: 'mvrptitle'}, el('b', {}, 'Team radio'), sub), all, autoBtn,
       el('button', {class: 'mvibtn', title: 'Close', 'aria-label': 'Close team radio', onclick: () => toggle(false)}, icon('close'))),
-    grid, feed);
+    grid, need, feed);
 
   function toggle(on = !R.open) {
     R.open = on;
@@ -49,10 +56,11 @@ export function radioPanel({wall, live, streams, duck, json}) {
       R.clips = r.clips.filter(c => c.text !== '');  // a transcribed clip with no words (a click, engine noise) isn't a message
       R.drivers = r.drivers ?? {};
       R.words = r.transcribe;
+      R.model = r.model;
       R.error = r.error;
       R.fails = 0;
       // the tiles may not have loaded yet when it opens, so it keeps asking, just less often off a live session
-      R.timer = setTimeout(poll, r.pending || live() ? POLL : 30000);
+      R.timer = setTimeout(poll, r.pending || live() || r.model === 'downloading' ? POLL : 30000);
     } catch (e) {
       if (url !== R.url) return;
       R.error = e.message;
@@ -95,9 +103,16 @@ export function radioPanel({wall, live, streams, duck, json}) {
     if (R.open) R.seen = said.length;
     count.textContent = said.length > R.seen ? said.length - R.seen : '';  // unread while the panel was shut
     if (!R.open) return;
-    const key = [said.length, said.map(c => `${c.text}${c.error}`).join(), R.sel, R.playing?.url, R.error, Math.floor(w / 10)].join('|');
+    const key = [said.length, said.map(c => `${c.text}${c.error}`).join(), R.sel, R.playing?.url, R.error, R.model, Math.floor(w / 10)].join('|');
     if (key === R.shown) return;
     R.shown = key;
+    const ready = R.model === 'ready', ask = R.words && R.model && !ready;
+    need.hidden = !ask;
+    if (ask) need.replaceChildren(
+      el('span', {}, R.model === 'downloading' ? 'Downloading the speech model (2.5 GB). Messages get their words once it\'s here.'
+        : R.model === 'failed' ? 'The speech model\'s download stopped. What it has is kept.'
+        : 'Words for each message need a speech model: a 2.5 GB download, once. Messages play without it.'),
+      R.model === 'downloading' ? '' : el('button', {class: 'mvrpall', onclick: getModel}, R.model === 'failed' ? 'Try again' : 'Download'));
     const people = roster(), by = new Map(people.map(p => [p.n, p]));
     // a failure (a clip that wouldn't play, the radio feed) shows here, not only in an empty list
     sub.textContent = R.error ?? (said.length ? `${said.length} message${said.length > 1 ? 's' : ''} · ${new Set(said.map(c => c.driver)).size} drivers` : '');
@@ -119,7 +134,7 @@ export function radioPanel({wall, live, streams, duck, json}) {
         el('button', {class: 'mvplay', 'data-url': c.url, title: on ? 'Stop' : 'Play this message', 'aria-label': on ? 'Stop' : `Play ${p.tla}'s message`,
           onclick: () => play(c.url)}, icon(on ? 'pause' : 'play')),
         el('div', {}, el('b', {}, p.tla), el('time', {}, clock(c.t))),
-        el('p', {class: c.text ? '' : 'wait'}, c.text ?? c.error ?? (R.words ? 'Transcribing…' : 'Team radio')));
+        el('p', {class: c.text ? '' : 'wait'}, c.text ?? c.error ?? (R.words && ready ? 'Transcribing…' : 'Team radio')));
     }), ...(shown.length ? [] : [el('li', {class: 'none'}, R.error ?? (R.sel != null ? 'No radio from this driver yet' : 'No radio yet'))]));
   }
 
