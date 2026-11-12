@@ -118,7 +118,8 @@ body.intro .notice { display: none; }
 .modeswitch button:hover { color: var(--ink); }
 .modeswitch button[aria-pressed=true] { color: var(--bg); }
 /* Simulate: no browser chrome, the stage fills the window; the race dropdown and the pickers on the stage choose the race */
-body[data-mode=sim] :is(.hero, .tabs, .foot, .livebtn, .sessionsel) { display: none; }
+body[data-mode=sim] :is(.hero, .tabs, .foot, .livebtn, .sessionsel, .reelbtn, .storybtn) { display: none; }
+.mapwrap.driving .speedsel { display: none; }
 body[data-mode=sim] main { padding: 8px; }
 body[data-mode=sim] .trackmap { height: calc(100dvh - 72px); min-height: 480px; }
 /* Watch: the pickers start a simulation, so they live in Simulate; the status strip waits for a session */

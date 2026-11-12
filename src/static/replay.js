@@ -112,8 +112,9 @@ export function setupReplay(root, copyView) {
   const hud = setupHud(ui.stage, {onClose: () => S?.selected && select(S.selected),
     onErsMode: m => S?.sim?.setErsMode(S.selected, m), onDrsTest: () => S?.sim?.toggleDrsTest(S.selected)});
   hud.top.append(ui.flag, ui.lap, ui.mode, ui.weather);
-  ui.reelBtn = el('button', {class: 'neu', title: 'Race highlights: the key moments in about 5 minutes (H)', onclick: toggleHighlights}, 'Highlights');
+  ui.reelBtn = el('button', {class: 'neu reelbtn', title: 'Race highlights: the key moments in about 5 minutes (H)', onclick: toggleHighlights}, 'Highlights');
   ui.story = setupStory(ui.stage, () => S, openLap);
+  ui.story.btn.classList.add('storybtn');
   ui.reelText = el('b');
   ui.reelCount = el('small');
   ui.reelBar = el('div', {class: 'reelbar glass', hidden: true, role: 'status'}, ui.reelCount, ui.reelText,
@@ -887,6 +888,7 @@ function lapsState(t) {
 
 function render(force) {
   if (!S.data || !S.proj) return;
+  ui.stage.classList.toggle('driving', !!S.sim?.player);  // Play: the replay's speed menu goes while you drive
   if (S.live) S.t = (Date.now() - S.liveInfo.origin) / 1000;
   const t = S.t, st = S.live ? liveRender() : S.sim ? simState(S.sim, S.byId) : S.data.mode === 'gps' ? gpsState(t) : lapsState(t);
   if (ui.has3d) {  // the position half a second later gives each car its heading
