@@ -95,7 +95,7 @@ Not checked by eye: the helmet's number (no camera gets close enough to the helm
 17. Trees: a sharper atlas, crossed cards with normals, wind sway in the vertex shader (built: a 2 %-of-height lean in a ripple that runs up each crown, `circuit3d.js` crownMat.positionNode; the sway itself is not checked on screen, only that the trees render with no errors).
 18. Ground: a detail texture over the satellite image, keyed by the vegetation mask that already exists.
 19. Stands: an instanced crowd with flags; marshals at their posts; a pit building with garages.
-20. Air: height fog for distance, cloud shadows drifting over the ground (built: `circuit3d.js` ground shader, strength set by `scene3d.js` `setWeather`; not yet judged at overview distance), sun shafts at golden hour, floodlight cones at night.
+20. Air: height fog for distance, cloud shadows drifting over the ground (built: `circuit3d.js` ground shader, strength set by `scene3d.js` `setWeather`; not yet judged at overview distance), sun shafts at golden hour, floodlight cones at night (built: a faint additive cone under each tower, opacity with the night, `trackside.js`; not seen in a frame yet).
 
 ## 6. Phase 4: cars and image
 
