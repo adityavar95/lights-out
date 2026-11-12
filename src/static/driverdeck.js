@@ -28,9 +28,7 @@ export function setupDriverDeck(dock, getState) {
   D = {
     master: el('button', {class: 'neu master', onclick: () => {
       const S = getS(), R = S?.sim;
-      if (!R || !S.selected) return;
-      R.setPlayer(R.player === S.selected ? null : S.selected);
-      enableInput(!!R.player);
+      if (R && S.selected) drive(R, R.player === S.selected ? null : S.selected);
     }}, led(), el('span')),
     rows: SWITCHES.map(([key, label, opts]) => {
       const btns = opts.map(([value, text]) => el('button', {class: 'neu', onclick: () => { if (sim()) sim().assists[key] = value; }}, text));
@@ -55,6 +53,13 @@ export function setupDriverDeck(dock, getState) {
   dock.append(D.panel);
 }
 
+// Play's Start: the player takes car id; open: the panel expanded, so its key help is seen
+export function drive(R, id, open = false) {
+  R.setPlayer(id);
+  enableInput(!!R.player);
+  if (open && D.panel.classList.contains('collapsed')) D.toggle.click();
+}
+
 // a compound for a pit request from the cockpit: wets / inters for the weather, else a different dry one
 function pitCompound(R, car) {
   const w = trackWetness(R.W);
@@ -76,6 +81,7 @@ export function updateDriverDeck(S) {
   D.master.lastChild.textContent = !sel ? 'SELECT A CAR TO DRIVE' : driving ? `MANUAL DRIVE (PLAYER) · ${sel.code}` : `AI AUTOPILOT (SPECTATE) · ${sel.code}`;
   for (const r of D.rows) r.btns.forEach((b, i) => b.setAttribute('aria-pressed', R.assists[r.key] === r.opts[i][0]));
   D.paceVal.textContent = `${Math.round(R.ai.pace * 100)}%`;
+  if (document.activeElement !== D.pace) D.pace.value = Math.round(R.ai.pace * 100);  // Play's difficulty sets it too
   D.aggrVal.textContent = R.ai.aggression < 0.25 ? 'conservative' : R.ai.aggression > 0.75 ? 'max attack' : 'balanced';
   D.badge.querySelector('.pad').textContent = input.pad ? `GAMEPAD · ${input.pad.split('(')[0].trim().slice(0, 24)}` : 'NO GAMEPAD';
   D.badge.classList.toggle('active', !!car);

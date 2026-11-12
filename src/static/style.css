@@ -1127,6 +1127,16 @@ option { background-color: var(--panel); color: var(--ink); }
 .overlay.hint { background: none; pointer-events: none; justify-content: center; }
 .overlay.hint p { background: rgb(14 15 20 / .6); border-color: rgb(255 255 255 / .16); border-radius: 999px; padding: 4px 12px; }
 .overlay p { max-width: 420px; margin: 0; font-weight: 500; }
+/* Play's setup card (playsetup.js): sits in the hint overlay, which lets clicks through, so it takes its own */
+.playsetup { pointer-events: auto; display: grid; gap: 10px; width: min(360px, 100%); padding: 18px; text-align: left; font-family: inherit; }
+.playsetup h2 { margin: 0 0 4px; font-size: 22px; }
+.playsetup .psdecks { display: flex; gap: 8px; }
+.playsetup .psdecks button { flex: 1; }
+.playsetup .psrow { display: grid; gap: 4px; }
+.playsetup .psrow[hidden] { display: none; }
+.playsetup .psrow small { color: var(--muted); letter-spacing: .08em; }
+.playsetup select { width: 100%; }
+.playsetup .tvbtn { margin-top: 4px; justify-self: stretch; }
 .rcfeed { list-style: none; margin: 8px 0 0; padding: 0; font-size: 13px; min-height: 4.5em; }
 .rcfeed li { display: flex; gap: 8px; align-items: baseline; padding: 2px 0; border-top: 1px solid var(--line); }
 .rcfeed time { color: var(--muted); font-family: var(--mono); font-variant-numeric: tabular-nums; }

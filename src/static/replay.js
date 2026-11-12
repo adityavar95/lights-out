@@ -13,7 +13,9 @@ import {setupLive} from './replaylive.js';
 import {setupDrawer, toggleDrawer, updateDrawer} from './teledrawer.js';
 import {toggleCars} from './carsdeck.js';
 import {setupHud, setRadar, renderRadar, renderFocus, renderFeed, STATUS} from './hud.js';
-import {SIM, simSession, simState, realPitLane} from './simmode.js';
+import {SIM, simSession, simState, realPitLane, entries} from './simmode.js';
+import {setupCard, PACE} from './playsetup.js';
+import {drive} from './driverdeck.js';
 import {setupDecks, updateDecks} from './decks.js';
 import {buildTower, timing, renderTower, stableOrder, COLUMNS} from './tower.js';
 import {drsZones} from './telemetry.js';
@@ -28,6 +30,7 @@ import {until} from './stream.js';
 const SPEEDS = [0.5, 1, 2, 5, 10, 20, 50, 100];
 
 let ui, S;  // ui: DOM handles; S: state of the race currently shown
+let played = false;  // Play has started a race in this tab
 
 
 export function setupReplay(root, copyView) {
@@ -206,11 +209,7 @@ export async function showRace(year, round, sessions, sim = false) {
   S.race = await get(`/api/jolpica/${year}/races`).then(l => rows(l).find(r => +r.round === +round), () => null);
   if (token !== S.token) return;
   daylight();
-  if (sim) {  // the circuit selector: straight into a Simulation
-    ui.session.value = SIM;
-    ui.play.disabled = false;
-    return loadData(true);
-  }
+  if (sim) return showSetup();  // Play: the setup card, then the race
   idleHint();
 }
 
@@ -223,6 +222,31 @@ function daylight(start = null) {
 }
 
 const ahead = () => sessionStart(S.race, ui.session.value) > Date.now();
+
+// Play: nothing runs until the setup card's Start
+async function showSetup() {
+  const token = S.token;
+  ui.session.value = SIM;
+  ui.play.disabled = true;  // ▶ would start a race nobody set up
+  const list = await entries(S.year, S.round).catch(() => []);
+  if (token !== S.token) return;
+  setOverlay(setupCard({year: S.year, race: S.race, list, onStart: startPlay}));
+}
+
+async function startPlay(setup) {
+  const token = S.token, driving = setup.mode !== 'spectate', first = !played;
+  S.setup = setup;
+  if (driving) S.selected = setup.driver;  // loadData keeps it, so no car is picked for us
+  setSpeed(1);
+  ui.play.disabled = false;
+  await loadData(false);
+  if (token !== S.token || !S.sim) return;
+  S.sim.ai.pace = PACE[setup.difficulty] ?? 1;
+  if (driving && S.byId[S.selected]) drive(S.sim, S.selected, first);
+  played = true;
+  if (S.selected) setMode('follow');
+  if (!S.playing) togglePlay();
+}
 
 // What the stage says before ▶, and whether ▶ can do anything: nothing is asked of OpenF1 for a session that hasn't run.
 function idleHint() {
@@ -308,7 +332,7 @@ async function loadData(autoplay) {
   const standIn = session === 'Race' && S.year >= 2023;  // see below
   setOverlay(`Loading ${session} replay…${standIn || session === SIM ? '' : " The first load of a session fetches every car's GPS trace and can take up to a minute."}`, true);
   try {
-    const sim = session === SIM && await simSession(S.year, S.round, S.proj, S.track);
+    const sim = session === SIM && await simSession(S.year, S.round, S.proj, S.track, {laps: S.setup?.laps});
     const url = `/api/replay/${S.year}/${S.round}?session=${encodeURIComponent(session)}`, gps = !sim && get(url);
     // A GPS replay the server hasn't built yet takes ~40 s. A race's lap-timing replay (Jolpica: ~10 s uncached, then on disk) plays
     // meanwhile and the GPS one takes over when it lands (swapToGps); without Jolpica laps yet, it just waits for GPS.
