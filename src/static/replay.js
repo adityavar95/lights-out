@@ -35,8 +35,8 @@ export function setupReplay(root, copyView) {
     session: el('select', {class: 'neu sessionsel', 'aria-label': 'Session to replay'}),
     play: el('button', {class: 'neu play', 'aria-label': 'Play replay', onclick: togglePlay}, '▶'),
     speeds: el('select', {class: 'neu speedsel', 'aria-label': 'Replay speed', title: 'Replay speed (- / + keys)', onchange: e => setSpeed(+e.target.value)},
-      SPEEDS.map(s => new Option(`${s}×`, s, s === 10, s === 10))),
-    speed: 10,
+      SPEEDS.map(s => new Option(`${s}×`, s, s === 1, s === 1))),
+    speed: 1,
     scrub: el('input', {type: 'range', min: 0, max: 1, step: 1, value: 0, 'aria-label': 'Replay position', class: 'scrub'}),
     clock: el('span', {class: 'clock'}, '0:00:00'),
     lap: el('div', {class: 'lapcount'}, ''),
@@ -231,13 +231,13 @@ function idleHint() {
   const {year, round} = S, none = year < 1996, soon = ahead(), session = ui.session.value;  // none: replayKind 'results', ▶ would only fetch an error
   ui.play.disabled = none || soon;
   if (soon) {
-    setOverlay(`${session} hasn't run yet: it starts ${until(sessionStart(S.race, session))}.`, false, S.track && overlayBtn(`Simulate it with ${year}'s cars`,
+    setOverlay(`${session} hasn't run yet: it starts ${until(sessionStart(S.race, session))}.`, false, S.track && overlayBtn(`Race it yourself with ${year}'s cars`,
       () => dispatchEvent(new CustomEvent('f1:circuit', {detail: {year, round}}))));  // no outline: nothing to simulate on
     ui.hintTimer = setTimeout(idleHint, 60000);  // keeps the countdown true and frees ▶ when the session starts
     return;
   }
   setOverlay(none ? `No replay for races before 1996: lap timing starts then. Results, Standings and Drivers cover ${year}`
-      + (S.track ? `, and Simulate races this circuit with ${year}'s cars.` : '.')  // no outline (e.g. Ain-Diab): nothing to simulate on
+      + (S.track ? `, and Play races this circuit with ${year}'s cars.` : '.')  // no outline (e.g. Ain-Diab): nothing to simulate on
     : S.track ? 'Press ▶ to watch the session' : 'No track map for this circuit. Press ▶ to load the session');
 }
 
@@ -565,7 +565,7 @@ function togglePlay() {
 function tick(now) {
   if (!S.playing || !S.data) return;
   if (covered()) return togglePlay();  // the F1 TV viewer opened over it: pause rather than race on unseen
-  // the six seconds of start lights run in real time whatever the speed: at the default 10x they'd be gone in half a second
+  // the six seconds of start lights run in real time whatever the speed: at 10x they'd be gone in half a second
   const grid = S.lightsOut && S.t >= S.lightsOut - 6 && S.t < S.lightsOut;
   const dt = Math.max(0, (now - S.last) / 1000) * (grid ? Math.min(1, S.speed) : S.speed);  // rAF's stamp can predate togglePlay's S.last
   S.watched = (S.watched ?? 0) + (now - S.last) / 1000;  // real seconds played, once per race or session loaded

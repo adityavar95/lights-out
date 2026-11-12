@@ -244,7 +244,7 @@ function startIntro(r, shown) {
       + 'Follow any driver, ride onboard, rewind any lap.'),
     el('div', {class: 'introbtns'},
       el('button', {class: 'tvbtn', onclick: go('intro_explore')}, 'Explore this race →'),
-      el('button', {class: 'ighost', onclick: go('intro_simulate', () => setView('sim'))}, 'Simulate a race'),
+      el('button', {class: 'ighost', onclick: go('intro_simulate', () => setView('sim'))}, 'Drive a race'),
       el('button', {class: 'ighost', onclick: go('intro_stream', () => setView('stream'))}, 'Watch on F1 TV')));
   $('intro').querySelector('.tvbtn').focus({preventScroll: true});
   document.querySelector('.topbar').addEventListener('click', endIntro, {once: true});
@@ -431,20 +431,20 @@ async function selectRace(round, sim = A.mode === 'sim') {
   }).catch(() => {});
 }
 
-// the command palette's list (palette.js). Circuits and Cars live in Simulate; the trace and cinematic on the stage of the current mode
+// the command palette's list (palette.js). Circuits and Cars live in Play; the trace and cinematic on the stage of the current mode
 function commands() {
   const stage = () => { if (A.section !== 'analytics') setSection('analytics'); activate('replay'); };
   const open = panel => document.querySelector(`[aria-controls=${panel}]`).click();
   return [
-    ...[['analytics', 'Races'], ['sim', 'Simulate'], ['stream', 'Stream']].map(([v, label]) => ({label, hint: 'View', run: () => setView(v)})),
+    ...[['analytics', 'Races'], ['sim', 'Play'], ['stream', 'Stream']].map(([v, label]) => ({label, hint: 'View', run: () => setView(v)})),
     ...(A.round ? [...document.querySelectorAll('[role=tab]')].map(b => ({label: b.textContent, hint: 'Tab', run: () => {
       setView('analytics');
       A.bounced = false;
       activate(b.dataset.tab);
     }})) : []),
     ...(canDownload() ? [{label: 'Download assets', hint: 'About 600 MB', run: startDownload}] : []),
-    {label: 'Circuits', hint: 'Simulate', run: () => { setView('sim'); open('circuitdeck'); }},
-    {label: 'Cars', hint: 'Simulate', run: () => { setView('sim'); open('carsdeck'); }},
+    {label: 'Circuits', hint: 'Play', run: () => { setView('sim'); open('circuitdeck'); }},
+    {label: 'Cars', hint: 'Play', run: () => { setView('sim'); open('carsdeck'); }},
     ...(A.round ? [{label: 'Telemetry trace', hint: 'Shift T', run: () => { stage(); open('tracedeck'); }},
       {label: 'Race highlights', hint: 'H', run: () => { stage(); stageCommands.highlights(); }},
       {label: 'Telemetry drawer', hint: 'T', run: () => { stage(); stageCommands.drawer(); }},
