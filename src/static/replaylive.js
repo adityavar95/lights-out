@@ -1,6 +1,7 @@
 // Live timing on the race screen: F1's free feed, refreshed every second. replay.js owns the view state and passes it in
 // through setupLive, because reset() replaces the state object, so it is read through h.S() each time.
-import {covered} from './util.js';
+import {covered, get, rows} from './util.js';
+import {asItStands, POINTS, SPRINT_POINTS} from './season.js';
 import {fetchLive, liveInfo, liveDrivers, liveFeeds, liveState, liveGps, hasGps, gpsAt, liveCar, resetGps} from './live.js';
 
 // lap fraction -> outline fraction, through the mini-sector boundaries when they match the live feed
@@ -39,6 +40,10 @@ export function setupLive(h) {
     const info = liveInfo(first.topics);
     h.prepare({mode: 'live', session: info.title, drivers: liveDrivers(first.topics), intervals: [], duration: 1});
     applyLive(first);
+    // a race or sprint: the championship as it stands, as a tower column (replay.js nextColumn offers it once this lands)
+    if (info.race) get(`/api/jolpica/${s().year}/driverstandings`).then(rows).then(r => {
+      if (token === s().token) s().standings = new Map(r.map(x => [x['Driver.code'], +x.points || 0]));
+    }).catch(() => {});
     h.setOverlay('');
     s().playing = true;
     requestAnimationFrame(function frame() {
@@ -79,6 +84,15 @@ export function setupLive(h) {
     } else for (const id in sv.fracs) {
       cars[id] = h.pointAt(msFrac(st.ms, sv.fracs[id], sv.segments));
       ahead[id] = h.pointAt(msFrac(st.ms, sv.ahead[id], sv.segments));
+    }
+    if (st.standings) {  // recomputed only when the order changes
+      const key = sv.board.map(b => `${b.d.code}${b.pos}${b.out}`).join();
+      if (key !== st.champKey) {
+        st.champKey = key;
+        st.champ = asItStands(st.standings, sv.board.map(b => ({code: b.d.code, pos: b.pos, out: b.out})),
+                              st.live.SessionInfo?.Name === 'Sprint' ? SPRINT_POINTS : POINTS);
+      }
+      for (const b of sv.board) b.champ = st.champ.get(b.d.code);
     }
     return {cars, ahead, board: sv.board, lap: sv.lap};
   }

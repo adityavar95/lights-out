@@ -20,6 +20,7 @@ node tests/test_util.mjs                   # shared helpers (fetch cache TTL, er
 node tests/test_palette.mjs                # command palette matching and shortcut guards
 node tests/test_pace.mjs                   # race trace, tyre-wear fits, undercut ledger
 node tests/test_season.mjs                 # teammate head-to-head, cumulative points, title maths, supertime
+node tests/test_spoilers.mjs               # spoiler-free mode: which races hide their result, reveal list
 node tests/test_share.mjs                  # shareable link parsing, token stripping
 node tests/test_ledgers.mjs                # pit-stop table, overtake classes
 node tests/test_quali.mjs                  # qualifying parts and bests, deleted laps, practice long runs

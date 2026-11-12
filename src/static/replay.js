@@ -160,10 +160,11 @@ export async function intro() {
   if (!S.playing) togglePlay();
 }
 
-// the speed-trap column only exists in live timing (F1's TimingStats); replays skip it
+// the speed-trap and as-it-stands columns only exist in live timing; replays skip them
 function nextColumn(step = 1) {
   ui.column = (ui.column + step) % COLUMNS.length;
-  if (COLUMNS[ui.column][0] === 'trap' && !S?.live) ui.column = (ui.column + 1) % COLUMNS.length;
+  const has = {trap: S?.live, champ: S?.standings};  // champ: a live race or sprint, once the standings are here
+  while (COLUMNS[ui.column][0] in has && !has[COLUMNS[ui.column][0]]) ui.column = (ui.column + 1) % COLUMNS.length;
   showColumn();
 }
 
@@ -401,6 +402,9 @@ function useLink(standIn) {
   S.link = standIn && (L.focus || L.cmp) ? {focus: L.focus, cmp: L.cmp} : null;  // car ids change when the GPS replay lands: asked again then
   if (L.cmp && !standIn) openCompare(L.cmp);
 }
+
+// the race replay has played to its end (app.js: spoiler-free mode lifts there)
+export const ended = () => !!S?.data && !S.live && !S.sim && ui.session.value === 'Race' && S.t >= S.data.duration - 1;
 
 // start the loaded race (app.js: the notice for a race new since the last visit)
 export const play = () => S && !S.playing && togglePlay();

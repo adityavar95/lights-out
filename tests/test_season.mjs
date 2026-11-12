@@ -146,3 +146,26 @@ assert.equal(wet.rounds[0].wet, true);
 assert.equal(supertimes([s(3, 'a', 'x', '1:30.000'), s(3, 'b', 'y', '1:40.000'), s(3, 'c', 'y', '1:40.000')]).rounds[0].wet, false);
 
 console.log('season ok');
+
+// as it stands: the live order's points on top of the standings; a car that is out scores nothing
+{
+  const {asItStands, SPRINT_POINTS} = await import('../src/static/season.js');
+  const now = asItStands(new Map([['ANT', 390], ['NOR', 380], ['VER', 100]]), [{code: 'NOR', pos: 1}, {code: 'ANT', pos: 4}, {code: 'VER', pos: 2, out: true}, {code: 'BEA', pos: 3}]);
+  assert.deepEqual(now.get('NOR'), {points: 405, rank: 1, was: 2});
+  assert.deepEqual(now.get('ANT'), {points: 402, rank: 2, was: 1});
+  assert.equal(now.get('VER').points, 100);
+  assert.deepEqual(now.get('BEA'), {points: 15, rank: 4, was: null});
+  assert.equal(asItStands(new Map(), [{code: 'A', pos: 1}], SPRINT_POINTS).get('A').points, 8);
+}
+
+// clinching at the next weekend (2024 rules; round 4 has a sprint: 34 on offer, 26 left after it)
+{
+  const {clinch} = await import('../src/static/season.js');
+  assert.deepEqual(clinch(new Map([['a', 100], ['b', 90], ['c', 30]]), 2024, calendar, 3, 1),
+    {round: 4, leader: 'a', rivals: [{id: 'b', by: 17, possible: true}]});  // c is 70 behind with 60 left: already out
+  assert.equal(clinch(new Map([['a', 100], ['b', 50]]), 2024, calendar, 3, 1).rivals[0].by, -23);  // out after it whatever happens
+  assert.equal(clinch(new Map([['a', 100], ['b', 100]]), 2024, calendar, 3, 1).rivals[0].possible, true);  // by 27 of 34
+  assert.equal(clinch(new Map([['a', 100], ['b', 100]]), 2024, calendar, 3, 2).rivals[0].possible, false);  // by 27 of 26
+  assert.equal(clinch(new Map([['a', 100], ['b', 90]]), 2024, calendar, 5, 2), null);  // season over
+  assert.equal(clinch(new Map([['a', 100], ['b', 10]]), 2024, calendar, 3, 1), null);  // nobody else alive
+}

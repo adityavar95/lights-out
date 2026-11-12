@@ -82,4 +82,23 @@ assert.equal(toCsv(['a'], [[-1.5]]), '"a"\n"-1.5"');  // a real number stays one
 assert.equal(toCsv(['a'], [['a=1']]), '"a"\n"a=1"');  // only at the start
 assert.equal(toCsv(['a'], [[[{name: 'x'}, 'y']]]), '"a"\n"x, y"');  // explorer's arrays, as before
 
+{  // stewards: real OpenF1 wordings; an incident noted and then investigated counts once; cleared ones don't count
+  const {stewards} = await import('../src/static/ledgers.js');
+  const {rows, tally} = stewards([
+    [10, 'Other', null, 'CAR 4 (NOR) TIME 1:31.204 DELETED - TRACK LIMITS AT TURN 4 LAP 12 15:22:10'],
+    [20, 'Other', null, 'TURN 1 INCIDENT INVOLVING CARS 4 (NOR) AND 81 (PIA) NOTED - CAUSING A COLLISION (15:30:01)'],
+    [25, 'Other', null, 'FIA STEWARDS: TURN 1 INCIDENT INVOLVING CARS 4 (NOR) AND 81 (PIA) UNDER INVESTIGATION - CAUSING A COLLISION'],
+    [40, 'Other', null, 'FIA STEWARDS: 10 SECOND TIME PENALTY FOR CAR 4 (NOR) - CAUSING A COLLISION'],
+    [50, 'Flag', 'BLACK AND WHITE', 'BLACK AND WHITE FLAG FOR CAR 81 (PIA) - TRACK LIMITS'],
+    [60, 'Other', null, 'FIA STEWARDS: TURN 3 INCIDENT INVOLVING CAR 1 (VER) REVIEWED NO FURTHER INVESTIGATION - LEAVING THE TRACK'],
+    [70, 'Flag', 'GREEN', 'GREEN LIGHT - PIT EXIT OPEN'], [80, 'Other', null, 'FIA STEWARDS: PENALTY SERVED - CAR 4 (NOR)'],
+  ]);
+  assert.deepEqual(rows.map(r => r.kind), ['deleted', 'noted', 'noted', 'penalty', 'warning', 'cleared', 'served']);
+  assert.deepEqual(tally.get('NOR'), {penalty: 1, noted: 1, deleted: 1, warning: 0});
+  assert.deepEqual(tally.get('PIA'), {penalty: 0, noted: 1, deleted: 0, warning: 1});
+  assert.ok(!tally.has('VER'));
+  assert.equal(rows[0].text, 'CAR 4 (NOR) TIME 1:31.204 DELETED - TRACK LIMITS AT TURN 4 LAP 12');
+  assert.equal(rows[1].text, 'TURN 1 INCIDENT INVOLVING CARS 4 (NOR) AND 81 (PIA) NOTED - CAUSING A COLLISION');
+}
+
 console.log('test_ledgers: ok');

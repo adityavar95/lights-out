@@ -2,7 +2,7 @@
 import json
 import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
 
@@ -114,3 +114,28 @@ def races(year: int) -> tuple:
             raise
         _down[year] = (time.time(), tuple(json.loads(saved.read_text())))
         return _down[year][1]
+
+
+ICS_SESSIONS = [("FirstPractice", "Practice 1", 1), ("SecondPractice", "Practice 2", 1), ("ThirdPractice", "Practice 3", 1),
+                ("SprintQualifying", "Sprint Qualifying", 1), ("SprintShootout", "Sprint Shootout", 1), ("Sprint", "Sprint", 1),
+                ("Qualifying", "Qualifying", 1), (None, "Race", 2)]  # (Jolpica's key, name, hours on the calendar)
+
+
+def calendar_ics(year: int) -> str:
+    """The season's sessions as an iCalendar file (/api/calendar/{year}.ics), times in UTC so every calendar app shows
+    its own zone. A session Jolpica gives no time for is left out, not guessed."""
+    out = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Lights Out//EN", f"X-WR-CALNAME:{year} Grand Prix sessions"]
+    for r in races(year):
+        for key, name, hours in ICS_SESSIONS:
+            s = r.get(key) if key else r
+            if not s or not s.get("date") or not s.get("time"):
+                continue
+            start = datetime.fromisoformat(f"{s['date']}T{s['time']}".replace("Z", "+00:00"))
+            where = r["Circuit"]
+            out += ["BEGIN:VEVENT", f"UID:{year}-{r['round']}-{name.replace(' ', '')}@lightsout",
+                    f"DTSTAMP:{start:%Y%m%dT%H%M%SZ}",  # fixed per event: the file is the same until the schedule changes
+                    f"DTSTART:{start:%Y%m%dT%H%M%SZ}", f"DTEND:{start + timedelta(hours=hours):%Y%m%dT%H%M%SZ}",
+                    f"SUMMARY:{name} · {r['raceName']}",
+                    f"LOCATION:{where['circuitName']}\\, {where['Location']['locality']}\\, {where['Location']['country']}",
+                    "END:VEVENT"]
+    return "\r\n".join(out + ["END:VCALENDAR", ""])

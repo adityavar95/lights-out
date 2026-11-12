@@ -2,7 +2,8 @@
 // search every 1-3 stop plan for the best one.
 import {el, svg, teamColor, th, csvButton, get} from './util.js';
 import {raceModel, simulate, optimise, ranked, PASS, SC_LOSS} from './whatif.js';
-import {fuelPerLap, paceRanking, undercuts, compoundOf} from './pace.js';
+import {fuelPerLap, paceRanking, undercuts, compoundOf, stintBars} from './pace.js';
+import {TYRES} from './tower.js';
 
 const code = r => r['Driver.code'] || r['Driver.familyName'].slice(0, 3).toUpperCase();
 const chip = color => el('span', {class: 'chip', style: `background:${color}`});
@@ -150,6 +151,7 @@ export function renderStrategyLab(root, laps, results, pits, year, why, round) {
         : `${NO_STOPS(year)}, so stints can't be split and tyre wear isn't fitted: this is the pace ranking only.`),
       (year < 2023 || tyres === null) && el('p', {class: 'muted small'}, year < 2023 ? 'No tyre compounds: OpenF1\'s records of them start in 2023.'
         : 'No tyre compounds: OpenF1 isn\'t answering for this race right now.'),
+      tyres?.length > 0 && strategyBars(tyres),
       el('div', {class: 'ledgerbar'}, csvButton(`pace_${year}_${round}`, head, () => rows.map((r, i) => [i + 1, label(r.id), +r.median.toFixed(3), i ? +(r.median - rows[0].median).toFixed(3) : '', r.n,
         ...Array.from({length: k}, (_, j) => [tyre(r, stints(r)[j]), stintText(stints(r)[j])].filter(Boolean).join(' '))]))),
       el('div', {class: 'tablewrap'}, el('table', {class: 'data'},
@@ -161,6 +163,16 @@ export function renderStrategyLab(root, laps, results, pits, year, why, round) {
           el('td', {class: 'num'}, i ? `+${(r.median - rows[0].median).toFixed(3)}` : ''),
           el('td', {class: 'num'}, r.n),
           ...Array.from({length: k}, (_, j) => el('td', {class: 'stintcell'}, stintCell(stints(r)[j], tyre(r, stints(r)[j]))))))))));
+  }
+
+  // the tyre strategy at a glance: a bar per driver in finishing order, a segment per stint in its compound's colour
+  function strategyBars(tyres) {
+    return el('div', {class: 'stratbars', role: 'img', 'aria-label': 'Tyre strategy: stints by compound for each driver'},
+      results.map(r => r['Driver.driverId']).map(id => [id, stintBars(tyres, info[id].number, +info[id].laps || M.n)]).filter(([, bars]) => bars.length).map(([id, bars]) =>
+        el('div', {class: 'stratrow'}, el('b', {}, label(id)),
+          el('span', {class: 'stratbar'}, bars.map(s => el('i', {
+            style: `flex:${s.share};background:${TYRES[s.compound]?.[1] ?? 'var(--line)'}`,
+            title: `${s.compound ? s.compound[0] + s.compound.slice(1).toLowerCase() : 'Unknown tyre'} · laps ${s.from}–${s.to}`}, s.to - s.from + 1))))));
   }
 
   const stintText = s => (!s ? '' : `L${s.from}-${s.to} ${s.slope === null ? `${s.n} clean` : `${s.slope.toFixed(3)} s/lap ±${s.se.toFixed(3)}, est. ${s.corrected.toFixed(3)}`}`);

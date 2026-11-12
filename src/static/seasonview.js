@@ -3,7 +3,7 @@
 import {el, svg, teamColor, failed, skeleton} from './util.js';
 import {tip, code, name, follower, nearest, lapAxis, secondDrivers, spreadLabels} from './charts.js';
 import {numbered} from './drivers.js';
-import {qualiRounds, cumulative, maxRemaining, alive, reconcile, supertimes} from './season.js';
+import {qualiRounds, cumulative, maxRemaining, alive, clinch, reconcile, supertimes} from './season.js';
 
 const TOP = 10;
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
@@ -68,9 +68,17 @@ function aliveBlock(year, calendar, results, sprint, series, info, recon) {
   const list = yes => [...state].filter(([, s]) => s.alive === yes).sort((a, b) => a[1].gap - b[1].gap)
     .map(([id, s]) => `${code(info[id])}${s.gap ? ` −${+s.gap.toFixed(1)}` : ''}`).join(', ');
   const on = list(true), off = list(false), count = yes => [...state.values()].filter(s => s.alive === yes).length;
+  const racesRun = +(results.at(-1)?.round ?? 0);
+  const c = clinch(new Map([...series].map(([id, s]) => [id, s.at(-1)])), year, calendar, racesRun, sprint.at(-1)?.round ?? 0);
+  const where = c && raceOf(calendar, c.round), hard = c?.rivals.filter(r => r.by > 0) ?? [];
   return el('div', {class: 'alive'},
     el('p', {class: 'muted small'}, left.points ? `${left.points} points left at most: ${plural(left.races, 'race')}${left.sprints ? `, ${plural(left.sprints, 'sprint')}` : ''}. A driver is alive while their gap to the leader is no more than that.` : 'No points left: the season is over.'),
     el('p', {}, el('b', {}, `${left.points ? 'Can still win' : 'Top of the table'} (${count(true)}): `), on),
+    c && el('p', {}, el('b', {}, `At the ${where}: `), !hard.length
+      ? `${code(info[c.leader])} is champion whatever happens.`
+      : hard.every(r => r.possible)
+        ? `${code(info[c.leader])} is champion by outscoring ${hard.map(r => `${code(info[r.id])} by ${plural(r.by, 'point')}`).join(' and ')} over the weekend.`
+        : `the title can't be settled: ${code(info[c.leader])} would have to outscore ${code(info[hard.find(r => !r.possible).id])} by ${hard.find(r => !r.possible).by}, more than the weekend offers.`),
     off && el('p', {}, el('b', {}, `${left.points ? 'Out of it' : 'Behind'} (${count(false)}): `), el('span', {class: 'muted'}, off)));
 }
 

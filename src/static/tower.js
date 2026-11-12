@@ -4,7 +4,7 @@ import {el, fmtLap, lastBefore} from './util.js';
 
 export const ROW_H = 30;
 export const TYRES = {SOFT: ['S', '#ff2d2d'], MEDIUM: ['M', '#ffd400'], HARD: ['H', '#f2f2f2'], INTERMEDIATE: ['I', '#3ec455'], WET: ['W', '#2b8cff']};
-export const COLUMNS = [['gap', 'GAP'], ['int', 'INTERVAL'], ['last', 'LAST LAP'], ['trap', 'SPEED TRAP']];  // trap: live only
+export const COLUMNS = [['gap', 'GAP'], ['int', 'INTERVAL'], ['last', 'LAST LAP'], ['trap', 'SPEED TRAP'], ['champ', 'AS IT STANDS']];  // trap, champ: live only
 
 // the row (index down the shown order) a key moves focus to; undefined for any other key
 export const rowAfter = (key, i, n) => ({ArrowDown: Math.min(i + 1, n - 1), ArrowUp: Math.max(i - 1, 0), Home: 0, End: n - 1}[key]);
@@ -57,6 +57,7 @@ export function timing(S, board, t) {
     board.forEach(b => {
       out[b.d.id] = {gap: b.gapText, int: b.pos === 1 ? b.gapText : b.interval || b.gapText, last: b.last || '', lastCls: '',
                      trap: b.trap ? `${b.trap} km/h` : '', trapCls: b.trapBest ? 'p' : '',
+                     champ: b.champ ? `P${b.champ.rank} · ${b.champ.points}` : '', champCls: b.champ?.rank < b.champ?.was ? 'g' : '',
                      sectors: b.sectors || [], intNum: parseFloat(b.interval) || null};
     });
     return out;
@@ -148,7 +149,7 @@ export function renderTower(rows, board, cols, column, selected, onTyre) {
     chg.textContent = b.out || !gained ? '' : `${gained > 0 ? '▲' : '▼'}${Math.abs(gained)}`;
     chg.dataset.up = gained > 0;
     gap.textContent = c[column] || '';
-    gap.dataset.c = column === 'last' ? c.lastCls : column === 'trap' ? c.trapCls : '';
+    gap.dataset.c = column === 'last' ? c.lastCls : column === 'trap' ? c.trapCls : column === 'champ' ? c.champCls : '';
     [...code.lastChild.children].forEach((bar, k) => { bar.dataset.s = c.sectors[k] || ''; });
     const ty = TYRES[b.tyre];
     tyre.textContent = ty ? ty[0] : '';

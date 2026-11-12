@@ -64,3 +64,13 @@ assert.equal(runs[1].slope, 0);
 assert.deepEqual(longRuns({stints: [['1', 1, 4, 'SOFT', 0], ['1', 5, 8, 'HARD', 0]], laps: times('1', 1, [80, 80, 80, 80, 80, 80, 80, 80])}), []);
 
 console.log('test_quali: ok');
+
+{  // ideal lap: best sectors added up, against the best real lap; a driver missing a sector is left out
+  const {idealLaps} = await import('../src/static/quali.js');
+  const {rows, bests} = idealLaps({laps: [[0, '1', 1, 90.5, 30, 30.5, 30], [100, '1', 2, 90.2, 30.2, 30, 30], [0, '4', 1, 90.1, 30.1, 30, 30],
+    [0, '9', 1, null, 31, null, null], [50, '4', 2, null, 29.9, null, null]]});
+  assert.deepEqual(rows.map(r => r.num), ['4', '1']);
+  assert.ok(Math.abs(rows[0].ideal - 89.9) < 1e-9 && Math.abs(rows[0].lost - 0.2) < 1e-9);
+  assert.ok(Math.abs(rows[1].ideal - 90) < 1e-9 && Math.abs(rows[1].lost - 0.2) < 1e-9);
+  assert.deepEqual(bests, [29.9, 30, 30]);
+}

@@ -1,7 +1,7 @@
 // Run: node tests/test_pace.mjs  — race trace, tyre-wear fits and undercut ledger (pace.js) on synthetic races.
 import assert from 'node:assert/strict';
 import {raceModel} from '../src/static/whatif.js';
-import {raceTrace, fuelPerLap, ols, stintPace, paceRanking, undercuts, compoundOf} from '../src/static/pace.js';
+import {raceTrace, fuelPerLap, ols, stintPace, paceRanking, undercuts, compoundOf, stintBars} from '../src/static/pace.js';
 
 {  // a fitted stint's compound: OpenF1's stint on at its middle lap, whichever side of the stop each source puts the pit lap
   const rows = [['1', 1, 18, 'MEDIUM', 0], ['1', 19, null, 'HARD', 3], ['44', 1, 57, null, 0]];
@@ -137,6 +137,14 @@ function race(cars, stops = {}, N = 20) {
 
   assert.equal(undercuts(race({A: A(1), B, C}, {A: [10], B: [16]})).length, 0, 'stops 6 laps apart are too far apart');
   assert.equal(undercuts(race({A: A(1), B, C}, {A: [10, 13], B: [12]})).length, 0, 'a second stop in the window excludes it');
+}
+
+{  // tyre strategy bars: one car's stints in order, widths by laps, an open last stint ending at the car's laps
+  const rows = [['44', 19, null, 'HARD', 0], ['44', 1, 18, 'MEDIUM', 0], ['1', 1, 50, 'SOFT', 0], ['44', null, null, 'SOFT', 0]];
+  const bars = stintBars(rows, 44, 50);
+  assert.deepEqual(bars.map(s => [s.compound, s.from, s.to]), [['MEDIUM', 1, 18], ['HARD', 19, 50]]);
+  assert.ok(Math.abs(bars[0].share - 18 / 50) < 1e-9 && Math.abs(bars[0].share + bars[1].share - 1) < 1e-9);
+  assert.deepEqual(stintBars(null, 44, 50), []);
 }
 
 console.log('pace tests passed');
