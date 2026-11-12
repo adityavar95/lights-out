@@ -497,6 +497,7 @@ function restartOrGiveUp() {
   container.append(Object.assign(document.createElement('p'), {className: 'empty', textContent: 'The graphics device keeps failing. Reload the page to try again.'}));
 }
 export function setTrack(pts, span, corners, startKnown, mpu, width = 13, ann = null) {
+  vfx.clearSkids();
   cancelGround?.();  // its imagery is for the circuit going away (up to 256 MB)
   stale?.dispose();  // a second switch before a frame was drawn
   stale = circuit;
@@ -780,6 +781,15 @@ function effects(c, at, next, simDt, dt, fx) {
   for (const d of c.discs) d.userData.brakeTemp.value = brakeGlow(c.brakeC);
   const brake = fx ? Math.sqrt(fx.smoke) : THREE.MathUtils.smoothstep(-c.acc, 48, 65);
   if (!gfx.particles) return;
+  // tyre marks: each rear tyre that is locking or sliding lays a stretch of mark a frame, in the car's own frame
+  if (brake > 0.1 && c.v > 5 && c.wheels) {
+    const len = Math.min(c.v * dt, 1.5), [, tw] = c.tyre;  // metres this frame, the tyre's width
+    c.group.updateMatrixWorld();
+    for (const w of c.wheels) if (!w.front) {
+      const local = new THREE.Matrix4().compose(new THREE.Vector3(w.pivot.position.x - len / 2, 0.004, w.pivot.position.z), new THREE.Quaternion(), new THREE.Vector3(len, 1, tw * 0.9));
+      vfx.skid(local.premultiply(c.group.matrixWorld));
+    }
+  }
   const count = perSecond => Math.floor(perSecond * dt + Math.random());  // whole particles this frame, right on average
   const sparks = fx ? fx.sparks : THREE.MathUtils.smoothstep(v, 70, 85) * (0.2 + brake) * (Math.random() < 0.4);  // bursts, as over bumps
   const nSparks = count(900 * sparks), nSmoke = c.fronts.map(() => count(45 * brake * brake)), nSpray = count(260 * (fx?.spray ?? 0));
