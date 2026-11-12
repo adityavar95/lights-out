@@ -37,3 +37,13 @@ assert.ok(!tt.done && !car.finished, 'no chequered flag');
 assert.ok(car.spec.mass < full.car('a').spec.mass - 50, 'lighter than a race fuel load');
 assert.equal(tt.board()[0].pos, 1);
 console.log('play ok');
+
+// the ghost lap: linear between frames, held at either end
+import {ghostAt} from '../src/static/playsetup.js';
+const lap = [[0, 0, 1], [1, 50, 2], [2, 120, 0]];
+assert.deepEqual(ghostAt(lap, 0.5), [25, 1.5]);
+assert.deepEqual(ghostAt(lap, 1.5), [85, 1]);
+assert.deepEqual(ghostAt(lap, -1), [0, 1]);
+assert.deepEqual(ghostAt(lap, 9), [120, 0]);
+assert.equal(ghostAt([], 1), null);
+console.log('ghost ok');

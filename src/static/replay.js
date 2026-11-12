@@ -6,7 +6,7 @@ import {setupStory} from './storypanel.js';
 import {nextMoment} from './moments.js';
 import {markLayer, gpsMarks, lapMarks, NO_MARKS} from './scrubmarks.js';
 import {get, el, rows, failed, teamColor, fmtClock, fmtLap, lastBefore, trackStatus, led, covered, dropUp, count} from './util.js';
-import {init3d, setTrack, setCars, updateCars, setView, setParts, setTyre, setGround, setPitLane, setStartLights, setDaylight, nextSky, nextTier, announce, hasCockpitWheel} from './scene3d.js';
+import {init3d, setTrack, setCars, updateCars, setView, setParts, setTyre, setGround, setPitLane, setStartLights, setDaylight, nextSky, nextTier, announce, hasCockpitWheel, setGhost} from './scene3d.js';
 import {setupOnboard, setCameraUi, setWheelAngle, nextCamera} from './onboard.js';
 import {liveInfo, liveStatus, liveClock} from './live.js';
 import {setupLive} from './replaylive.js';
@@ -14,7 +14,7 @@ import {setupDrawer, toggleDrawer, updateDrawer} from './teledrawer.js';
 import {toggleCars} from './carsdeck.js';
 import {setupHud, setRadar, renderRadar, renderFocus, renderFeed, STATUS} from './hud.js';
 import {SIM, simSession, simState, realPitLane, entries} from './simmode.js';
-import {setupCard, resultsCard, pauseCard, saveBest, PACE} from './playsetup.js';
+import {setupCard, resultsCard, pauseCard, saveBest, ghostAt, PACE} from './playsetup.js';
 import {drive, KEYHELP} from './driverdeck.js';
 import {enableInput} from './input.js';
 import {setupDecks, updateDecks} from './decks.js';
@@ -247,7 +247,7 @@ async function startPlay(setup) {
   await loadData(false);
   if (token !== S.token || !S.sim) return;
   S.sim.ai.pace = PACE[setup.difficulty] ?? 1;
-  S.best = Infinity;  // the time trial's best this run, against the stored one
+  Object.assign(S, {best: Infinity, rec: null, ghost: null});  // the time trial's best this run, the lap being recorded, the ghost's lap
   if (driving && S.byId[S.selected]) drive(S.sim, S.selected, first);
   played = true;
   if (S.selected) setMode('follow');
@@ -288,12 +288,28 @@ async function nextCircuit() {
   if (next) dispatchEvent(new CustomEvent('f1:circuit', {detail: {year: S.year, round: +next.round}}));
 }
 
-// each frame of a Play race: a time trial's new best lap is stored and announced
+// each frame of a time trial: the chosen car's lap is recorded ([lap time, s from the line, d]); at the line a new best
+// lap becomes the ghost, and is stored when you drove it (the AI can drive it too: hand it over and chase its line)
 function playTick() {
-  const car = S.setup.mode === 'trial' && S.sim.car(S.sim.player);
-  if (!car || !(car.best < S.best)) return;
-  S.best = car.best;
-  if (saveBest(`${S.year}/${S.round}`, car.best) && ui.has3d) announce(`New best lap: ${fmtLap(car.best)}`);
+  const R = S.sim, car = S.setup.mode === 'trial' && R.car(S.setup.driver);
+  if (!car || car.s < 0) return;
+  if (S.rec?.lap !== car.lapsDone) {
+    if (S.rec && car.best < S.best) {
+      S.best = car.best;
+      S.ghost = S.rec.pts;
+      if (car.player && saveBest(`${S.year}/${S.round}`, car.best) && ui.has3d) announce(`New best lap: ${fmtLap(car.best)}`);
+    }
+    S.rec = {lap: car.lapsDone, pts: []};
+  }
+  S.rec.pts.push([R.t - car.lapStart, car.s - car.lapsDone * R.T.len, car.d]);
+}
+
+// the ghost's map point now and 0.5 s on, at this lap's time
+function ghostPos() {
+  const car = S.ghost && S.sim.car(S.setup.driver);
+  if (!car || car.s < 0) return [null, null];
+  const now = ghostAt(S.ghost, S.sim.t - car.lapStart), next = ghostAt(S.ghost, S.sim.t - car.lapStart + 0.5);
+  return [S.sim.at(...now), S.sim.at(...next)];
 }
 
 // What the stage says before ▶, and whether ▶ can do anything: nothing is asked of OpenF1 for a session that hasn't run.
@@ -943,6 +959,7 @@ function render(force) {
     S.ahead = st.ahead ?? holdHeadings(st.cars, carsAt(Math.min(t + 0.5, S.data.duration)), t);
     const progress = S.live ? 1 : S.sim ? st.lap / S.data.total_laps : t / S.data.duration;
     const steer = updateCars(st.cars, S.ahead, S.selected, S.live ? 1 : S.playing ? S.speed : 0, progress, st.fx);
+    if (S.sim) setGhost(...(S.ghost ? ghostPos() : [null]), S.year);
     if (S.cam === 'onboard') setWheelAngle(steer, hasCockpitWheel(S.selected));
   }
   S.board = st.board;

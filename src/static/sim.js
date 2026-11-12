@@ -494,6 +494,7 @@ export function createRace({year, mapPts, mpu, width, drivers, laps, compounds, 
     return [a[0] + (b[0] - a[0]) * w, a[1] + (b[1] - a[1]) * w];
   };
   R.pos = car => onLane(car, 0) ?? trackPos(T, car.s, car.d);
+  R.at = (s, d) => trackPos(T, s, d);  // a point on track (map units): Play's ghost car
   // where the car points: along the track, plus its own heading psi when the player has it sliding or spinning
   R.posAhead = (car, dt) => onLane(car, Math.max(car.v, 1) * dt)
     ?? trackPos(T, car.s + Math.max(car.v, 1) * dt * Math.cos(car.psi), car.d + Math.max(car.v, 1) * dt * Math.sin(car.psi));

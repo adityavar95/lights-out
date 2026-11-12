@@ -28,6 +28,17 @@ export function saveBest(key, time, store = globalThis.localStorage) {
   return true;
 }
 
+// Ghost lap: pts [[lap time, s from the line, d], ...] recorded each frame; where it was at lap time t (clamped at the ends)
+export function ghostAt(pts, t) {
+  if (!pts.length) return null;
+  let lo = 0, hi = pts.length - 1;
+  if (t <= pts[0][0]) return [pts[0][1], pts[0][2]];
+  if (t >= pts[hi][0]) return [pts[hi][1], pts[hi][2]];
+  while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (pts[mid][0] <= t) lo = mid; else hi = mid; }
+  const [t0, s0, d0] = pts[lo], [t1, s1, d1] = pts[hi], f = t1 > t0 ? (t - t0) / (t1 - t0) : 0;
+  return [s0 + (s1 - s0) * f, d0 + (d1 - d0) * f];
+}
+
 // the race's laps for a choice; full: the real race distance
 export const lapsFor = (choice, full) => (choice === 'full' ? full : choice === 'quarter' ? Math.max(1, Math.ceil(full / 4)) : +choice || full);
 

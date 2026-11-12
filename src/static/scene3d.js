@@ -5,7 +5,7 @@ import {CSS2DRenderer, CSS2DObject} from 'three/addons/renderers/CSS2DRenderer.j
 import {SkyMesh} from 'three/addons/objects/SkyMesh.js';
 import {CSMShadowNode} from 'three/addons/csm/CSMShadowNode.js';
 import {HDRLoader} from 'three/addons/loaders/HDRLoader.js';
-import {float, reference, renderGroup, texture, vec2} from 'three/tsl';
+import {float, reference, renderGroup, texture, vec2, vec4, mrt} from 'three/tsl';
 import {buildCar} from './cars3d.js';
 import {brakeStep, brakeGlow} from './telemetry.js';
 import {loadRB22, rb22Ready, STEERING_RATIO} from './rb22.js';
@@ -543,6 +543,36 @@ function warmCockpit(token) {
   }, 1000);  // after the first frames with the new grid
 }
 
+// Play's time-trial ghost: the best lap's car, see-through and unlit (so no csmSync), with no tag, sound or effects.
+// p, ahead: map points now and 0.5 s on; null hides it. Built on first use, dropped with the cars (disposeCars).
+let ghost = null;
+export function setGhost(p, ahead, year) {
+  if (!p || !map || !circuit) { if (ghost) ghost.group.visible = false; return; }
+  if (!ghost) {
+    const car = buildCar('#ffffff', null, year, tex.blob), mat = new THREE.MeshBasicNodeMaterial({color: 0xcfe8ff, transparent: true, opacity: 0.32, depthWrite: false});
+    mat.mrtNode = mrt({velocity: vec4(0)});  // no motion vector of its own (post.js blur), like vfx.js's effects
+    car.group.traverse(o => {
+      if (!o.isMesh) return;
+      if (o.layers.mask !== 1) o.visible = false;  // the contact-shadow planes (layer 1): a ghost casts none
+      o.material = mat;
+      o.castShadow = o.receiveShadow = false;
+    });
+    ghost = {...car, mat, hint: undefined};
+    world.add(car.group);
+  }
+  const road = circuit.surface(p, ghost.hint), at = new THREE.Vector3((p[0] - map.cx) * map.k, road.y + 0.02, (p[1] - map.cy) * map.k);
+  ghost.hint = road.i;
+  const next = toScene(ahead, 0.02, ghost.hint);
+  if (at.distanceTo(next) > 0.01) {  // a ghost parked at the line (its lap over) keeps its heading
+    ghost.yaw = Math.atan2(-(next.z - at.z), next.x - at.x);
+    ghost.pitch = Math.atan2(next.y - at.y, Math.hypot(next.x - at.x, next.z - at.z));
+  }
+  ghost.group.visible = true;
+  ghost.group.position.copy(at);
+  ghost.group.rotation.set(road.roll, ghost.yaw ?? 0, ghost.pitch ?? 0, 'YZX');
+  ghost.group.scale.setScalar(1 / map.mps);
+}
+
 // does this car have a steering wheel of its own in the cockpit view?
 export const hasCockpitWheel = id => !!cars[id]?.steeringWheel;
 
@@ -556,6 +586,7 @@ function disposeCars() {
   }
   cars = {};
   crews.clear();
+  if (ghost) { world.remove(ghost.group); ghost.dispose(); ghost.mat.dispose(); ghost = null; }
 }
 
 // mode: overview (free orbit) | chase (TV) | follow (game chase cam) | onboard (cockpit, driver's eye) | tcam (on the airbox) | heli (helicopter)
