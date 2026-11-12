@@ -139,6 +139,9 @@ export async function warmFor(renderer, scene, meshes, target, outputs, stillWan
 }
 
 // shadows(on): switches the sun's cascades on or off around a mirror's render
+// One mirror a frame, in turn: each is a whole scene pass (~2 ms of the main thread), and a glass a few centimetres wide
+// at the edge of the view reads the same at half the frame rate.
+let turn = 0;
 export function renderMirrors(renderer, scene, camera, shadows) {
-  for (const render of active) render(renderer, scene, camera, shadows);
+  if (active.size) [...active][turn++ % active.size](renderer, scene, camera, shadows);
 }

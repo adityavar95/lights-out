@@ -6,7 +6,7 @@ import {setupStory} from './storypanel.js';
 import {nextMoment} from './moments.js';
 import {markLayer, gpsMarks, lapMarks, NO_MARKS} from './scrubmarks.js';
 import {get, el, rows, failed, teamColor, fmtClock, fmtLap, lastBefore, trackStatus, led, covered, dropUp, count} from './util.js';
-import {init3d, setTrack, setCars, updateCars, setView, setParts, setTyre, setGround, setPitLane, setStartLights, setDaylight, nextSky, nextTier, announce, hasCockpitWheel, setGhost} from './scene3d.js';
+import {init3d, setTrack, setCars, updateCars, setView, setParts, setTyre, setGround, setPitLane, setStartLights, setDaylight, nextSky, nextTier, announce, hasCockpitWheel, setGhost, timed} from './scene3d.js';
 import {setupOnboard, setCameraUi, setWheelAngle, nextCamera} from './onboard.js';
 import {liveInfo, liveStatus, liveClock} from './live.js';
 import {setupLive} from './replaylive.js';
@@ -658,12 +658,16 @@ function tick(now) {
   const dt = Math.max(0, (now - S.last) / 1000) * (grid ? Math.min(1, S.speed) : S.speed);  // rAF's stamp can predate togglePlay's S.last
   S.watched = (S.watched ?? 0) + (now - S.last) / 1000;  // real seconds played, once per race or session loaded
   if (S.watched >= 60 && !S.counted) { S.counted = true; count('watched_60s'); }
+  let t0 = performance.now();
   if (S.sim) S.sim.advance(Math.min(dt, 2));  // the physics runs in race time; a stalled tab doesn't jump minutes ahead
+  if (S.sim) timed('sim', t0);
   S.t = S.sim ? S.sim.t : Math.min(S.data.duration, S.t + dt);
   S.last = now;
   if (S.reel && S.t >= S.reel.list[S.reel.i].t1) reelGo(S.reel.i + 1);
   else if (S.reel) reelShot();
+  t0 = performance.now();
   render(false);
+  timed('page', t0);
   if (S.setup && S.sim) playTick();
   if (S.sim ? S.sim.done : S.t >= S.data.duration) { togglePlay(); if (S.setup && S.sim) showResults(); }
   else S.raf = requestAnimationFrame(tick);
