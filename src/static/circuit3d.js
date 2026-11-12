@@ -4,7 +4,7 @@
 import * as THREE from 'three';
 import {CSS2DObject} from 'three/addons/renderers/CSS2DRenderer.js';
 import {mergeGeometries} from 'three/addons/utils/BufferGeometryUtils.js';
-import {Fn, uniform, texture, uv, vec2, vec3, vec4, float, fract, abs, floor as cellOf, mrt, fwidth, positionGeometry, normalViewGeometry, mix, smoothstep, clamp, dot, min, time} from 'three/tsl';
+import {Fn, uniform, texture, uv, vec2, vec3, vec4, float, fract, abs, floor as cellOf, mrt, fwidth, positionGeometry, positionLocal, normalViewGeometry, mix, smoothstep, clamp, dot, min, time, sin, max} from 'three/tsl';
 import {asphalt, noise} from './track3d.js';
 import {racingLine} from './sim.js';
 import {garages} from './pit3d.js';
@@ -399,6 +399,8 @@ export function buildCircuit(world, {pts, map, tex, width, startKnown, ann, corn
                                                    roughness: 0.8, vertexColors: true});
   // a card's back face keeps the crown's outward normal: three flips it for back faces, which lit half the leaves from inside
   crownMat.normalNode = normalViewGeometry;
+  // wind: crowns lean a little more the higher they are, in a slow ripple that runs up the tree (2 % of its height)
+  crownMat.positionNode = positionLocal.add(vec3(sin(time.mul(1.3).add(positionLocal.y.mul(0.7))).mul(max(positionLocal.y, 0)).mul(0.02), 0, 0));
   const cones = new THREE.InstancedMesh(coneGeo, crownMat, N), leaves = new THREE.InstancedMesh(leafGeo, crownMat, N);
   // Layer 1: left out of the motion-vector and ambient-occlusion passes, which draw with one override material and no
   // alpha cut-out, so every card came out a solid square there (dark AO boxes, smeared blur round the crowns)
