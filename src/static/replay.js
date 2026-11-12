@@ -264,7 +264,7 @@ const restart = () => { S.paused = false; startPlay(S.setup); };
 const changeSetup = () => { S.paused = false; showSetup(); };
 
 function togglePause() {
-  if (!S.paused && !S.playing) return;  // the setup card or the results are up
+  if (!S.paused && !S.playing && !ui.overlay.hidden) return;  // the setup card or the results are up (paused otherwise, e.g. by the F1 TV viewer: Esc shows the menu)
   S.paused = !S.paused;
   if (S.paused) {
     halt();

@@ -61,5 +61,5 @@ export function focusFrame(S, t, st, status, {pos, nearest}) {
 function wheel(S, b, status, kmh, estimated, {gear, rpm, throttle, brake, drs}) {
   if (S.cam === 'onboard')  // the cockpit steering wheel shows the same readings
     updateWheel({speed: kmh, estimated, gear, rpm, throttle, brake, drs: drs === 'open' ? 10 : drs === 'detected' ? 8 : 0,
-                 lap: b.lap ?? b.k + 1, total: S.data.total_laps, pos: b.pos, gap: b.gapText, tyre: b.tyre, status});
+                 lap: b.lap ?? b.k + 1, total: S.data.total_laps === Infinity ? null : S.data.total_laps, pos: b.pos, gap: b.gapText, tyre: b.tyre, status});
 }
