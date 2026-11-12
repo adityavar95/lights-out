@@ -18,7 +18,7 @@ const SWITCHES = [
   ['brakeAssist', 'BRAKE ASSIST', [['OFF', 'OFF'], ['LOW', 'LOW'], ['HIGH', 'HIGH']]],
   ['line', 'RACING LINE', [['ON', 'ON'], ['CORNERS', 'CORNERS'], ['OFF', 'OFF']]],
 ];
-const KEYHELP = 'W/S throttle·brake · A/D steer · E/Q gears · X clutch · R/Space DRS · F overtake · P pit · C camera';
+export const KEYHELP = 'W/S throttle·brake · A/D steer · E/Q gears · X clutch · R/Space DRS · F overtake · P pit · C camera · Esc pause';
 
 let D, getS, lastFrame = performance.now();
 

@@ -89,8 +89,10 @@ export function gridOrder(list) {
 
 // ann: circuits.js annotate() output (elevation, banking, kerbs, zones); aero: the circuit's wing trim {cl, cd, drs}
 // (multipliers on ClA / CdA, DRS drag cut); pitLoss: MultiViewer's real pit losses, which size the pit lane.
-export function createRace({year, mapPts, mpu, width, drivers, laps, compounds, ann, aero, pitLoss, pitLane}) {
+// fuel: share of the race fuel load aboard (Play's time trial: a qualifying load, with laps Infinity)
+export function createRace({year, mapPts, mpu, width, drivers, laps, compounds, ann, aero, pitLoss, pitLane, fuel = 1}) {
   const T = buildTrack(mapPts, mpu, width, ann), c = carSpec(year);
+  c.fuel *= fuel;
   // Circuit aero trim: Monaco runs maximum wing (more downforce, more drag), Monza "skinny" wings (~360 km/h)
   c.ClA *= aero?.cl ?? 1;
   c.CdA *= aero?.cd ?? 1;

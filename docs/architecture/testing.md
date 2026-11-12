@@ -31,4 +31,5 @@ node tests/test_story.mjs                  # the Why: lead changes through pit c
 node tests/test_pitdata.mjs                # telemetry drawer maths: tyre bands, traction ellipse, shift lights, strip buffer
 node tests/test_dash.mjs                    # cockpit wheel screen: shift lights
 node tests/test_graphics.mjs                # stage settings: presets, validation of what localStorage holds
+node tests/test_play.mjs                    # Play: lap choices, stored setup and time-trial bests, the time trial's one-car race
 ```

@@ -14,8 +14,9 @@ import {setupDrawer, toggleDrawer, updateDrawer} from './teledrawer.js';
 import {toggleCars} from './carsdeck.js';
 import {setupHud, setRadar, renderRadar, renderFocus, renderFeed, STATUS} from './hud.js';
 import {SIM, simSession, simState, realPitLane, entries} from './simmode.js';
-import {setupCard, PACE} from './playsetup.js';
-import {drive} from './driverdeck.js';
+import {setupCard, resultsCard, pauseCard, saveBest, PACE} from './playsetup.js';
+import {drive, KEYHELP} from './driverdeck.js';
+import {enableInput} from './input.js';
 import {setupDecks, updateDecks} from './decks.js';
 import {buildTower, timing, renderTower, stableOrder, COLUMNS} from './tower.js';
 import {drsZones} from './telemetry.js';
@@ -80,6 +81,7 @@ export function setupReplay(root, copyView) {
     if (e.code === 'Space') { e.preventDefault(); togglePlay(); }
     const step = {Minus: -1, NumpadSubtract: -1, Equal: 1, NumpadAdd: 1}[e.code];  // - / + : slower / faster
     if (e.code === 'Escape' && S.reel) stopReel();
+    if (e.code === 'Escape' && S.setup && S.sim?.player) togglePause();
     if (e.code === 'KeyT' && !e.shiftKey) { if (toggleDrawer() && !S.selected) setMode('chase'); render(true); }  // the drawer is one car's;  // render: so it isn't empty on a paused replay
     const cam = {Digit1: 'overview', Digit2: 'follow', Digit3: 'onboard', Digit4: 'tcam', Digit5: 'heli'}[e.code];
     if (cam && ui.has3d) setMode(cam);
@@ -227,6 +229,7 @@ const ahead = () => sessionStart(S.race, ui.session.value) > Date.now();
 // Play: nothing runs until the setup card's Start
 async function showSetup() {
   const token = S.token;
+  halt();
   ui.session.value = SIM;
   ui.play.disabled = true;  // ▶ would start a race nobody set up
   const list = await entries(S.year, S.round).catch(() => []);
@@ -236,6 +239,7 @@ async function showSetup() {
 
 async function startPlay(setup) {
   const token = S.token, driving = setup.mode !== 'spectate', first = !played;
+  halt();
   S.setup = setup;
   if (driving) S.selected = setup.driver;  // loadData keeps it, so no car is picked for us
   setSpeed(1);
@@ -243,10 +247,53 @@ async function startPlay(setup) {
   await loadData(false);
   if (token !== S.token || !S.sim) return;
   S.sim.ai.pace = PACE[setup.difficulty] ?? 1;
+  S.best = Infinity;  // the time trial's best this run, against the stored one
   if (driving && S.byId[S.selected]) drive(S.sim, S.selected, first);
   played = true;
   if (S.selected) setMode('follow');
   if (!S.playing) togglePlay();
+}
+
+// stop the race and the driving keys (a menu or the setup card is about to show)
+function halt() {
+  if (S.playing) togglePlay();
+  enableInput(false);
+}
+
+const restart = () => { S.paused = false; startPlay(S.setup); };
+const changeSetup = () => { S.paused = false; showSetup(); };
+
+function togglePause() {
+  if (!S.paused && !S.playing) return;  // the setup card or the results are up
+  S.paused = !S.paused;
+  if (S.paused) {
+    halt();
+    setOverlay(pauseCard({help: KEYHELP, onResume: togglePause, onRestart: restart, onSetup: changeSetup}));
+  } else {
+    setOverlay('');
+    enableInput(!!S.sim?.player);
+    togglePlay();
+  }
+}
+
+// the chequered flag: the finishing order, and what next
+function showResults() {
+  enableInput(false);
+  setOverlay(resultsCard({rows: S.sim.board(), byId: S.byId, you: S.sim.player, onRestart: restart, onSetup: changeSetup, onNext: nextCircuit}));
+}
+
+async function nextCircuit() {
+  const list = await get(`/api/jolpica/${S.year}/races`).then(rows, () => []);
+  const next = list.find(r => +r.round === +S.round + 1) ?? list[0];
+  if (next) dispatchEvent(new CustomEvent('f1:circuit', {detail: {year: S.year, round: +next.round}}));
+}
+
+// each frame of a Play race: a time trial's new best lap is stored and announced
+function playTick() {
+  const car = S.setup.mode === 'trial' && S.sim.car(S.sim.player);
+  if (!car || !(car.best < S.best)) return;
+  S.best = car.best;
+  if (saveBest(`${S.year}/${S.round}`, car.best) && ui.has3d) announce(`New best lap: ${fmtLap(car.best)}`);
 }
 
 // What the stage says before ▶, and whether ▶ can do anything: nothing is asked of OpenF1 for a session that hasn't run.
@@ -333,7 +380,7 @@ async function loadData(autoplay) {
   const standIn = session === 'Race' && S.year >= 2023;  // see below
   setOverlay(`Loading ${session} replay…${standIn || session === SIM ? '' : " The first load of a session fetches every car's GPS trace and can take up to a minute."}`, true);
   try {
-    const sim = session === SIM && await simSession(S.year, S.round, S.proj, S.track, {laps: S.setup?.laps});
+    const sim = session === SIM && await simSession(S.year, S.round, S.proj, S.track, {laps: S.setup?.laps, solo: S.setup?.mode === 'trial' && S.setup.driver});
     const url = `/api/replay/${S.year}/${S.round}?session=${encodeURIComponent(session)}`, gps = !sim && get(url);
     // A GPS replay the server hasn't built yet takes ~40 s. A race's lap-timing replay (Jolpica: ~10 s uncached, then on disk) plays
     // meanwhile and the GPS one takes over when it lands (swapToGps); without Jolpica laps yet, it just waits for GPS.
@@ -601,7 +648,8 @@ function tick(now) {
   if (S.reel && S.t >= S.reel.list[S.reel.i].t1) reelGo(S.reel.i + 1);
   else if (S.reel) reelShot();
   render(false);
-  if (S.sim ? S.sim.done : S.t >= S.data.duration) togglePlay();
+  if (S.setup && S.sim) playTick();
+  if (S.sim ? S.sim.done : S.t >= S.data.duration) { togglePlay(); if (S.setup && S.sim) showResults(); }
   else S.raf = requestAnimationFrame(tick);
 }
 
@@ -907,7 +955,7 @@ function render(force) {
   const left = S.live && S.liveInfo.live ? liveClock(S.live) : null;
   ui.clock.textContent = S.live ? (left !== null ? `${fmtClock(left)} remaining` : '') : S.sim ? fmtClock(t) : `${fmtClock(t)} / ${fmtClock(S.data.duration)}`;
   const race = S.live ? S.data.race : S.sim || S.data.mode === 'laps' || S.data.intervals.length > 0;
-  ui.lap.textContent = race ? `LAP ${st.lap || 0} / ${S.data.total_laps}` : S.data.session.toUpperCase();
+  ui.lap.textContent = race ? `LAP ${st.lap || 0}${S.data.total_laps === Infinity ? '' : ` / ${S.data.total_laps}`}` : S.data.session.toUpperCase();  // a time trial has no last lap
   const status = S.live ? liveStatus(S.live) : S.sim ? st.status
     : S.data.mode === 'gps' ? startLights(t) ?? trackStatus(S.data.race_control || [], t) : null;
   const lights = /^LIGHTS (\d)/.exec(status ?? '');  // the start gantry: five red lights, then out

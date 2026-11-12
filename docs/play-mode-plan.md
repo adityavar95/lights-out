@@ -54,6 +54,8 @@ Check: open Play, start a 3-lap race at one circuit, drive a lap, confirm no rep
 8. **Ghost car.** Record the player's position at each track sample on the best lap and draw it as a translucent car.
    This is the only item that needs new 3D work (`scene3d.js`), so it comes last and can be dropped.
 
+Status (12 Nov 2026): items 1-7 done; item 8, the ghost car, not started.
+
 Check: finish a race and see results; pause and resume mid-corner; set a time-trial best, reload, see it listed.
 
 ## Tests and docs
