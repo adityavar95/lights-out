@@ -1,6 +1,7 @@
 // The driver, in car space (metres, +x forward, y up, +z right) round the helmet's centre `head`: a shaped helmet with
-// its design painted on, an iridescent visor and a rear spoiler, the HANS, and (rb22.js) the race suit with arms whose
-// gloves hold the steering wheel and follow it as it turns (two-bone IK). cars3d.js's procedural cars take only the
+// its design and race number painted on, an iridescent visor and a rear spoiler, the HANS, and (rb22.js) the race suit
+// with banded sleeves, whose gloves (fingers round the grips, thumbs over them) hold the steering wheel and follow it as
+// it turns (two-bone IK). cars3d.js's procedural cars take only the
 // helmet and HANS: their cockpit opening is closed, so a body under it would never show.
 import * as THREE from 'three';
 import {mergeGeometries} from 'three/addons/utils/BufferGeometryUtils.js';
@@ -40,7 +41,9 @@ function limb(r0, r1, len, seg = 16) {
   const pts = [];
   for (let i = 0; i <= 6; i++) { const a = (i / 6 - 1) * Math.PI / 2; pts.push(new THREE.Vector2(r0 * Math.cos(a), r0 * Math.sin(a))); }
   for (let i = 0; i <= 6; i++) { const a = i / 6 * Math.PI / 2; pts.push(new THREE.Vector2(r1 * Math.cos(a), len + r1 * Math.sin(a))); }
-  return new THREE.LatheGeometry(pts, seg);
+  const g = new THREE.LatheGeometry(pts, seg), P = g.attributes.position, uv = g.attributes.uv;
+  for (let i = 0; i < P.count; i++) uv.setY(i, (P.getY(i) + r0) / (len + r0 + r1));  // v by length (the lathe's runs by point, half of them in the caps)
+  return g;
 }
 
 // geometry g (along +y from the origin) laid from a towards b
@@ -84,6 +87,21 @@ function elbow(S, W, side) {
   return S.clone().addScaledVector(d, a).addScaledVector(pole, h);
 }
 
+// One glove on the steering wheel's grip, in the wheel's frame (the driver is at -x): the back of the hand outside the
+// grip, four fingers curled round its far side and the thumb over its top. The sleeve's accent band is its cuff.
+function gloveGeometry(side) {
+  const y0 = GRIP[0], z0 = side * GRIP[1], P = (x, y, out) => V(x, y0 + y, z0 + side * out), parts = [];
+  const seg = (a, b, r) => parts.push(lay(limb(r, r, a.distanceTo(b), 8), a, b));
+  parts.push(new THREE.SphereGeometry(1, 16, 10).scale(0.036, 0.044, 0.022).translate(-0.027, y0 - 0.002, z0 + side * 0.024));  // from the wrist to the knuckles
+  for (let i = 0; i < 4; i++) {  // index finger down to the little one
+    const y = 0.03 - i * 0.021, r = 0.0098 - i * 0.0006, far = P(0.03, y, 0.034), in_ = P(0.04, y, 0.002);
+    seg(P(-0.006, y, 0.04), far, r); seg(far, in_, r); seg(in_, P(0.02, y, -0.018), r);
+  }
+  const knuckle = P(-0.016, 0.05, -0.008);
+  seg(P(-0.03, 0.022, 0.02), knuckle, 0.0115); seg(knuckle, P(-0.004, 0.06, -0.03), 0.0105);  // thumb
+  return parts;
+}
+
 // ---------- materials ----------
 
 const css = c => `#${new THREE.Color(c).getHexString()}`;
@@ -97,7 +115,7 @@ export const VISOR = new THREE.MeshPhysicalMaterial({color: 0x05070a, metalness:
 // The helmet's design on the shell's UVs (u = phi: 0 and 1 the back, 0.5 the front; v = theta over TH, crown at the top):
 // base colour, an accent swoosh from the visor's top edge round both sides to the back, edged in a pinstripe, a centre
 // stripe over the crown, a darker chin and the black rubber trim at the neck. Glossy lacquer over a little flake.
-export function helmetMaterial(base, accent) {
+export function helmetMaterial(base, accent, num = null) {
   const W = 512, H = 256, canvas = document.createElement('canvas'); canvas.width = W; canvas.height = H;
   const g = canvas.getContext('2d'), pin = new THREE.Color(accent).getHSL({}).l > 0.6 ? '#16181c' : '#f2f2f2';
   g.fillStyle = css(base); g.fillRect(0, 0, W, H);
@@ -109,6 +127,10 @@ export function helmetMaterial(base, accent) {
     g.fillStyle = css(accent); g.fill(); g.strokeStyle = pin; g.lineWidth = 3; g.stroke();
   }
   g.fillStyle = css(accent); g.fillRect(W / 2 - 7, 0, 14, H * 0.42); g.fillRect(0, 0, 7, H * 0.3); g.fillRect(W - 7, 0, 7, H * 0.3);
+  if (num !== null && num !== undefined) {  // the race number on both sides, behind the visor
+    Object.assign(g, {font: `900 ${H * 0.19}px "Titillium Web", system-ui, sans-serif`, textAlign: 'center', textBaseline: 'middle', fillStyle: pin});
+    for (const u of [0.2, 0.8]) g.fillText(num, W * u, H * 0.7);
+  }
   g.fillStyle = '#0c0d0f'; g.fillRect(0, H * 0.95, W, H * 0.05);
   const map = new THREE.CanvasTexture(canvas);
   Object.assign(map, {colorSpace: THREE.SRGBColorSpace, anisotropy: 8});
@@ -133,8 +155,25 @@ function fabric() {
 }
 
 // fireproof suit cloth: matte, with a cloth sheen at grazing angles and the weave up close
-const suitMaterial = color => new THREE.MeshPhysicalMaterial({color, roughness: 0.85, sheen: 1, sheenRoughness: 0.5,
-  sheenColor: new THREE.Color(color).lerp(new THREE.Color(0xffffff), 0.35), normalMap: fabric(), normalScale: new THREE.Vector2(0.35, 0.35)});
+// The cloth's colours run along each part (v: 1 at the wrist, the elbow and the collar): an accent band edged in dark there
+// and a seam half way, so a sleeve reads as a sleeve and not as a pipe in the car's own paint.
+function suitMaterial(color, accent) {
+  const H = 128, canvas = document.createElement('canvas'); canvas.width = 4; canvas.height = H;
+  const g = canvas.getContext('2d'), band = (y0, y1, c) => { g.fillStyle = c; g.fillRect(0, H * y0, 4, H * (y1 - y0)); };
+  band(0, 1, css(color)); band(0, 0.2, css(accent)); band(0.195, 0.21, '#101114'); band(0.5, 0.508, css(new THREE.Color(color).multiplyScalar(0.6)));
+  const map = new THREE.CanvasTexture(canvas);
+  map.colorSpace = THREE.SRGBColorSpace;
+  map.onUpdate = () => { canvas.width = canvas.height = 0; };
+  return new THREE.MeshPhysicalMaterial({map, roughness: 0.85, sheen: 1, sheenRoughness: 0.5,
+    sheenColor: new THREE.Color(color).lerp(new THREE.Color(0xffffff), 0.35), normalMap: fabric(), normalScale: new THREE.Vector2(0.35, 0.35)});
+}
+
+// gloves: the accent colour in a grippy, slightly shiny synthetic; a near-white or near-black accent takes a dark grey instead
+function gloveMaterial(accent) {
+  const c = new THREE.Color(accent), l = c.getHSL({}).l;
+  return new THREE.MeshPhysicalMaterial({color: l > 0.85 || l < 0.08 ? 0x2a2d33 : c, roughness: 0.6, sheen: 0.6, sheenRoughness: 0.4,
+    normalMap: fabric(), normalScale: new THREE.Vector2(0.5, 0.5)});
+}
 
 // ---------- the whole driver (rb22.js) ----------
 
@@ -142,17 +181,17 @@ const shared = new Map();  // head + wheel -> merged geometry, shared by every c
 const one = list => mergeGeometries(list.map(g => (g.index ? g.toNonIndexed() : g)));
 
 // The driver seated at head, hands on the steering wheel (a Group whose rotation.x turns it, in the same frame as the
-// driver). helmet / accent / suit: colours. Adds the body and arms to `parent` and the gloves to the wheel. Returns
+// driver). helmet / accent / suit: colours; num: the race number on the helmet. Adds the body and arms to `parent` and the gloves to the wheel. Returns
 // {materials (this driver's own, to dispose), head (the helmet's group, pivoting at the neck), pose()}: pose() puts the arms where the wheel's grips are now.
-export function seatDriver(parent, wheel, head, {helmet, accent, suit}) {
+export function seatDriver(parent, wheel, head, {helmet, accent, suit, num = null}) {
   const key = [...head.toArray(), ...wheel.position.toArray()].map(v => v.toFixed(3)).join();
   if (!shared.has(key)) {
     const h = helmetGeometry(head);
     shared.set(key, {helmet: one(h.helmet), visor: one(h.visor), gear: one(h.gear), suit: one(bodyGeometry(head)),
-      upper: one([limb(0.056, 0.047, UPPER)]), fore: one([limb(0.045, 0.036, FORE)]),
-      gloves: one([-1, 1].map(z => limb(0.038, 0.034, 0.055).scale(1.3, 1, 1.05).translate(0, GRIP[0] - 0.028, z * GRIP[1])))});
+      upper: one([limb(0.054, 0.045, UPPER)]), fore: one([limb(0.043, 0.031, FORE)]),
+      gloves: one([-1, 1].flatMap(gloveGeometry))});
   }
-  const G = shared.get(key), mats = {helmet: helmetMaterial(helmet, accent), suit: suitMaterial(suit)};
+  const G = shared.get(key), mats = {helmet: helmetMaterial(helmet, accent, num), suit: suitMaterial(suit, accent), glove: gloveMaterial(accent)};
   const mesh = (geo, mat) => Object.assign(new THREE.Mesh(geo, mat), {castShadow: true, receiveShadow: true});
   // the head turns about the neck (a pivot just below the helmet), which chassis() rolls and pitches with the g-forces;
   // its meshes are offset back by the pivot, so at rest they sit exactly where the merged geometry put them
@@ -160,7 +199,7 @@ export function seatDriver(parent, wheel, head, {helmet, accent, suit}) {
   headGroup.position.copy(neck);
   for (const m of [mesh(G.helmet, mats.helmet), mesh(G.visor, VISOR), mesh(G.gear, GEAR)]) { m.position.copy(neck).negate(); headGroup.add(m); }
   parent.add(headGroup, mesh(G.suit, mats.suit));
-  wheel.add(mesh(G.gloves, mats.suit));
+  wheel.add(mesh(G.gloves, mats.glove));
   const arms = [-1, 1].map(side => {
     const upper = mesh(G.upper, mats.suit), fore = mesh(G.fore, mats.suit);
     parent.add(upper, fore);
@@ -181,5 +220,5 @@ export function seatDriver(parent, wheel, head, {helmet, accent, suit}) {
     }
   };
   pose();
-  return {materials: [mats.helmet, mats.helmet.map, mats.suit], pose, head: headGroup};
+  return {materials: [mats.helmet, mats.helmet.map, mats.suit, mats.suit.map, mats.glove], pose, head: headGroup};
 }

@@ -629,6 +629,35 @@ function contactShadows(body, blob, len, width, tyres) {
   return shadow;
 }
 
+// One shadow caster for a group of parts that move together (the sprung body, a wheel), instead of one per part. Each of
+// the sun's cascades redraws every caster: 22 cars' parts were ~750 draws a frame there, 7-9 ms of the main thread, and
+// the RB22 alone is 57 meshes. The parts are merged as they stand now and stop casting; the merged mesh sits on
+// SHADOW_LAYER, which only the sun's cameras see (scene3d.js). `cache[key]`: the geometry, shared by every car built alike.
+export const SHADOW_LAYER = 3;
+const CASTER = new THREE.MeshBasicMaterial({side: THREE.DoubleSide});
+function shadowProxy(group, cache, key) {
+  group.updateWorldMatrix(true, true);
+  const inv = group.matrixWorld.clone().invert(), rel = new THREE.Matrix4(), v = new THREE.Vector3(), out = [], build = !cache[key];
+  (function walk(o) {
+    if (!o.visible) return;
+    if (o.isMesh && o.castShadow) {
+      o.castShadow = false;
+      if (build) {
+        const P = o.geometry.attributes.position, ix = o.geometry.index;
+        rel.multiplyMatrices(inv, o.matrixWorld);
+        for (let i = 0, n = ix ? ix.count : P.count; i < n; i++) { v.fromBufferAttribute(P, ix ? ix.getX(i) : i).applyMatrix4(rel); out.push(v.x, v.y, v.z); }
+      }
+    }
+    o.children.forEach(walk);
+  })(group);
+  if (build) cache[key] = Object.assign(new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(out, 3)), {userData: {shared: true}});
+  const proxy = new THREE.Mesh(cache[key], CASTER);
+  proxy.castShadow = true;
+  proxy.layers.set(SHADOW_LAYER);
+  group.add(proxy);
+}
+const rb22Casters = {};
+
 // The 2026+ car: the RB22 model (rb22.js) up close, this era's procedural car beyond `far` scene units, as a THREE.LOD
 // that the renderer switches per camera. Both levels share the procedural car's tyre-stripe and rear-light materials,
 // so setTyre and the light flash drive both. The returned parts (body, eye, cameras, effects anchors) are the RB22's,
@@ -639,6 +668,10 @@ function withRB22(far, color, num, blob, dist, liv) {
   near.paintMesh.updateWorldMatrix(true, false);  // the car's frame: its group isn't in a scene yet
   near.paintMesh.material.userData.toCar.value.copy(liveryFrame(new THREE.Box3().setFromObject(near.paintMesh), near.paintMesh.matrixWorld));
   const shadow = contactShadows(near.body, blob, near.len, near.width, near.hubs);
+  if (dist < Infinity) {  // the race: the showroom's own lamps see no SHADOW_LAYER
+    shadowProxy(near.body, rb22Casters, 'body');
+    near.wheels.forEach((w, i) => shadowProxy(w.spin, rb22Casters, i));
+  }
   const lod = new THREE.LOD(), group = new THREE.Group();
   lod.addLevel(near.group, 0);
   lod.addLevel(far.group, dist);
@@ -657,7 +690,7 @@ export function buildCar(color, num, year, blob, far = Infinity, team = null) {
   paint.userData.toCar.value.copy(liveryFrame(t.geo.paint.boundingBox));  // the era's geometry is in the car's frame
   const own = {
     paint, stripe: new THREE.MeshStandardMaterial({color: 0xd8d8d8, roughness: 0.7}),
-    helmet: helmetMaterial(new THREE.Color(color).lerp(new THREE.Color(0xffffff), 0.55), liv.accent),
+    helmet: helmetMaterial(new THREE.Color(color).lerp(new THREE.Color(0xffffff), 0.55), liv.accent, num),
     light: MAT.light.clone(),  // per car: it flashes while that car harvests energy
   };
   const group = new THREE.Group(), body = new THREE.Group(), halo = new THREE.Group();
@@ -675,6 +708,9 @@ export function buildCar(color, num, year, blob, far = Infinity, team = null) {
   if (far < Infinity) {
     const lod = new THREE.LOD(), close = new THREE.Group(), tiny = new THREE.Group();
     close.add(body, halo, wheelSet);
+    // a 2026+ car shows this level only past the RB22's range, where a steered wheel's shadow is no different: one caster
+    if (t.s.era >= 2026 && rb22Ready()) shadowProxy(close, t.casters ??= {}, 'all');
+    else shadowProxy(body, t.casters ??= {}, 'body');
     tiny.add(mesh(t.geo.paint, paint), mesh(t.far, MAT.tyre, false));
     lod.addLevel(close, 0);
     lod.addLevel(tiny, far * 5);
@@ -697,7 +733,7 @@ export function buildCar(color, num, year, blob, far = Infinity, team = null) {
   const dispose = () => {
     for (const mt of Object.values(own)) mt.dispose();
     own.helmet.map.dispose();
-    group.traverse(o => { if (o.geometry && !shared.has(o.geometry)) o.geometry.dispose(); });
+    group.traverse(o => { if (o.geometry && !shared.has(o.geometry) && !o.geometry.userData.shared) o.geometry.dispose(); });
     shadow.material.dispose();
     decal?.map.dispose();
     decal?.dispose();

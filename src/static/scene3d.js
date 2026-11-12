@@ -6,7 +6,7 @@ import {SkyMesh} from 'three/addons/objects/SkyMesh.js';
 import {CSMShadowNode} from 'three/addons/csm/CSMShadowNode.js';
 import {HDRLoader} from 'three/addons/loaders/HDRLoader.js';
 import {float, reference, renderGroup, texture, vec2, vec4, mrt} from 'three/tsl';
-import {buildCar} from './cars3d.js';
+import {buildCar, SHADOW_LAYER} from './cars3d.js';
 import {brakeStep, brakeGlow} from './telemetry.js';
 import {loadRB22, rb22Ready, STEERING_RATIO} from './rb22.js';
 import {makeMirror, renderMirrors, warmFor, warmMirrors} from './mirror.js';
@@ -41,16 +41,17 @@ let carsToken = 0, mode = 'overview', chased = null, glide = 1, trackMat = null,
 // the circuit before this one, disposed after the new one has drawn: its materials hold the compiled shaders the new
 // one reuses (disposing first deleted them, and every race switch recompiled them all: ~0.3 s)
 let stale = null;
-let drawnAt = 0, resized = true;
+let drawnAt = 0, resized = true, stageW = 0, stageH = 0;  // the stage's CSS size, kept by fit()
 let gfx = loadGraphics(), framesShown = 0, lastFrameAt = 0;
-let shadowFrame = 0, high = false, supersample = true, frameTime = 0;  // GPU quality tier (init3d) and dynamic resolution (the render loop)
+let shadowFrame = 0, high = false, autoScale = 1, frameTime = 0, calm = 0, calmNeed = 120;  // GPU quality tier (init3d) and dynamic resolution (the render loop)
 
 // Canvas pixels per CSS pixel: the high tier renders up to 2x (supersampling on a 1-1.25x display), within a 4K frame's
 // pixel budget, so a big window on a 4K monitor isn't rendered at 8K
+const MIN_AUTO = 0.75;  // Auto never goes under 75 % of the display's own pixels: below that the picture is soft, and a slow CPU isn't helped
 function pixelRatio(w = innerWidth, h = innerHeight) {
   const dpr = Math.min(devicePixelRatio, 2), budget = Math.max(dpr, Math.min(2, Math.sqrt(3840 * 2160 / (w * h))));
   if (gfx.res !== 'auto') return gfx.res > 1 ? Math.min(dpr * gfx.res, budget) : dpr * gfx.res;
-  return high && supersample ? budget : dpr;
+  return high ? Math.max(dpr * MIN_AUTO, budget * autoScale) : dpr;
 }
 const drawnView = new THREE.Matrix4(), drawnProj = new THREE.Matrix4();
 const sky0 = {sun: 3.2, env: 0.35, hemi: 0.5, lamps: 0, fog: new THREE.Color(0xc4d3e2)};
@@ -107,7 +108,7 @@ export function init3d(el) {
   high = probeGpu();
   // Reversed depth instead of the old logarithmic buffer: same range from a car's wing to the far hills, without writing
   // frag depth from every fragment, which disabled early-z across the whole scene.
-  renderer = new THREE.WebGPURenderer({antialias: true, powerPreference: 'high-performance', forceWebGL: false, reversedDepthBuffer: true});
+  renderer = new THREE.WebGPURenderer({antialias: true, powerPreference: 'high-performance', forceWebGL: false, reversedDepthBuffer: true, trackTimestamp: true});
   const canvas = document.createElement('canvas');
   canvas.style.cssText = 'display:block;width:100%;height:100%';
   mainSurface = new THREE.CanvasTarget(canvas);
@@ -163,6 +164,7 @@ export function init3d(el) {
   sun.shadow.clone = function () { return Object.assign(Object.getPrototypeOf(this).clone.call(this), {filterNode: softShadow}); };
   Object.assign(sun.shadow.camera, {near: 1, far: SIZE * 2});
   sun.shadow.camera.layers.enable(1);  // layer 1 also holds the alpha cut-out tree crowns and fences (circuit3d.js), which do cast shadows
+  sun.shadow.camera.layers.enable(SHADOW_LAYER);  // the cars' merged shadow casters, which no other camera draws
   aimSun();
   scene.add(sun, sun.target);
   csm = new CSMShadowNode(sun, {cascades: 4, maxFar: 2200 * gfx.shadowRange, mode: 'practical', lightMargin: 180});
@@ -173,7 +175,7 @@ export function init3d(el) {
   post = createPost(renderer, scene, camera, gfx);
   vfx = createVfx(scene);
   const fit = () => {
-    const w = container.clientWidth, h = container.clientHeight;
+    const w = stageW = container.clientWidth, h = stageH = container.clientHeight;
     if (!w || !h) return;  // hidden: zero-size render targets would only warn
     const pr = pixelRatio(w, h);  // it changes with browser zoom or another monitor
     mainSurface.setPixelRatio(pr);
@@ -205,16 +207,31 @@ export function init3d(el) {
     }
     if (contextRestored && !covered()) { contextRestored = false; restartOrGiveUp(); }
     // tab hidden, no size yet, or under the F1 TV viewer (it drew ~1,800 calls a frame there, beside 4K video decoding)
-    if (!container.offsetParent || !container.clientWidth || !container.clientHeight || covered()) return;
-    // dynamic resolution: averaging under ~40 fps (a weaker GPU, a laptop on battery) drops the supersampling, once.
-    // Measured only while the cars move and frames are drawn back to back; hitches (a circuit loading, shaders compiling)
-    // don't count, or loading the page alone tripped it
-    if (supersample && !gfx.fps && gfx.res === 'auto' && performance.now() - lastUpdate < 200 && performance.now() - drawnAt < 40 && dt < 0.1) {
+    // (the size is the ResizeObserver's, 0 while hidden: reading the layout here, after the replay has written to the page, forced a second layout every frame)
+    if (!stageW || !stageH || covered()) return;
+    // Dynamic resolution holds 60 fps: Auto starts supersampled (2x on a laptop's 2560x1440 panel is a 4K frame with 4x MSAA,
+    // 39 fps on an RTX 4080) and steps down while the GPU's passes take over 8 ms a frame, by as much as the overshoot asks
+    // for (their time goes with the pixel count), and back up once they take under 4. (At 9 ms, 2-4 % of frames missed
+    // 16.7 ms; at 4 ms, 0.3 %: the browser's own compositing comes on top.) Without timestamp queries it goes by the
+    // frame rate: down under ~55 fps unless the main thread itself fills the frame (fewer pixels don't help that), up only
+    // with half the frame to spare, which a 60 Hz display never shows. Measured only while the cars move and frames are
+    // drawn back to back; hitches (a circuit loading, shaders compiling) don't count, or loading the page alone tripped it.
+    if (high && (gpuMs || !gfx.fps) && gfx.res === 'auto' && performance.now() - lastUpdate < 200 && performance.now() - drawnAt < 40 && dt < 0.1) {
       frameTime += (dt - frameTime) * 0.02;  // ~50-frame average
-      if (frameTime > 1 / 40) {
-        console.info(`3D: ${(frameTime * 1000).toFixed(0)} ms a frame, supersampling off`);
-        supersample = false;
+      const pr = mainSurface.getPixelRatio(), floor = Math.min(devicePixelRatio, 2) * MIN_AUTO;
+      const busy = Object.values(stats).reduce((a, b) => a + b, 0) / 1000;  // the main thread's share of the frame, s
+      const over = gpuMs ? gpuMs > 8 : frameTime > 1 / 55 && busy < 0.8 * frameTime, under = gpuMs ? gpuMs < 4 : frameTime > 0 && frameTime < 1 / 90;
+      calm = under ? calm + 1 : 0;
+      const k = over && pr > floor ? THREE.MathUtils.clamp(Math.sqrt(gpuMs ? 6 / gpuMs : 1 / 60 / frameTime), 0.7, 0.95) : autoScale < 1 && calm > calmNeed ? 1.15 : 1;
+      if (k !== 1) {
+        autoScale = Math.min(1, autoScale * k);
         fit();
+        const now = mainSurface.getPixelRatio();
+        gpuMs *= (now / pr) ** 2;  // what the new size should cost, until the average catches up
+        frameTime = k < 1 ? 0 : 1 / 60;  // the average climbs again from nothing: ~1 s before the next step down
+        calm = 0;
+        if (k < 1) calmNeed = Math.min(calmNeed * 2, 7200);  // each step down doubles the wait before trying up again: it see-sawed every few seconds
+        console.info(`3D: resolution ${pr.toFixed(2)}x -> ${now.toFixed(2)}x`);
       }
     }
     if (lastCars && zoomNow !== zoomAim && performance.now() - lastUpdate > 100) updateCars(...lastCars);  // paused: nothing else moves the camera
@@ -243,8 +260,13 @@ export function init3d(el) {
     drawnProj.copy(camera.projectionMatrix);
     // normal bias ~1 texel per cascade: a fixed one left acne on the far cascades, whose texels are metres wide
     for (const l of csm.lights) l.shadow.normalBias = Math.max(0.02, (l.shadow.camera.right - l.shadow.camera.left) / l.shadow.mapSize.x);
-    vfx.update(dt, camera, SUN, container.clientHeight);
+    let t0 = performance.now();
+    vfx.update(dt, camera, SUN, stageH);
+    for (const c of Object.values(cars)) for (const l of c.lods) l.update(camera);
+    if (ghost) for (const l of ghost.lods) l.update(camera);
     scene.updateMatrixWorld();
+    timed('scene', t0);
+    t0 = performance.now();
     if (gfx.mirrors) renderMirrors(renderer, scene, camera, on => { for (const l of csm.lights) l.shadow.autoUpdate = on; });
     // Each cascade redraws the scene on the main thread. The far two hold what moves least on screen: every 2nd and 4th frame, on different frames
     shadowFrame++;
@@ -256,9 +278,14 @@ export function init3d(el) {
     post.focus(chased === null ? 0 : camera.position.distanceTo(controls.target), APERTURE[mode]);
     framesShown++;
     post.render(dt, 1 / Math.max(1, moving ? simRate : 1));  // a 10x replay blurs like real time, not 10x as long
+    timed('draw', t0);
+    // the GPU's own time for the frame's passes (timestamp queries; undefined where the browser has none)
+    renderer.resolveTimestampsAsync().then(ms => { if (ms > 0) gpuMs += (ms - gpuMs) * 0.05; }, () => {});
     stale?.dispose();
     stale = null;
+    t0 = performance.now();
     labels.render(scene, camera);
+    timed('tags', t0);
   };
   ready = renderer.init().then(() => {
     // the environment and background need a live device; PMREM is shared with the showroom
@@ -297,6 +324,12 @@ export function nextTier() {
 export const graphics = () => gfx;
 export const framesDrawn = () => framesShown;
 
+// Where a frame's main-thread time goes, ms, smoothed over ~20 frames: the frame-rate counter shows it (settings.js)
+const stats = {};
+let gpuMs = 0;
+export const timed = (k, t0) => { const d = performance.now() - t0; stats[k] = (stats[k] ?? d) + (d - (stats[k] ?? d)) * 0.05; };
+export const frameStats = () => gpuMs ? {...stats, gpu: gpuMs} : stats;
+
 // Applies graphics.js's settings, stores them and tells the panel (settings.js)
 export function setGraphics(patch) {
   const was = gfx;
@@ -313,7 +346,8 @@ export function setGraphics(patch) {
   post.setOptions(gfx);
   renderer.toneMappingExposure = gfx.exposure;
   if (gfx.res !== was.res) {
-    supersample = true;
+    autoScale = 1;
+    calmNeed = 120;
     frameTime = 0;
     refit?.();
   }
@@ -497,6 +531,21 @@ export function resetView() {
 
 // ---------- cars ----------
 
+// A hidden LOD level needs no matrices: the RB22 level is 79 of a car's 116 objects, and walking all 22 cars' every frame
+// was 16 % of the main thread. The loop picks the levels itself (frame), before the matrices, so a level that comes into
+// view is placed in the same frame; three would pick during the render, a frame late for them.
+function whenShown(force) { if (this.visible) THREE.Object3D.prototype.updateMatrixWorld.call(this, force); }
+function ownLods(car) {
+  car.lods = [];
+  car.group.traverse(o => {
+    if (!o.isLOD) return;
+    o.autoUpdate = false;
+    car.lods.push(o);
+    for (const l of o.levels) l.object.updateMatrixWorld = whenShown;
+  });
+  return car;
+}
+
 // drivers: [{id, num, code, color}]; year picks the era's car design
 export function setCars(drivers, onSelect, year) {
   disposeCars();
@@ -504,7 +553,7 @@ export function setCars(drivers, onSelect, year) {
   // 2026+ cars use the RB22 model up close; until it has loaded they are procedural, then the grid is rebuilt once
   if (year >= 2026 && !rb22Ready()) loadRB22().then(() => token === carsToken && setCars(drivers, onSelect, year), e => console.warn('RB22 model', e));
   for (const d of drivers) {
-    const car = buildCar(d.color, d.num, year, tex.blob, map ? m(high ? 100 : 50) : Infinity, d.team);  // the high tier keeps the detailed car twice as far
+    const car = ownLods(buildCar(d.color, d.num, year, tex.blob, map ? m(high ? 60 : 40) : Infinity, d.team));  // the detailed car is 57 draws: past 60 m it is under ~50 px wide (Settings' car detail doubles the range)
     const num = document.createElement('b');
     num.textContent = d.num ?? '';
     num.style.background = d.color;
@@ -549,7 +598,7 @@ let ghost = null;
 export function setGhost(p, ahead, year) {
   if (!p || !map || !circuit) { if (ghost) ghost.group.visible = false; return; }
   if (!ghost) {
-    const car = buildCar('#ffffff', null, year, tex.blob), mat = new THREE.MeshBasicNodeMaterial({color: 0xcfe8ff, transparent: true, opacity: 0.32, depthWrite: false});
+    const car = ownLods(buildCar('#ffffff', null, year, tex.blob)), mat = new THREE.MeshBasicNodeMaterial({color: 0xcfe8ff, transparent: true, opacity: 0.32, depthWrite: false});
     mat.mrtNode = mrt({velocity: vec4(0)});  // no motion vector of its own (post.js blur), like vfx.js's effects
     car.group.traverse(o => {
       if (!o.isMesh) return;

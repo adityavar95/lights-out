@@ -1,14 +1,14 @@
 // The stage's Settings button (top right) and its panel: every graphics, picture, display and sound setting. Changes apply at once and persist.
 import {el} from './util.js';
 import {icon} from './tvcontrols.js';
-import {setGraphics, graphics, framesDrawn} from './scene3d.js';
+import {setGraphics, graphics, framesDrawn, frameStats} from './scene3d.js';
 import {PRESETS, DEFAULTS, RANGES, presetOf} from './graphics.js';
 import {levels} from './audio.js';
 
 // [setting, label, a list of [value, text] / 'range' / nothing for a switch, tooltip]
 const SECTIONS = [
   ['Quality', [
-    ['res', 'Resolution', [['auto', 'Auto'], [0.5, '50 %'], [0.75, '75 %'], [1, '100 %'], [1.5, '150 %'], [2, '200 %']], 'Biggest effect on the GPU. Auto supersamples, and stops if the frame rate falls under 40.'],
+    ['res', 'Resolution', [['auto', 'Auto'], [0.5, '50 %'], [0.75, '75 %'], [1, '100 %'], [1.5, '150 %'], [2, '200 %']], 'Biggest effect on the GPU. Auto supersamples, and lowers the resolution until the frame rate holds 60.'],
     ['fps', 'Frame rate limit', [[0, 'None'], [120, '120 fps'], [60, '60 fps'], [30, '30 fps']], 'A limit keeps frame times even and the laptop cooler'],
     ['shadows', 'Shadows', [[0, 'Off'], [1024, 'Low'], [2048, 'Medium'], [4096, 'High']], 'Shadow map size. Off also frees the most main-thread time.'],
     ['shadowRange', 'Shadow distance', [[0.5, 'Near'], [1, 'Normal'], [1.5, 'Far']], 'Nearer is sharper, since the same map covers less ground'],
@@ -89,7 +89,8 @@ export function setupSettings(stage) {
   let drawn = 0;
   setInterval(() => {
     const n = framesDrawn();
-    if (!rate.hidden) rate.textContent = `${n - drawn} fps`;
+    // fps, then the main thread's milliseconds a frame by part (scene3d.js timed)
+    if (!rate.hidden) rate.textContent = `${n - drawn} fps · ${Object.entries(frameStats()).map(([k, v]) => `${k} ${v.toFixed(1)}`).join(' · ')}`;
     drawn = n;
   }, 1000);
   stage.append(button, menu, rate);

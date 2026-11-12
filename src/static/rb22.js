@@ -4,6 +4,7 @@
 // 2026+ car's THREE.LOD, with our procedural 2026 car as the far level. Car space as in cars3d.js: metres, +x forward,
 // +z right, tyres on y = 0, length centred on the origin.
 import * as THREE from 'three';
+import {mrt, vec4} from 'three/tsl';
 import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
 import {MeshoptDecoder} from 'three/addons/libs/meshopt_decoder.module.js';
 import {seatDriver} from './driver.js';
@@ -219,7 +220,7 @@ function screenMaterial() {
 }
 
 // The steering wheel's decal texture without its two ORACLE logos, as [x0, y0, x1, y1] fractions of the image.
-const WHEEL_LOGOS = [[250 / 1024, 934 / 1024, 770 / 1024, 1008 / 1024], [976 / 1024, 704 / 1024, 1010 / 1024, 890 / 1024]];
+const WHEEL_LOGOS = [[250 / 1024, 934 / 1024, 770 / 1024, 1008 / 1024], [900 / 1024, 690 / 1024, 1016 / 1024, 900 / 1024]];
 const WHEEL_DECALS = new WeakMap();  // source texture -> cleaned copy, shared by every car
 function wheelDecals(map) {
   if (!map?.image) return map;
@@ -234,6 +235,12 @@ function wheelDecals(map) {
   }
   return WHEEL_DECALS.get(map);
 }
+
+// The wheel's labels, one material for every car. They take the motion vector of the surface they lie on (post.js): with
+// one of their own, the motion blur smeared them into rainbow streaks down the wheel.
+let decals = null;
+const decalMaterial = m => decals ??= Object.assign(new THREE.MeshStandardNodeMaterial({name: m.name, map: wheelDecals(m.map), transparent: true,
+  depthWrite: false, roughness: m.roughness, metalness: m.metalness}), {mrtNode: mrt({velocity: vec4(0)})});
 
 // ---------- one car ----------
 
@@ -266,7 +273,7 @@ export function buildRB22({paint, accent, ink, helmet, num, stripe, light}) {
       if (!discMats.has(o.material)) discMats.set(o.material, brakeMat(o.material));
       o.material = discMats.get(o.material);
     } else if (o.name === 'rain-light') o.material = light;  // flashes with ERS harvesting and in the wet
-    else if (name.startsWith('sw_decals')) own.push(o.material = Object.assign(o.material.clone(), {map: wheelDecals(o.material.map)}));
+    else if (name.startsWith('sw_decals')) o.material = decalMaterial(o.material);
     else if (name.startsWith('gp21_LCD')) o.material = screenMaterial();
     if (o.name.startsWith('mirror-')) o.geometry = o.geometry.clone();  // the mirror stretches its glass per car
   });
@@ -304,7 +311,7 @@ export function buildRB22({paint, accent, ink, helmet, num, stripe, light}) {
 
   // the model has no driver: ours sits behind the steering wheel, hands on its grips (driver.js)
   const head = new THREE.Vector3(sc.x - 0.62, 0.70 - ground, 0);  // in front of the roll hoop, chest under the model's belts
-  const driver = seatDriver(car, steeringWheel, head, {helmet, accent, suit: paint.userData.uBase.value});
+  const driver = seatDriver(car, steeringWheel, head, {helmet, accent, suit: paint.userData.uBase.value, num});
   own.push(...driver.materials);
 
   // the sprung body: everything but the wheels, so it can roll, pitch and heave over them
