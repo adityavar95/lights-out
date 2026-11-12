@@ -37,7 +37,7 @@ const SKIES = [
 // One renderer for the race and the showroom, each with its own CanvasTarget: two WebGPU devices couldn't share pipelines,
 // textures or the PMREM environment, and every shader the showroom needs would compile twice.
 let container, renderer, mainSurface, pmrem, labels, scene, camera, controls, world, sun, csm, post, vfx, hemi, deck = null, cars = {}, map = null, tex = null;
-let carsToken = 0, mode = 'overview', chased = null, glide = 1, trackMat = null, simRate = 0, lastUpdate = 0, wettable = [], circuit = null, fly = null;
+let cloudShadow = null, carsToken = 0, mode = 'overview', chased = null, glide = 1, trackMat = null, simRate = 0, lastUpdate = 0, wettable = [], circuit = null, fly = null;
 // the circuit before this one, disposed after the new one has drawn: its materials hold the compiled shaders the new
 // one reuses (disposing first deleted them, and every race switch recompiled them all: ~0.3 s)
 let stale = null;
@@ -511,6 +511,8 @@ export function setTrack(pts, span, corners, startKnown, mpu, width = 13, ann = 
   ann ??= {h: new Array(n).fill(0), bank: new Array(n).fill(0), kerb: new Array(n).fill(''), tunnel: null, wall: 10, preset: null};
   circuit = buildCircuit(world, {pts, map, tex, width, startKnown, ann, corners, SIZE});
   trackMat = circuit.trackMat;
+  cloudShadow = circuit.cloud;
+  if (weather) cloudShadow.value = 0.6 * Math.max(0, weather.cloud - 0.1) / 0.9 + 0.2;
   circuit.night(sky0.lamps);
   applyDetail();
   wettable = circuit.wettable;  // scenery that turns darker and glossier in the rain
@@ -683,6 +685,7 @@ export function setWeather({cloud, rain, wetLine, wetOff}) {
     trackMat.userData.normalScale.value = 1 - 0.8 * wet;  // the water film smooths over the aggregate
   }
   for (const m of wettable) m.roughness = 0.9 - 0.6 * wet;
+  if (cloudShadow) cloudShadow.value = 0.2 + 0.6 * Math.max(0, cloud - 0.1) / 0.9;  // darker under more cloud; the sky at 0 is a clear one
   vfx.rain = rain;
 }
 

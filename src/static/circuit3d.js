@@ -4,7 +4,7 @@
 import * as THREE from 'three';
 import {CSS2DObject} from 'three/addons/renderers/CSS2DRenderer.js';
 import {mergeGeometries} from 'three/addons/utils/BufferGeometryUtils.js';
-import {Fn, uniform, texture, uv, vec2, vec3, vec4, float, fract, abs, floor as cellOf, mrt, fwidth, positionGeometry, normalViewGeometry, mix, smoothstep, clamp, dot, min} from 'three/tsl';
+import {Fn, uniform, texture, uv, vec2, vec3, vec4, float, fract, abs, floor as cellOf, mrt, fwidth, positionGeometry, normalViewGeometry, mix, smoothstep, clamp, dot, min, time} from 'three/tsl';
 import {asphalt, noise} from './track3d.js';
 import {racingLine} from './sim.js';
 import {garages} from './pit3d.js';
@@ -224,11 +224,13 @@ export function buildCircuit(world, {pts, map, tex, width, startKnown, ann, corn
   // Satellite imagery (satellite()) replaces that over the area it covers, fading out at its edges; the grass tile's
   // grain stays on it as fine detail the ~1 m imagery can't show up close.
   // tufts and soil in the light from a photographed ground's normal and roughness (textures3d.js ground), under any colour
+  const cloudAmt = uniform(0.3);  // how dark the cloud shadows are: 0 under a clear sky, more under cloud (scene3d.js setWeather)
   const grass = mat({map: tex.grass, normalMap: tex.ground.normalMap, roughnessMap: tex.ground.roughnessMap},
                     0xffffff, {normalScale: new THREE.Vector2(0.9, 0.9)});
   // The satellite image swaps in by changing this node's texture, so the material needn't recompile when it lands
   const satM = uniform(new THREE.Matrix3()), suv = satM.mul(vec3(positionGeometry.xz, 1)).xy, satNode = texture(BLANK, suv), satOn = uniform(0), satMean = uniform(new THREE.Color());
   Object.assign(grass.userData, {sat: satNode, satM, satOn, satMean});
+  grass.userData.cloud = cloudAmt;
   grass.colorNode = Fn(() => {
     const g = positionGeometry.xz, gm = g.mul(map.mps);  // metres
     const patches = noise(gm.div(160)).mul(0.7).add(noise(gm.div(40).add(17)).mul(0.3));
@@ -243,7 +245,10 @@ export function buildCircuit(world, {pts, map, tex, width, startKnown, ann, corn
     const around = mix(tile.rgb.mul(patchTint), satMean.mul(grain).mul(patchTint).mul(fields), satOn);  // mean colour of the image
     // the imagery is ~1 m a pixel: ground grain at 1.5 and 6 m gives it something to resolve from close by
     const near = noise(gm.div(1.5).add(3)).mul(0.14).add(noise(gm.div(6)).mul(0.14)).add(0.86);
-    return mix(around, satNode.rgb.mul(grain).mul(near), cover);
+    // cloud shadows: soft dark patches drifting over the ground on the wind, a few hundred metres across
+    const cloud = smoothstep(0.45, 0.8, noise(g.mul(map.mps).div(260).add(time.mul(vec2(0.012, 0.004)))).mul(0.6).add(noise(gm.div(90).sub(time.mul(0.02))).mul(0.4)));
+    const shade = float(1).sub(cloud.mul(cloudAmt));
+    return mix(around, satNode.rgb.mul(grain).mul(near), cover).mul(shade);
   })();
   add(new THREE.Mesh(ground, grass)).receiveShadow = true;
   // height of the terrain mesh under scene (x, z): bilinear between the grid vertices (row j = z, column i = x)
@@ -479,7 +484,7 @@ export function buildCircuit(world, {pts, map, tex, width, startKnown, ann, corn
   let laneMeshes = [], laneMat, laneLine;
 
   return {
-    trackMat, wettable, surface, groundAt, pts, half, night: side.night,
+    trackMat, cloud: cloudAmt, wettable, surface, groundAt, pts, half, night: side.night,
     // graphics.js settings; hiding also spares them their draw calls in every shadow cascade
     show({trees, trackside}) {
       for (const o of [trunks, cones, leaves]) o.visible = trees;
