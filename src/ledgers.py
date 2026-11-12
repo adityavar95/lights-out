@@ -27,6 +27,13 @@ def stationary(_year: int, _round: int, session: dict) -> list:
     return [[str(p["driver_number"]), p.get("lap_number"), p.get("stop_duration"), p.get("pit_duration")] for p in _feed(session, "pit")]
 
 
+def stints(_year: int, _round: int, session: dict) -> list:
+    """[driver number, first lap, last lap, compound, tyre age at its start] of a race's stints, as the GPS replay keeps
+    them, in 1 OpenF1 request: the pace table's compounds, without the ~30 a replay costs to build."""
+    return [[str(s["driver_number"]), s.get("lap_start"), s.get("lap_end"), s.get("compound"), s.get("tyre_age_at_start")]
+            for s in _feed(session, "stints")]
+
+
 def _lights_out(race_control: list, session: dict, first_overtake: str) -> str:
     """When the race started: race control's first SESSION STARTED of this session (the feed also holds earlier days').
     Within a second of lap 1's start in OpenF1's laps (measured: Mexico 2026)."""

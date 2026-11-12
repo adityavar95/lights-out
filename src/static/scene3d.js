@@ -54,7 +54,7 @@ function pixelRatio(w = innerWidth, h = innerHeight) {
 }
 const drawnView = new THREE.Matrix4(), drawnProj = new THREE.Matrix4();
 const sky0 = {sun: 3.2, env: 0.35, hemi: 0.5, lamps: 0, fog: new THREE.Color(0xc4d3e2)};
-let skyAt = 0, autoSky = 0, skyToken = 0, weather = null;  // clear-sky lighting, for the weather to dim
+let skyAt = 0, autoSky = 0, skyToken = 0, weather = null, skyTargets = [];  // clear-sky lighting, for the weather to dim
 // Settings' Auto follows the session's sun (setDaylight), and takes the Overcast sky over a wet or rainy daytime track
 const skyIndex = () => gfx.sky !== 'auto' ? gfx.sky : weather?.cloud > 0.5 && autoSky !== 3 ? 2 : autoSky;
 const RAIN_GREY = new THREE.Color(0.3, 0.32, 0.35);
@@ -203,7 +203,7 @@ export function init3d(el) {
       deck.draw(dt);
       renderer.setCanvasTarget(mainSurface);  // left on the main canvas between frames, so it hears window resizes
     }
-    if (contextRestored && !covered()) { contextRestored = false; location.reload(); }
+    if (contextRestored && !covered()) { contextRestored = false; restartOrGiveUp(); }
     // tab hidden, no size yet, or under the F1 TV viewer (it drew ~1,800 calls a frame there, beside 4K video decoding)
     if (!container.offsetParent || !container.clientWidth || !container.clientHeight || covered()) return;
     // dynamic resolution: averaging under ~40 fps (a weaker GPU, a laptop on battery) drops the supersampling, once.
@@ -272,7 +272,8 @@ export function init3d(el) {
     sky.scale.setScalar(50);
     envScene.add(sky);
     clearWarmTarget();
-    scene.environment = pmrem.fromScene(envScene).texture;  // the same sky in paint reflections
+    skyTargets = [pmrem.fromScene(envScene)];
+    scene.environment = skyTargets[0].texture;  // the same sky in paint reflections
     scene.environmentIntensity = 0.35;  // the raw sky is HDR-bright and washes colours out
     sky.geometry.dispose();
     sky.material.dispose();
@@ -373,7 +374,6 @@ export function setDaylight(lat, lon, at) {
   if (scene && skyIndex() !== skyAt) loadSky(SKIES[skyAt = skyIndex()]);
 }
 
-export const graphicsTier = () => presetOf(gfx);
 
 // The HDR panorama becomes the background and, PMREM-prefiltered (a mip per roughness level), the image-based light for
 // diffuse ambient and reflections. The sun light is aimed at its brightest texel so shadows agree with the sky: texel
@@ -398,17 +398,19 @@ function loadSky(preset) {
     for (let x = 0; x < w; x++) for (let c = 0; c < 3; c++) fog[c] += half(data[(row + x) * 4 + c]) / w;
     scene.fog.color.setRGB(...fog);
     hdr.mapping = THREE.EquirectangularReflectionMapping;
-    const oldEnv = scene.environment, oldBack = scene.background;
+    // the render targets, not their textures: three frees a target's texture only with the target (texture.dispose() is a
+    // no-op on one), so each change of sky left ~70 MB of cube map and its PMREM on the GPU
+    const old = skyTargets;
     clearWarmTarget();
-    scene.environment = pmrem.fromEquirectangular(hdr).texture;
+    skyTargets = [pmrem.fromEquirectangular(hdr), new THREE.CubeRenderTarget(h / 2).fromEquirectangularTexture(renderer, hdr)];
+    scene.environment = skyTargets[0].texture;
     scene.environmentIntensity = sky0.env = preset.env;
     sky0.fog.copy(scene.fog.color);
     // the background as a GPU cube map (the size three picks itself), so the panorama's pixels (64 MB at 4k) can go:
     // kept as scene.background they stayed in the JS heap for the page's life
-    scene.background = new THREE.CubeRenderTarget(h / 2).fromEquirectangularTexture(renderer, hdr).texture;
+    scene.background = skyTargets[1].texture;
     hdr.dispose();
-    oldEnv?.dispose();
-    if (oldBack?.isTexture) oldBack.dispose();
+    for (const t of old) t.dispose();
     hemi.intensity = sky0.hemi = preset.hemi;  // the HDRI now supplies the ambient light
     sky0.sun = preset.sun;
     sky0.lamps = preset.lamps;
@@ -446,9 +448,22 @@ const m = metres => metres / map.mps;  // metres -> scene units
 // pts: 2D map outline; corners: [[x, y, number]]; startKnown: pts[0] is the line; mpu: metres per map unit; width: metres;
 // ann: circuits.js annotate() (heights, banking, kerbs, tunnel, barriers), flat without it. Frees the previous circuit
 // and cars, and flies the camera to the new overview instead of cutting.
-let contextRestored = false, groundWorker = null, refit = null;
+// cancelGround: stops the ground worker still fetching, and closes its loading row and setGround's wait, which only its own answer did
+let contextRestored = false, cancelGround = null, refit = null;
+// a device lost again on every start would reload for ever: after two reloads inside a minute, stop and say so
+function restartOrGiveUp() {
+  let times = [];
+  try { times = JSON.parse(sessionStorage.getItem('gpuReloads') || '[]').filter(t => Date.now() - t < 60e3); } catch {}  // blocked storage: reload as before
+  if (times.length < 2) {
+    try { sessionStorage.setItem('gpuReloads', JSON.stringify([...times, Date.now()])); } catch {}
+    location.reload();
+    return;
+  }
+  renderer.setAnimationLoop(null);
+  container.append(Object.assign(document.createElement('p'), {className: 'empty', textContent: 'The graphics device keeps failing. Reload the page to try again.'}));
+}
 export function setTrack(pts, span, corners, startKnown, mpu, width = 13, ann = null) {
-  groundWorker?.terminate();  // its imagery is for the circuit going away (up to 256 MB)
+  cancelGround?.();  // its imagery is for the circuit going away (up to 256 MB)
   stale?.dispose();  // a second switch before a frame was drawn
   stale = circuit;
   circuit = null;
@@ -537,8 +552,7 @@ function disposeCars() {
     world.remove(c.group);
     c.tag.element.remove();  // CSS2DObject only drops its DOM element when removed itself, not with its parent group
     c.dispose();
-    c.haze.geometry?.dispose();
-    c.haze.material?.dispose();
+    c.haze.geometry?.dispose();  // not its material: vfx.js gives every car the one hazeMat, and disposing it recompiled it on each new grid
   }
   cars = {};
   crews.clear();
@@ -603,19 +617,19 @@ function maxTexture() {
 }
 
 export async function setGround(year, round, maxPx = 2048) {
-  groundWorker?.terminate();
+  cancelGround?.();
   const c = circuit, full = Math.min(high ? 8192 : 4096, maxTexture());  // high tier: one zoom level sharper (~0.5 m a pixel)
   if (!c) return;
   const xs = c.pts.map(p => (p[0] - map.cx) * map.k), zs = c.pts.map(p => (p[1] - map.cy) * map.k), pad = m(500);
   const g = await new Promise(done => {  // the fit, the imagery and its vegetation: groundwork.js, on a worker thread
-    const w = groundWorker = new Worker(new URL('./groundwork.js', import.meta.url), {type: 'module'});
+    const w = new Worker(new URL('./groundwork.js', import.meta.url), {type: 'module'});
+    const end = (answer, note) => { w.terminate(); cancelGround = null; stageDone('ground', note); done(answer); };
+    cancelGround = () => end({}, 'cancelled');
     w.onmessage = e => {
       if (e.data?.progress !== undefined) return stage('ground', 'Satellite ground', e.data.progress);
-      w.terminate();
-      if (e.data?.image) stageDone('ground'); else stageDone('ground', 'offline: procedural grass');
-      done(e.data);
+      end(e.data, e.data?.image ? undefined : 'offline: procedural grass');
     };
-    w.onerror = e => { w.terminate(); stageDone('ground', 'offline: procedural grass'); done({error: e.message || 'worker failed'}); };
+    w.onerror = e => end({error: e.message || 'worker failed'}, 'offline: procedural grass');
     stage('ground', 'Satellite ground');
     w.postMessage({url: `/api/geo/${year}/${round}`, pts: c.pts, map: {k: map.k, cx: map.cx, cy: map.cy}, L: SIZE / 2,
       box: [Math.min(...xs) - pad, Math.max(...xs) + pad, Math.min(...zs) - pad, Math.max(...zs) + pad],

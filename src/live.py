@@ -45,6 +45,8 @@ def merge(base, update):
         return base
     if isinstance(base, list) and isinstance(update, dict):
         for k, v in update.items():
+            if not k.isdigit():  # a marker key, not an index: int() would raise and drop the connection each time
+                continue
             i = int(k)
             if i < len(base):
                 base[i] = merge(base[i], v)

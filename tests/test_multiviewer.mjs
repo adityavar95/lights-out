@@ -1,6 +1,15 @@
 // Run: node tests/test_multiviewer.mjs  — checks the F1 TV multiviewer's telemetry timing (multiviewer.js).
 import assert from 'node:assert/strict';
-import {short, sessionsOf, lead, aerialTiles} from '../src/static/stream.js';
+import {short, sessionsOf, lead, aerialTiles, upcoming} from '../src/static/stream.js';
+
+{  // the header's countdown: nothing left this season, so next season's first session (app.js nextSession asks for that list)
+  const now = new Date('2026-12-10T00:00:00Z');
+  const done = [{season: '2026', round: '24', date: '2026-12-06', time: '13:00:00Z'}];
+  const next = [{season: '2027', round: '1', date: '2027-03-07', time: '04:00:00Z', 'FirstPractice.date': '2027-03-05', 'FirstPractice.time': '01:30:00Z'}];
+  assert.equal(upcoming(done, now).length, 0);
+  const first = upcoming(next, now)[0];
+  assert.deepEqual([first.r.season, first.name, first.d.toISOString()], ['2027', 'Practice 1', '2027-03-05T01:30:00.000Z']);
+}
 import {sessionName, telAt, launchAt, sessionStart, renditions, playError, arrange, goLive} from '../src/static/multiviewer.js';
 import {radioList} from '../src/static/radiopanel.js';
 import {broadcastAt, pickVideo} from '../src/static/commentary.js';

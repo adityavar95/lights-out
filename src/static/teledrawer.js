@@ -49,7 +49,6 @@ export function setupDrawer(stage) {
 export function toggleDrawer(open = !D.open) {
   D.open = open;
   D.panel.hidden = !open;
-  if (open) dispatchEvent(new CustomEvent('f1:drawer'));  // the stage's cluster and this show the same numbers
   document.body.toggleAttribute('data-drawer', open);
   return open;
 }

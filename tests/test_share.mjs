@@ -1,6 +1,6 @@
 // Shareable state: the hash format, old links, and what a link may not carry
 import assert from 'node:assert/strict';
-import {parseHash, formatHash} from '../src/static/share.js';
+import {parseHash, formatHash, held} from '../src/static/share.js';
 
 // round trip
 const full = '#2026/19/replay?t=1234.5&focus=VER&session=Qualifying&cmp=VER:12,NOR:15';
@@ -62,5 +62,13 @@ for (const c of ['VER:12', 'VER:12,NOR:15,LEC:1', 'VER:x,NOR:1', 'VER:0,NOR:1', 
 assert.equal(formatHash({year: 2026, round: 1, tab: 'replay', t: -1}), '#2026/1/replay');  // writing checks too
 assert.equal(formatHash({year: 2026, round: 1, tab: 'replay', t: NaN, cmp: [{driver: 'VER', lap: 1}]}), '#2026/1/replay');
 assert.equal(formatHash({year: 'x', round: 1}), '');
+
+// a link's moment stays in the address while the replay is still on it
+assert(held(s, {session: 'Qualifying'}));  // still loading: no time yet
+assert(held(s, {session: 'Qualifying', t: 1234.9}));  // paused on it
+assert(!held(s, {session: 'Qualifying', t: 1240}));  // played or seeked
+assert(!held(s, {t: 1234.5}));  // another session (the race)
+assert(held(parseHash('#2026/1/replay?t=50'), {t: 50.4}));  // no session = the race
+assert(held(parseHash('#2026/1/replay?focus=VER'), {t: 900}));  // no time in the link: nothing to move off
 
 console.log('test_share: ok');

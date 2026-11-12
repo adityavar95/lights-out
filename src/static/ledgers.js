@@ -1,5 +1,7 @@
-// The Results tab's two ledgers, each fetched when its section is opened: the pit-stop league table and the overtake ledger.
-import {el, failed, get, skeleton, teamColor, th, trackStatus, lastBefore, csvButton} from './util.js';
+// The Results tab's sections, each fetched when it is opened: the pit-stop league table, the overtake ledger, and from a
+// session's own laps (quali.js) qualifying's evolution and practice's long runs.
+import {el, failed, get, skeleton, teamColor, th, trackStatus, lastBefore, csvButton, fmtLap} from './util.js';
+import {qualiEvolution, longRuns, MIN_RUN, SPREAD, LIMIT} from './quali.js';
 
 export const PIT_WINDOW = 30;  // s either side of a stop: OpenF1's stop date is near the car leaving the lane
 export const MAX_STOP = 60;    // s of pit-lane time: longer is a red flag or a garage repair, not a pit stop
@@ -168,8 +170,67 @@ async function overtakeParts(year, round, results) {
       el('td', {}, driverCell(label(r.a))), el('td', {}, driverCell(label(r.b))), el('td', {class: 'num'}, r.position ?? '')))) : none('None reported in this race.')];
 }
 
-// results: the race's, empty before it has run: then there's nothing to add. jol: app.js's Jolpica fetch
-export function resultLedgers(year, round, results, jol) {
-  if (!results.length) return [];
-  return [section('Pit-stop league table', () => pitParts(year, round, results, jol)), section('Overtake ledger', () => overtakeParts(year, round, results))];
+// A session's laps (/api/sessionlaps), drawn by draw(data). They come from its GPS replay: when that isn't built yet the box
+// asks first, since a build is ~30 requests of OpenF1's 30 a minute.
+function sessionBox(year, round, session, draw) {
+  const box = el('div'), url = `/api/sessionlaps/${year}/${round}?session=${encodeURIComponent(session)}`;
+  const run = build => {
+    box.replaceChildren(skeleton());
+    get(url + (build ? '&build=1' : '')).then(d => box.replaceChildren(...draw(d).filter(Boolean)), e => box.replaceChildren(...(e.message === 'NOT_BUILT'
+      ? [note(`${session}'s laps aren't on this computer yet. Fetching them takes about 30 requests to OpenF1 and up to a minute.`),
+        el('button', {class: 'pill', onclick: () => run(true)}, 'Fetch the laps')]
+      : [failed(e, () => run(build))])));
+  };
+  run(false);
+  return box;
+}
+
+// the replay's own drivers (the session may have run before the race has results)
+const payloadLabel = drivers => {
+  const by = Object.fromEntries((drivers ?? []).map(d => [String(d.id), d]));
+  return num => ({code: by[num]?.code ?? `#${num}`, color: by[num]?.color ?? 'var(--muted)'});
+};
+const signed = (x, d = 3) => `${x < 0 ? '-' : '+'}${Math.abs(x).toFixed(d)}`;  // an ASCII minus: app.js sortTable reads it as a number
+
+function qualiParts(year, round, d) {
+  const {split, rows, falls, bests} = qualiEvolution(d), label = payloadLabel(d.drivers), names = split ? ['Q1', 'Q2', 'Q3'] : ['Best'];
+  if (!rows.length) return [none('No timed laps in this session.')];
+  const head = ['#', 'Driver', ...names], fallHead = [split ? 'Part' : '#', 'Driver', 'Lap', 'Gained'];
+  return [note(split ? `Each driver's best lap in each part, from OpenF1's lap times, with the gap to that part's best. Laps the stewards deleted are left out, and so is a lap over ${Math.round(LIMIT * 100)} % of the part's best. Sorted by the last part reached: the grid before penalties.`
+    : "Each driver's best lap, from OpenF1's lap times. Race control doesn't show three parts for this session, so it isn't split."),
+    bar(split ? 'Best lap by part' : 'Best laps', csvButton(`qualifying_${year}_${round}`, head, () => rows.map((r, i) => [i + 1, label(r.num).code, ...r.times.map(t => fmtLap(t))]))),
+    table(head, rows.map((r, i) => el('tr', {}, el('td', {class: 'num'}, i + 1), el('td', {}, driverCell(label(r.num))),
+      r.times.map((t, k) => el('td', {class: 'num'}, t === null ? '' : t === bests[k] ? el('b', {}, fmtLap(t)) : [fmtLap(t), el('span', {class: 'muted small'}, ` +${secs(t - bests[k])}`)]))))),
+    el('h3', {}, 'The fastest lap, as it fell'),
+    table(fallHead, falls.map((f, i) => el('tr', {}, el('td', {class: 'num'}, split ? names[f.part] : i + 1), el('td', {}, driverCell(label(f.num))),
+      el('td', {class: 'num'}, fmtLap(f.time)), el('td', {class: 'num'}, f.gain === null ? '' : signed(-f.gain)))))];
+}
+
+function runParts(year, round, d) {
+  const runs = longRuns(d), label = payloadLabel(d.drivers), head = ['Driver', 'Tyre', 'Tyre age', 'Laps', 'Count', 'Mean', 'Trend (s/lap)'];
+  if (!runs.length) return [none(`Nobody ran ${MIN_RUN} steady laps in a row in this session.`)];
+  return [note(`Runs of ${MIN_RUN} or more laps in a row on one set of tyres, each within ${SPREAD * 100} % of the run's median: a push lap, a cool-down or traffic ends a run. Fastest mean first. Tyre age is the set's laps when its stint began. Trend is how the lap time moved per lap: fuel burning off quickens a car and tyre wear slows it, and this is the two together. Fuel loads aren't known, so the means don't compare cars exactly.`),
+    bar('Long runs', csvButton(`longruns_${year}_${round}_${d.session.replace(/ /g, '')}`, head, () => runs.map(r => [label(r.num).code, r.compound ?? '', r.age ?? '', `${r.from}-${r.to}`, r.laps, fmtLap(r.mean), +r.slope.toFixed(3)]))),
+    table(head, runs.map(r => el('tr', {}, el('td', {}, driverCell(label(r.num))), el('td', {}, r.compound ?? ''), el('td', {class: 'num'}, r.age ?? ''),
+      el('td', {class: 'num'}, `${r.from}–${r.to}`), el('td', {class: 'num'}, r.laps), el('td', {class: 'num'}, fmtLap(r.mean)), el('td', {class: 'num'}, signed(r.slope)))))];
+}
+
+// one practice session at a time, Practice 2 first where there is one: teams run their race simulations in it
+function practiceParts(year, round, names) {
+  const holder = el('div'), show = name => holder.replaceChildren(sessionBox(year, round, name, d => runParts(year, round, d)));
+  const first = names.includes('Practice 2') ? 'Practice 2' : names.at(-1);
+  show(first);
+  return [names.length > 1 && el('label', {class: 'muted small'}, 'Session ', el('select', {onchange: e => show(e.target.value)},
+    names.map(n => el('option', {selected: n === first}, n)))), holder];
+}
+
+// results: the race's, empty before it has run. sessions: the weekend's sessions that have started (the session list's names).
+// jol: app.js's Jolpica fetch
+export function resultLedgers(year, round, results, jol, sessions = []) {
+  const practice = sessions.filter(s => s.startsWith('Practice'));
+  return [
+    ...(results.length ? [section('Pit-stop league table', () => pitParts(year, round, results, jol)), section('Overtake ledger', () => overtakeParts(year, round, results))] : []),
+    year >= 2023 && sessions.includes('Qualifying') && section('Qualifying evolution', async () => [sessionBox(year, round, 'Qualifying', d => qualiParts(year, round, d))]),
+    year >= 2023 && practice.length && section('Practice long runs', async () => practiceParts(year, round, practice)),
+  ].filter(Boolean);
 }

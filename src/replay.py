@@ -34,6 +34,7 @@ class OpenF1Locked(ReplayUnavailable):
 
 _sent: deque = deque(maxlen=30)  # when the last 30 OpenF1 requests went out, across every thread
 _sent_lock = Lock()
+_http = requests.Session()  # one kept-alive connection: a new one cost ~450 ms of each of a build's ~30 requests
 
 
 def _throttle():
@@ -50,7 +51,7 @@ def _throttle():
 def openf1(path: str) -> list:
     for attempt in range(6):
         _throttle()
-        r = requests.get(OPENF1 + path, timeout=120)
+        r = _http.get(OPENF1 + path, timeout=120)
         if r.status_code == 429:  # free tier allows ~3 req/s and 30 req/min
             time.sleep(3 * (attempt + 1))
             continue
@@ -87,14 +88,17 @@ def save(path: Path, data):
 
 
 LISTS = CACHE.parent / "openf1"
-_lists: dict = {}  # (kind, year) -> season list, for the server's lifetime; an empty answer isn't kept, so it's asked again
+_lists: dict = {}  # (kind, year) -> (fetched at, season list); an empty answer isn't kept, so it's asked again
+LISTS_TTL = 6 * 3600  # s: this season's schedule changes (a moved session, a corrected end), and the LIVE button reads it
 
 
 def _season_list(kind: str, year: int) -> list:
-    """A season's meetings or sessions (OpenF1 lists the whole season ahead). The last good copy is kept on disk, so
-    cached replays still open while OpenF1 is locked during a live session."""
-    if (kind, year) in _lists:
-        return _lists[kind, year]
+    """A season's meetings or sessions (OpenF1 lists the whole season ahead): a past season's for the server's lifetime,
+    this one's asked again after LISTS_TTL. The last good copy is kept on disk, so cached replays still open while
+    OpenF1 is locked during a live session."""
+    hit = _lists.get((kind, year))
+    if hit and (year < datetime.now(timezone.utc).year or time.time() - hit[0] < LISTS_TTL):
+        return hit[1]
     saved = LISTS / f"{kind}_{year}.json"
     try:
         rows = openf1(f"{kind}?year={year}")
@@ -102,12 +106,15 @@ def _season_list(kind: str, year: int) -> list:
             save(saved, rows)
         elif saved.exists():
             rows = json.loads(saved.read_text())
-    except OpenF1Locked:
-        if not saved.exists():
+    except Exception as e:
+        if hit:  # a refresh that failed: the list it had still stands
+            rows = hit[1]
+        elif isinstance(e, OpenF1Locked) and saved.exists():
+            rows = json.loads(saved.read_text())
+        else:
             raise
-        rows = json.loads(saved.read_text())
     if rows:
-        _lists[kind, year] = rows
+        _lists[kind, year] = (time.time(), rows)
     return rows
 
 
@@ -203,6 +210,14 @@ def _finished(session: dict) -> bool:
 REPLAY_LOCKS: dict[int, Lock] = {}  # a second request for a session being built waits for its cache, not ~30 more calls
 RECENT_TTL = 300  # s: how long a session too recent for the disk cache keeps its build (OpenF1 is still filling it in)
 _recent: dict = {}  # session_key -> (built at, replay)
+
+
+def saved_replay(year: int, race_date: str, session_name: str) -> bytes | None:
+    """A session's GPS replay as it lies on disk, for the route to send as it is: parsing and encoding it again took
+    130 ms of a 150 ms request (5 MB, gzip included). None when it isn't built yet."""
+    session = find_session(year, race_date, session_name) if year >= 2023 else None
+    path = session and CACHE / f"{session['session_key']}.json"
+    return path.read_bytes() if path and path.exists() else None
 
 
 def gps_replay(session: dict) -> dict:

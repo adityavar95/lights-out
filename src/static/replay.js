@@ -8,7 +8,8 @@ import {markLayer, gpsMarks, lapMarks, NO_MARKS} from './scrubmarks.js';
 import {get, el, rows, failed, teamColor, fmtClock, fmtLap, lastBefore, trackStatus, led, covered, dropUp, count} from './util.js';
 import {init3d, setTrack, setCars, updateCars, setView, setParts, setTyre, setGround, setPitLane, setStartLights, setDaylight, nextSky, nextTier, announce, hasCockpitWheel} from './scene3d.js';
 import {setupOnboard, setCameraUi, setWheelAngle, nextCamera} from './onboard.js';
-import {fetchLive, liveInfo, liveDrivers, liveFeeds, liveStatus, liveClock, liveState, liveGps, hasGps, gpsAt, liveCar, resetGps} from './live.js';
+import {liveInfo, liveStatus, liveClock} from './live.js';
+import {setupLive} from './replaylive.js';
 import {setupDrawer, toggleDrawer, updateDrawer} from './teledrawer.js';
 import {toggleCars} from './carsdeck.js';
 import {setupHud, setRadar, renderRadar, renderFocus, renderFeed, STATUS} from './hud.js';
@@ -239,79 +240,10 @@ function idleHint() {
     : S.track ? 'Press ▶ to watch the session' : 'No track map for this circuit. Press ▶ to load the session');
 }
 
-// Live (or most recent) session from F1's free live timing feed, refreshed every second.
-export async function showLive() {
-  reset({live: true, year: new Date().getFullYear()});
-  resetGps();
-  const token = S.token;
-  setOverlay('Connecting to F1 live timing…', true);
-  let first;
-  try {
-    first = await fetchLive();
-  } catch (e) {
-    if (token === S.token) showFailed(e, showLive);
-    return;
-  }
-  if (token !== S.token) return;
-  if (!first.topics.DriverList) return setOverlay(first.error ? `Live timing unavailable: ${first.error}` : 'No live timing data yet.');
-  S.track = await fetch('/api/live/track').then(r => (r.ok ? r.json() : null)).catch(() => null);  // not cached: changes per event
-  if (token !== S.token) return;
-  drawTrack(S.track?.x, S.track?.y, S.track?.rotation ?? 0, S.track?.corners ?? [], !!S.track, 0.1);
-  // where each mini-sector starts, as a fraction of the outline (MultiViewer lists the boundaries after the line)
-  S.ms = S.track?.minisectors?.length ? [0, ...S.track.minisectors.map(i => S.proj.cum[i] / S.proj.cum.at(-1)), 1] : null;
-  const info = liveInfo(first.topics);
-  prepare({mode: 'live', session: info.title, drivers: liveDrivers(first.topics), intervals: [], duration: 1});
-  applyLive(first);
-  setOverlay('');
-  S.playing = true;
-  requestAnimationFrame(function frame() {
-    if (token !== S.token) return;
-    if (!covered()) render(false);
-    requestAnimationFrame(frame);
-  });
-  (async function poll() {  // a couple of seconds behind the track at most: feed latency + this 1 s refresh
-    while (token === S.token) {
-      await new Promise(r => setTimeout(r, 1000));
-      try {
-        const next = await fetchLive();
-        if (token === S.token && next.topics.DriverList) applyLive(next);
-      } catch (e) { /* keep showing the last state; the next poll retries */ }
-    }
-  })();
-}
-
-function applyLive({topics, auth_error}) {  // one /api/live response
-  const info = liveInfo(topics);
-  S.live = topics;
-  S.liveInfo = info;
-  liveGps(topics, Date.now());
-  S.liveCar = id => liveCar(topics, id, Date.now());  // live ids are racing numbers, like the feed's keys
-  Object.assign(S.data, liveFeeds(topics, info.origin), {race: info.race, total_laps: topics.LapCount?.TotalLaps ?? '–'});
-  S.t = (Date.now() - info.origin) / 1000;
-  ui.mode.textContent = `${info.live ? '● LIVE' : info.status === 'Inactive' ? 'Next session (not started)' : 'Latest session (finished)'} · ${info.title}${hasGps(Date.now()) ? ' · car GPS' : auth_error ? ` · ${auth_error}` : ''}`;
-}
-
-// lap fraction -> outline fraction, through the mini-sector boundaries when they match the live feed
-function msFrac(f, segments) {
-  const ms = S.ms;
-  if (!ms || ms.length - 1 !== segments) return f;
-  const n = segments, j = Math.min(n - 1, Math.floor(f * n));
-  return ms[j] + (ms[j + 1] - ms[j]) * (f * n - j);
-}
-
-function liveRender() {
-  const now = Date.now(), s = liveState(S.live, S.drivers, now), cars = {}, ahead = {};
-  if (hasGps(now)) {  // real positions (F1 TV); a car without one is in the garage or has stopped sending
-    for (const d of S.drivers) {
-      const p = gpsAt(d.id, now), q = gpsAt(d.id, now, 500);
-      if (p && q) { cars[d.id] = S.proj.rot(...p); ahead[d.id] = S.proj.rot(...q); }
-    }
-  } else for (const id in s.fracs) {
-    cars[id] = pointAt(msFrac(s.fracs[id], s.segments));
-    ahead[id] = pointAt(msFrac(s.ahead[id], s.segments));
-  }
-  return {cars, ahead, board: s.board, lap: s.lap};
-}
+// Live timing lives in replaylive.js; it reads the view state through these getters and helpers.
+const live = setupLive({S: () => S, ui: () => ui, reset, setOverlay, showFailed, drawTrack, pointAt, prepare, render});
+export const showLive = live.showLive;
+const liveRender = live.liveRender;
 
 function reset(extra) {
   clearTimeout(ui.hintTimer);
@@ -379,7 +311,8 @@ async function loadData(autoplay) {
     const url = `/api/replay/${S.year}/${S.round}?session=${encodeURIComponent(session)}`, gps = !sim && get(url);
     // A GPS replay the server hasn't built yet takes ~40 s. A race's lap-timing replay (Jolpica: ~10 s uncached, then on disk) plays
     // meanwhile and the GPS one takes over when it lands (swapToGps); without Jolpica laps yet, it just waits for GPS.
-    let data = sim ? sim.data : await Promise.race([gps, new Promise(r => setTimeout(r, 1500))]), early = null;
+    // (a GPS request that fails fast, OpenF1 unreachable, is no answer either: the lap replay still plays)
+    let data = sim ? sim.data : await Promise.race([gps.catch(() => null), new Promise(r => setTimeout(r, 1500))]), early = null;
     if (!data && standIn) early = data = await get(`${url}&laps=1`).catch(() => null);
     data ??= await gps;
     if (load !== S.loading || session !== ui.session.value) return;

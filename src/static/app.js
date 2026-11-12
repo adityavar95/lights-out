@@ -12,13 +12,13 @@ import {showStream, noStream, upcoming, until, at, when} from './stream.js';
 import {setupGlass} from './glass.js';
 import {capturing} from './input.js';
 import {setupPalette, openPalette, openSheet, openCounts, copyLink} from './palette.js';
-import {parseHash, formatHash} from './share.js';
+import {parseHash, formatHash, held} from './share.js';
 import {resultLedgers} from './ledgers.js';
 import {setupDownloads, startDownload, canDownload} from './downloads.js';
 
 const $ = id => document.getElementById(id);
 const A = {year: null, round: null, races: [], mode: 'watch', section: 'analytics'};
-const today = new Date().toISOString().slice(0, 10);
+const today = () => new Date().toISOString().slice(0, 10);  // read per call: a tab open past midnight or New Year
 const ORDER = ['Practice 1', 'Practice 2', 'Practice 3', 'Sprint Qualifying', 'Sprint Shootout', 'Sprint', 'Qualifying', 'Race'];
 const jol = (kind, round) => get(`/api/jolpica/${A.year}/${kind}${round ? `?round=${round}` : ''}`).then(rows);
 const ordinal = n => { const s = ['th', 'st', 'nd', 'rd'], v = n % 100; return n + (s[(v - 20) % 10] || s[v] || s[0]); };  // 1st 2nd 3rd 4th 11th 21st
@@ -27,6 +27,7 @@ const hasRun = r => at(r, '') <= new Date();  // lights out has gone: a race lat
 // the session list's names -> Jolpica's keys for their start times
 const SESSION_KEY = {'Practice 1': 'FirstPractice', 'Practice 2': 'SecondPractice', 'Practice 3': 'ThirdPractice', 'Sprint Qualifying': 'SprintQualifying',
   'Sprint Shootout': 'SprintShootout', Sprint: 'Sprint', Qualifying: 'Qualifying', Race: ''};
+const ran = (r, name) => { const d = at(r, SESSION_KEY[name]); return d && d <= new Date(); };  // the weekend has it, and it has started
 const sessionStarted = (r, name) => { const d = at(r, SESSION_KEY[name] ?? ''); return !d || d <= new Date(); };
 // why a race has no lap tables
 const noLaps = round => {
@@ -38,7 +39,7 @@ const noLaps = round => {
 const TABS = {
   results: async r => {  // Race / Sprint / Qualifying; the one picked last stays picked from race to race
     const [res, spr, q] = await Promise.all([jol('results', r), jol('sprint', r), jol('qualifying', r)]);
-    return () => { renderResults($('tab-results'), res, spr, q, A.resView, v => { A.resView = v; }); $('tab-results').append(...resultLedgers(A.year, r, res, jol)); };
+    return () => { renderResults($('tab-results'), res, spr, q, A.resView, v => { A.resView = v; }); $('tab-results').append(...resultLedgers(A.year, r, res, jol, ORDER.filter(n => ran(race(r), n)))); };
   },
   lapchart: async r => {
     const [laps, res, pits] = await Promise.all([jol('laps', r), jol('results', r), jol('pitstops', r)]);
@@ -68,7 +69,14 @@ const TABS = {
 };
 let active = 'replay', drawn = {};
 // the address keeps the view (#stream, #2026/18/results, a Simulation #2026/18/sim), so a reload or a shared link lands on it
-const address = () => (A.section === 'stream' ? '#stream' : A.round ? `#${A.year}/${A.round}/${A.mode === 'sim' ? 'sim' : active}` : null);
+const view = () => (A.section === 'stream' ? '#stream' : A.round ? `#${A.year}/${A.round}/${A.mode === 'sim' ? 'sim' : active}` : null);
+// a link's moment stays in the address, so a reload lands on it again, until the replay moves on or the view changes
+let pending = null;  // {link, path, hash, open}
+const address = () => {
+  const h = view();
+  if (pending && (h !== pending.path || (pending.open && !held(pending.link, moment())))) pending = null;
+  return pending?.hash ?? h;
+};
 // a link to this view, with the replay's moment only when asked for: the address itself doesn't follow playback
 const copyView = () => copyLink(location.origin + location.pathname + formatHash({...parseHash(address() ?? ''),
   ...(A.section === 'analytics' && A.mode === 'watch' && active === 'replay' ? moment() : {})}));
@@ -142,7 +150,10 @@ function sortTable(th) {
   for (const h of table.tHead.rows[0].cells) h.removeAttribute('aria-sort');
   th.setAttribute('aria-sort', dir > 0 ? 'ascending' : 'descending');
   const key = tr => tr.cells[i]?.textContent.trim() ?? '';
-  body.append(...[...body.rows].sort((a, b) => dir * key(a).localeCompare(key(b), undefined, {numeric: true})));
+  body.append(...[...body.rows].sort((a, b) => {
+    const x = key(a), y = key(b), n = x !== '' && y !== '' ? x - y : NaN;  // plain numbers by value: signs and decimals
+    return dir * (Number.isNaN(n) ? x.localeCompare(y, undefined, {numeric: true}) : n);
+  }));
 }
 
 async function drawTab(name) {
@@ -225,7 +236,7 @@ const endIntro = () => {
 // A return visit after a race that wasn't run at the last visit: a notice with a button that plays it. The first visit
 // only remembers the latest race (the intro covers that visit).
 function newRace() {
-  const r = A.races.filter(x => x.date < today).at(-1), year = A.year;  // run by now, not just today
+  const r = A.races.filter(x => x.date < today()).at(-1), year = A.year;  // run by now, not just today
   if (!r) return;
   let seen;
   try { seen = localStorage.getItem('f1latest'); localStorage.setItem('f1latest', `${A.year}/${r.round}`); } catch (e) { return; }
@@ -247,16 +258,19 @@ function newRace() {
 
 // Header: the current season's next session, ticking; a click opens Stream on the Coming up row
 async function nextSession() {
-  const races = await get(`/api/jolpica/${today.slice(0, 4)}/races`).then(rows).catch(() => []), btn = $('nextbtn');
+  const list = y => get(`/api/jolpica/${y}/races`).then(rows).catch(() => []), btn = $('nextbtn');
+  let races = await list(today().slice(0, 4));
+  // after the season's last race: next season's first session, once Jolpica has that calendar
+  if (!upcoming(races).length) races = await list(+today().slice(0, 4) + 1);
   const tick = () => {
     const s = upcoming(races)[0];
-    btn.hidden = !s;  // shortcut: after the season's last race, nothing until next year's calendar is in this year's list
+    btn.hidden = !s;
     if (!s) return;
     btn.replaceChildren(el('span', {class: 'muted'}, 'NEXT'), ` ${s.name}`, el('span', {class: 'nextwhere'}, ` · ${s.r['Circuit.Location.country']}`),
       ` · ${s.d.toLocaleString(undefined, {weekday: 'short', hour: '2-digit', minute: '2-digit'})} `, el('b', {}, until(s.d)));
     btn.title = `${s.r.raceName}, ${s.name}: ${s.d.toLocaleString(undefined, {weekday: 'long', hour: '2-digit', minute: '2-digit'})}`;
     btn.onclick = async () => {
-      if (A.year !== +today.slice(0, 4)) await loadSeason(+today.slice(0, 4), s.r.round);
+      if (A.year !== +s.r.season) await loadSeason(+s.r.season, s.r.round);
       setSection('stream', s.r.round);
     };
   };
@@ -310,7 +324,7 @@ async function loadSeason(year, round = null, sim = A.mode === 'sim') {
   if (round ?? last) selectRace(round ?? last.round, sim);
   else noRace(`${year} season`, () => el('p', {class: 'empty'}, `No races on the ${year} calendar yet.`));
   if (A.intro && A.round && !sim) startIntro(A.races.find(x => x.round === String(A.round)), A.shown);
-  if (A.firstSeason && year === +today.slice(0, 4)) newRace();
+  if (A.firstSeason && year === +today().slice(0, 4)) newRace();
   A.intro = A.firstSeason = false;
   if (A.section === 'stream') showStream(year, A.races);
 }
@@ -351,7 +365,7 @@ async function selectRace(round, sim = A.mode === 'sim') {
     podium.replaceChildren(...(res.length ? res.slice(0, 3).map(x =>
       el('div', {class: `pp p${x.position}`}, el('span', {class: 'pnum'}, `P${x.position}`),
         el('span', {class: 'chip', style: `background:${teamColor(x['Constructor.constructorId'], x['Constructor.name'])}`}),
-        el('b', {}, x['Driver.code'] || x['Driver.familyName']))) : [r.date >= today ? countdown(r) : el('span', {class: 'muted'}, 'No results yet')]));
+        el('b', {}, x['Driver.code'] || x['Driver.familyName']))) : [r.date >= today() ? countdown(r) : el('span', {class: 'muted'}, 'No results yet')]));
   };
   jol('results', round).then(fillPodium).catch(() => fillPodium([]));
 
@@ -426,10 +440,11 @@ function takeToken() {
 async function route() {
   const years = [...$('year').options].map(o => o.value);
   if (!years.length) return;  // still starting: boot() reads the address itself
-  // only checked values get past parseHash. The moment and any stray token leave the address when syncHash below tidies it
+  // only checked values get past parseHash. Any stray token leaves the address when syncHash below tidies it
   const link = parseHash(location.hash), {stream, year, round, tab} = link;
-  const wasSim = A.mode === 'sim', thisYear = today.slice(0, 4);
+  const wasSim = A.mode === 'sim', thisYear = today().slice(0, 4);
   A.routing = true;
+  pending = null;
   try {
     if (tab) setMode(tab === 'sim' ? 'sim' : 'watch', false);  // the link's view, over the stored mode
     if (TABS[tab] || tab === 'replay' || tab === 'explorer') active = tab;
@@ -441,7 +456,15 @@ async function route() {
     else if (!stream && race(round) && (round !== String(A.round) || wasSim !== (A.mode === 'sim'))) selectRace(round);
     else if (!stream) activate(active);
     const shown = A.round;
-    if (shown && !stream && A.mode === 'watch' && active === 'replay') A.shown.then(() => A.round === shown && openMoment(link));
+    if (shown && !stream && A.mode === 'watch' && active === 'replay') {
+      const path = view(), hash = formatHash({...link, year: A.year, round: shown, tab: 'replay'}), mine = hash !== path && {link, path, hash};
+      if (mine) pending = mine;
+      A.shown.then(() => {
+        if (A.round !== shown) return;
+        openMoment(link);
+        if (pending === mine) mine.open = true;  // from here the replay is the link's, and moving it lets go
+      });
+    }
   } finally {
     A.routing = false;
     syncHash(true);  // tidies the address the app ended up on (#intro, a stale link, a bare #2026)
@@ -466,7 +489,7 @@ async function boot() {
 async function init() {
   // the season list and this season's calendar are requested before the 3D stage is set up (~0.3 s of main thread)
   get('/api/seasons').catch(() => {});
-  get(`/api/jolpica/${today.slice(0, 4)}/races`).catch(() => {});
+  get(`/api/jolpica/${today().slice(0, 4)}/races`).catch(() => {});
   setupReplay($('tab-replay'), copyView);
   setupExplorer($('tab-explorer'), () => ({year: A.year, round: A.round}));
   const stored = k => { try { return localStorage.getItem(k); } catch (e) { return null; } };
@@ -488,6 +511,8 @@ async function init() {
   if (location.hash === '#stream') setSection('stream');
   A.intro = location.hash === '#intro' || (!location.hash && !stored('f1seen'));
   A.firstSeason = true;  // the first season loaded checks for a race new since the last visit
+  // shortcut: polled, since the replay's time moves in a dozen places; replay.js could say so itself if a second reader appears
+  setInterval(() => pending?.open && syncHash(true), 1000);
   addEventListener('hashchange', () => {
     takeToken();
     const open = [...document.querySelectorAll('dialog')].filter(d => d.matches(':modal'));
@@ -553,6 +578,7 @@ async function init() {
 // header button, only while a session is running: it opens F1's live timing. (Between sessions it used to offer the last
 // session's final state, which is the race the page already shows.)
 async function checkLive() {
+  if (document.hidden) return;
   try {
     const res = await fetch('/api/live/status');  // not /api/live, which opens F1's feed and holds it open for an idle tab
     if (!res.ok) return;

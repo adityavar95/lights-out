@@ -1,5 +1,6 @@
 """Run: .venv/Scripts/python tests/test_server.py"""
 import sys
+import hashlib
 import json
 from pathlib import Path
 
@@ -63,6 +64,7 @@ merge(state, {"Messages": {"1": {"Message": "TRACK CLEAR"}}})
 assert state["Lines"]["1"]["Position"] == "1"
 assert state["Lines"]["1"]["Sectors"][0]["Segments"] == [{"Status": 0}, {"Status": 2049}]  # list item updated by index
 assert state["Lines"]["44"] == {"Position": "2"}
+assert merge([{"a": 1}], {"_kf": True, "0": {"a": 2}}) == [{"a": 2}]  # a marker key among the indices is skipped, not a crash
 assert [m["Message"] for m in state["Messages"]] == ["GREEN LIGHT", "TRACK CLEAR"]  # new index appended
 assert [r["Position"] for r in rows(state)] == ["1", "2"]
 assert rows({"AirTemp": "29.3", "_kf": True}) == [{"AirTemp": "29.3", "_kf": True}]
@@ -149,9 +151,51 @@ this = date.today().year
 assert jolpica._settled(this - 1, None) and jolpica._settled(this, 1)
 assert not jolpica._settled(this, None) and not jolpica._settled(this, 2) and not jolpica._settled(this, 9)
 jolpica.races = _races
+# Jolpica down: the calendar server.py last saved, held 5 minutes before Jolpica is tried again; none saved: the error
+import tempfile
+real_j = (jolpica.jolpica_fetch, jolpica.LAST, jolpica._pages, jolpica.jolpica_client, jolpica.SETTLED)
+with tempfile.TemporaryDirectory() as d:
+    jolpica.LAST = Path(d)
+    asked = []
+    def down(year, kind, round=None): asked.append(year); raise TimeoutError("read timed out")
+    jolpica.jolpica_fetch = down
+    try:
+        jolpica.races(1901)
+        raise AssertionError("no saved calendar, yet no error")
+    except TimeoutError:
+        pass
+    (Path(d) / "1901_races_None.json").write_text('[{"round": "1"}, {"round": "2"}]')
+    assert jolpica.races(1901) == ({"round": "1"}, {"round": "2"}) and jolpica.races(1901) and asked == [1901, 1901]  # the 3rd didn't ask
+    jolpica._down[1901] = (0, ())
+    jolpica.jolpica_fetch = lambda year, kind, round=None: asked.append(year) or [{"round": "9"}]
+    assert jolpica.races(1901) == ({"round": "9"},) and len(asked) == 3
+# a driver in last year's list is still active when this year's is empty (before round 1): not the year-long disk cache
+class _Q:
+    def __init__(self, name): self.name = name
+    def query(self): return self
+    def driver(self, d): return self
+asked = []
+jolpica.jolpica_fetch = lambda y, kind, round=None: [{"driverId": "max"}] if (y, kind) == (this - 1, "drivers") else []
+jolpica._pages = lambda q, method, rows_of: asked.append(q.name) or []
+jolpica.jolpica_client, jolpica.SETTLED = _Q("live"), _Q("settled")
+jolpica.driver_career("max"), jolpica.driver_career("fangio")
+assert asked == ["live", "settled"], asked
+jolpica.jolpica_fetch, jolpica.LAST, jolpica._pages, jolpica.jolpica_client, jolpica.SETTLED = real_j
+jolpica._races.cache_clear(), jolpica._down.clear()
 print("jolpica cache ok")
 
 import f1tv
+f1tv.DISK = Path(tempfile.mkdtemp())  # past seasons' weekends are kept on disk: not in the real cache
+# one search per past weekend, whatever the restarts (_cache cleared); names that share a stem get their own file
+searched = []
+_real_search, f1tv._search = f1tv._search, lambda **f: searched.append(f) or [
+    {"metadata": {"contentId": len(searched), "title": f["filter_Meeting_Name"]}, "actions": [{"href": "/v"}]}]
+first = f1tv.videos(1983, "United States Grand Prix")
+f1tv._cache.clear()
+assert f1tv.videos(1983, "United States Grand Prix") == first and len(searched) == 1
+assert f1tv.videos(1983, "United States Grand Prix West")[0]["title"].endswith("West") and len(searched) == 2
+f1tv._search = _real_search
+f1tv._cache.clear()
 assert f1tv._stem("Malaysian Grand Prix") == f1tv._stem("Malaysia Grand Prix")
 assert f1tv._stem("São Paulo Grand Prix") == f1tv._stem("Sao Paulo Grand Prix")
 assert f1tv._stem("Austrian Grand Prix") != f1tv._stem("Australian Grand Prix")
@@ -191,6 +235,14 @@ print("f1tv ok")
 
 import tempfile
 from server import EVENTS, count_event
+import server
+# CI has no network: the page's libraries are stubbed, and the 503 path is asserted on its own.
+import assets as _assets
+from fastapi.testclient import TestClient as _TC
+def _no_network(): raise RuntimeError("no network")
+_assets.core = _no_network
+assert _TC(server.app, base_url="http://127.0.0.1:8086").get("/").status_code == 503
+_assets.core = lambda: None
 
 with tempfile.TemporaryDirectory() as tmp:
     path = Path(tmp) / "counts.json"
@@ -260,6 +312,11 @@ for bad in ["https://evil.example/la", "http://f1tv.formula1.com/la", "https://f
         raise AssertionError(f"forwarded to {bad}")
     except f1tv.F1TVError:
         pass
+# and never follows a redirect, which would carry the subscription token to another host
+sent, real_post = {}, f1tv.requests.post
+f1tv.requests.post = lambda url, **kw: sent.update(kw) or type("R", (), {"status_code": 302, "content": b"", "headers": {}})()
+assert f1tv.license("https://f1tv.formula1.com/la", b"x", "tok", None)[0] == 302 and sent["allow_redirects"] is False
+f1tv.requests.post = real_post
 print("f1tv licence hosts ok")
 
 # play: an Akamai manifest (no CORS for localhost) is asked for again until formula1.com's CDN answers, within `tries`
@@ -299,6 +356,28 @@ print("f1tv live 4k ok")
 
 # team radio: OpenF1's clips after a session, the live feed's while it's locked; each clip transcribed once, kept on disk
 import radio, replay as _rp
+# the 2.5 GB speech model is never fetched unasked: until its files are here nothing is queued, and the panel is told why
+with tempfile.TemporaryDirectory() as tmp:
+    real_m = (radio.MODEL_DIR, radio._download, radio.clips, radio.drivers, radio.TRANSCRIBE)
+    radio.MODEL_DIR, radio.TRANSCRIBE = Path(tmp), True
+    radio.clips, radio.drivers = lambda *a: [(1.0, "https://x/unasked.mp3", 1)], lambda *a: {}
+    fetched = _t.Event()
+    def fake_download(): fetched.wait(5); raise OSError("disk full")
+    radio._download = fake_download
+    r = radio.radio(None, "Race", 2024, None, None)
+    assert r["model"] == "missing" and r["pending"] == 0 and radio._jobs.empty() and r["clips"][0]["text"] is None, r
+    radio.fetch_model(); radio.fetch_model()  # the second finds one already running
+    assert radio.model_state() == "downloading"
+    fetched.set(); radio._fetch_state["thread"].join(5)
+    assert radio.model_state() == "failed" and "disk full" in radio._fetch_state["error"]
+    def good_download():
+        for f in radio.MODEL_FILES: (Path(tmp) / f).write_bytes(b"x")
+    radio._download = good_download
+    radio.fetch_model(); radio._fetch_state["thread"].join(5)
+    assert radio.model_state() == "ready" and radio._fetch_state["error"] is None
+    radio.MODEL_DIR, radio._download, radio.clips, radio.drivers, radio.TRANSCRIBE = real_m
+    radio._fetch_state.update(thread=None, error=None)
+radio.model_state = lambda: "ready"  # for the rest of this file: the tests below stub the transcriber itself
 with tempfile.TemporaryDirectory() as tmp:
     real = (radio.DIR, radio.openf1, radio.live.radio, radio.transcribe, radio.requests.get)
     radio.DIR = Path(tmp)
@@ -316,7 +395,7 @@ with tempfile.TemporaryDirectory() as tmp:
         radio.TRANSCRIBE = False
         r = radio.radio({"session_key": 2, "date_end": "2026-10-25T22:00:00+00:00"}, "Practice 1", 2026, 44, "tok")
         assert r == {"clips": [{"t": 1793364000.1, "url": "https://livetiming.formula1.com/static/2026/x/y/TeamRadio/HAM.mp3", "driver": 44, "text": None, "error": None}],
-                     "pending": 0, "error": None, "transcribe": False}, r
+                     "pending": 0, "error": None, "transcribe": False, "model": "ready"}, r
         assert not radio._queued
         for bad in ["https://evil.example/a.mp3", "https://livetiming.formula1.com/static/../x", "file:///etc/passwd",
                     "https://livetiming.formula1.com/static/%2e%2e/x.mp3", "https://livetiming.formula1.com/static/%252e%252e/x.mp3",
@@ -356,6 +435,15 @@ with tempfile.TemporaryDirectory() as tmp:
     finally:
         radio.DIR, radio.openf1, radio.live.radio, radio.transcribe, radio.requests.get = real
         radio.TRANSCRIBE = False
+# a transcript is read from disk once, then kept: a poll of a race's several hundred clips opens no files
+with tempfile.TemporaryDirectory() as tmp:
+    real_dir, radio.DIR = radio.DIR, Path(tmp)
+    assert radio.entry("https://x/kept.mp3") is None
+    radio.save(radio._path("https://x/kept.mp3"), {"text": "box box"})
+    assert radio.entry("https://x/kept.mp3") == {"text": "box box"}
+    radio._path("https://x/kept.mp3").unlink()
+    assert radio.entry("https://x/kept.mp3") == {"text": "box box"}
+    radio.DIR = real_dir
 # a message is timed from its recording start in the clip's name (circuit local time), not F1's publish time ~30 s later
 from datetime import datetime as _dt, timezone as _tz
 pub = _dt(2026, 10, 30, 18, 33, 37, tzinfo=_tz.utc).timestamp()
@@ -477,11 +565,11 @@ try:
         def raise_for_status(self): pass
         def json(self): return [1]
     answers = iter([429, 429, 200])
-    real_get, rp.requests.get = rp.requests.get, lambda url, timeout: _Ans(next(answers))
+    real_get, rp._http.get = rp._http.get, lambda url, timeout: _Ans(next(answers))
     try:
         assert rp.openf1("x") == [1]
     finally:
-        rp.requests.get = real_get
+        rp._http.get = real_get
 finally:
     rp.time = real_time
     rp._sent.clear(); rp._sent.extend(real_sent)
@@ -523,6 +611,23 @@ with tempfile.TemporaryDirectory() as tmp:
         assert rp._season_list("sessions", 3001) == []  # no copy: empty, and asked again next time
         rp.openf1 = lambda path: [{"session_key": 2}]
         assert rp._season_list("sessions", 3001) == [{"session_key": 2}]
+        # this season's list is asked again after LISTS_TTL (a moved session); a refresh that fails keeps the list it had
+        rp.openf1 = lambda path: [{"session_key": 3}]
+        assert rp._season_list("sessions", 3001) == [{"session_key": 2}]  # still fresh
+        rp._lists["sessions", 3001] = (time.time() - rp.LISTS_TTL - 1, [{"session_key": 2}])
+        assert rp._season_list("sessions", 3001) == [{"session_key": 3}]
+        rp._lists["sessions", 3001] = (time.time() - rp.LISTS_TTL - 1, [{"session_key": 3}])
+        def locked(path): raise rp.OpenF1Locked("live")
+        rp.openf1 = locked
+        assert rp._season_list("sessions", 3001) == [{"session_key": 3}]
+        rp._lists["sessions", 1999] = (0, [{"session_key": 1}])  # a past season: for the server's lifetime
+        assert rp._season_list("sessions", 1999) == [{"session_key": 1}]
+        # saved_replay: the file's own bytes once a session's replay is on disk, None before that and before 2023
+        real_find, rp.find_session = rp.find_session, lambda y, d, n: {"session_key": 77}
+        assert rp.saved_replay(2024, "2024-03-02", "Race") is None
+        rp.save(rp.CACHE / "77.json", {"mode": "gps"})
+        assert rp.saved_replay(2024, "2024-03-02", "Race") == b'{"mode": "gps"}' and rp.saved_replay(2022, "2022-03-20", "Race") is None
+        rp.find_session = real_find
     finally:
         rp.openf1, rp.CACHE, rp.LISTS = real
         rp._lists.clear()
@@ -595,12 +700,31 @@ def down(key, year): raise tracks.requests.ConnectionError("down")
 tracks.mv_track = down
 assert tracks.track("spa", 2026, 50.44, 5.97, lambda: lap)["source"] == "openf1"
 tracks.mv_track = saved_mv
+# an outline fetched once is on disk: after a restart (the lru caches empty) with no connection it still answers
+with tempfile.TemporaryDirectory() as tmp:
+    real_tracks = (tracks.DISK, tracks._get)
+    tracks.DISK = Path(tmp)
+    square = {"x": [0, 1000, 1000, 0], "y": [0, 0, 1000, 1000], "rotation": 90}
+    tracks._get = lambda url, **kw: square if url.endswith("/7/2024") else {"7": {"years": [2024]}}
+    tracks._mv_years.cache_clear(), tracks._mv_track.cache_clear()
+    online = tracks.mv_track(7, 2026)
+    tracks._mv_years.cache_clear(), tracks._mv_track.cache_clear()
+    def offline(url, **kw): raise tracks.requests.ConnectionError("offline")
+    tracks._get = offline
+    assert tracks.mv_track(7, 2026) == online and online["rotation"] == 90
+    tracks._mv_years.cache_clear(), tracks._mv_track.cache_clear()
+    try:
+        tracks._kept("never", "https://x/")
+        raise AssertionError("no saved copy, yet no error")
+    except tracks.requests.ConnectionError:
+        pass
+    tracks.DISK, tracks._get = real_tracks
 
 # the routes, through the app (no upstream call: races and the feed are stubbed)
 from fastapi.testclient import TestClient
 import asyncio
 from fastapi import HTTPException
-client = TestClient(server.app)
+client = TestClient(server.app, base_url="http://127.0.0.1:8086")  # by address: a name is refused (below)
 this = date.today().year
 real = (server.races, server.scheduled_session, server._elevation_at, server.live.snapshot, server.replay)
 server.races = lambda year: ({"round": "1", "date": f"{year}-03-08", "raceName": "X", "Circuit": {"circuitId": "spa"}},)
@@ -628,11 +752,29 @@ try:
     started = []
     server.assets.start = lambda: started.append(1)
     assert client.post("/api/assets/download", headers={"Origin": "https://evil.example"}).status_code == 403 and not started
-    assert client.post("/api/assets/download", headers={"Origin": "http://testserver"}).status_code == 202 and started
+    assert client.post("/api/assets/download", headers={"Origin": "http://127.0.0.1:8086"}).status_code == 202 and started
     # S-L3: only the page's own origin may count
     assert client.post("/api/count/visit", headers={"Origin": "https://evil.example"}).status_code == 403
-    assert client.post("/api/count/nope", headers={"Origin": "http://testserver"}).status_code == 404  # past the origin check
+    assert client.post("/api/count/nope", headers={"Origin": "http://127.0.0.1:8086"}).status_code == 404  # past the origin check
     assert client.post("/api/count/nope").status_code == 404  # no Origin: not a page's cross-site request
+    # a domain pointed at this computer (DNS rebinding) is same-origin with it, so only an address or localhost is served
+    started.clear()
+    rebound = {"Host": "evil.example:8086", "Origin": "http://evil.example:8086"}
+    assert client.get("/api/counts", headers=rebound).status_code == 400
+    assert client.post("/api/assets/download", headers=rebound).status_code == 400 and not started
+    for host in ["192.168.1.5:8086", "localhost:8086", "app.localhost", "[::1]:8086"]:
+        assert client.post("/api/count/nope", headers={"Host": host}).status_code == 404, host
+    # a season of lap times is ~240 Jolpica requests: a round is required
+    real_fetch, server.jolpica_fetch = server.jolpica_fetch, lambda *a: [{"lap": "1"}]
+    assert client.get("/api/jolpica/2020/laps").status_code == 400 and client.get("/api/jolpica/2020/pitstops").status_code == 400
+    assert client.get("/api/jolpica/2020/laps?round=1").json()["total"] == 1
+    server.jolpica_fetch = real_fetch
+    # the speech model's download starts only from the page's own origin
+    asked_model, real_fetch_model = [], server.radio.fetch_model
+    server.radio.fetch_model = lambda: asked_model.append(1)
+    assert client.post("/api/f1tv/radio/model", headers={"Origin": "https://evil.example"}).status_code == 403 and not asked_model
+    assert client.post("/api/f1tv/radio/model", headers={"Origin": "http://127.0.0.1:8086"}).status_code == 202 and asked_model
+    server.radio.fetch_model = real_fetch_model
     # S-L4: an oversized licence body is refused unread, a chunked one as soon as it's over
     token = _jwt(exp=_time.time() + 3600)
     assert client.post("/api/f1tv/license?u=https://x/", content=b"x" * 70000, headers={"X-F1-Token": token}).status_code == 413
@@ -682,6 +824,22 @@ try:
     # the documented flow: OpenF1 locked with the session running -> 409 LIVE_NOW
     def refuse(*a): raise server.ReplayUnavailable("locked")
     server.replay = refuse
+    # a replay on disk goes out as stored (no parse, no re-encoding); the lap replay never takes that path
+    real_saved, server.saved_replay = server.saved_replay, lambda y, d, s: b'{"mode": "gps"}'
+    real_laps, server.laps_replay = server.laps_replay, lambda y, r: {"mode": "laps"}
+    assert client.get("/api/replay/2024/1").json() == {"mode": "gps"}
+    assert client.get("/api/replay/2024/1?laps=1").json() == {"mode": "laps"}
+    # the session's laps out of that file, without its positions; never a build unless asked
+    server.saved_replay = lambda y, d, s: b'{"session": "Qualifying", "laps": [[1, "4", 1, 80.0]], "frames": [1, 2], "drivers": []}'
+    r = client.get("/api/sessionlaps/2024/1").json()
+    assert r == {"session": "Qualifying", "drivers": [], "laps": [[1, "4", 1, 80.0]], "stints": None, "race_control": None}, r
+    assert client.get("/api/sessionlaps/2022/1").status_code == 404
+    server.saved_replay = lambda y, d, s: None
+    r = client.get("/api/sessionlaps/2024/1")
+    assert r.status_code == 404 and r.json()["detail"] == server.NOT_BUILT, r.text
+    r = client.get("/api/sessionlaps/2024/1?build=1")  # asked: replay() is tried, and its refusal comes back as it is
+    assert r.status_code == 404 and r.json()["detail"] == "locked", r.text
+    server.saved_replay, server.laps_replay = lambda y, d, s: None, real_laps  # not built: on to replay()
     server.races = lambda year: ({"round": "1", "date": today, "raceName": "X", "Circuit": {"circuitId": "spa"}},)
     server.live.snapshot = lambda: topics("Started")
     r = client.get(f"/api/replay/{this}/1")
@@ -690,6 +848,7 @@ try:
     assert client.get(f"/api/replay/{this}/1").status_code == 404
 finally:
     server.races, server.scheduled_session, server._elevation_at, server.live.snapshot, server.replay = real
+    server.saved_replay = real_saved
     live._state.clear()
 
 # scheduled_session: inside its times + 30 min
@@ -751,6 +910,10 @@ with tempfile.TemporaryDirectory() as tmp:
         assert len(asked) == 3
 
         assert client.get("/api/stationary/2024/1").json() == [["1", 1, None, None], ["1", 20, 2.4, 22.1]]
+        # the pace table's compounds: one request, the replay's own row shape
+        _feeds["stints"] = [{"driver_number": 1, "lap_start": 1, "lap_end": 20, "compound": "MEDIUM", "tyre_age_at_start": 0}]
+        assert client.get("/api/stints/2024/1").json() == [["1", 1, 20, "MEDIUM", 0]] and client.get("/api/stints/2022/1").status_code == 404
+        del _feeds["stints"]
 
         # a built GPS replay supplies pits, laps and race control: only the overtakes are asked for
         asked.clear()
@@ -797,3 +960,47 @@ _desktop.serving = real_serving
 assert token_of(quote(json.dumps({"data": {"subscriptionToken": "abc"}}))) == "abc"
 assert token_of(quote(json.dumps({"data": {}}))) is None  # signed in, no subscription
 assert token_of("") is None and token_of("%7Bbroken") is None
+
+# the asset scrape finds the sky presets, photo sets and tiles in the real static files
+heavy = _assets._heavy()
+assert any("/HDRIs/" in u for u in heavy) and any("/Textures/" in u for u in heavy)
+assert any("tiles" in d.parts for d in heavy.values())
+print("asset scrape ok")
+
+# MultiViewer raising: the lap stand-in answers, and with no lap the GeoJSON outline does
+_saved_mv, _saved_geo = tracks.mv_track, tracks._geo_track
+def _mv_down(*a, **k): raise tracks.requests.RequestException("down")
+tracks.mv_track = _mv_down
+assert tracks.track("spa", 2026, 50.44, 5.97, lambda: lap)["source"] == "openf1"
+tracks._geo_track = lambda lat, lng: {"source": "geojson", "x": [], "y": []}
+assert tracks.track("spa", 2026, 50.44, 5.97)["source"] == "geojson"
+tracks.mv_track, tracks._geo_track = _saved_mv, _saved_geo
+print("track fallbacks ok")
+
+# a three.js download is kept only when it hashes to its recorded sha256; a mismatch leaves nothing behind
+class _Resp:
+    def __init__(self, body): self.body = body
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+    def raise_for_status(self): pass
+    def iter_content(self, n): yield self.body
+real_get = _assets.requests.get
+_assets.requests.get = lambda url, **kw: _Resp(b"console.log(1)")
+with tempfile.TemporaryDirectory() as tmp:
+    dest = Path(tmp) / "f.js"
+    _assets.fetch("https://x/f.js", dest, hashlib.sha256(b"console.log(1)").hexdigest())
+    assert dest.read_bytes() == b"console.log(1)"
+    dest.unlink()
+    try:
+        _assets.fetch("https://x/f.js", dest, "0" * 64)
+        raise AssertionError("a mismatched download was kept")
+    except RuntimeError:
+        pass
+    assert not dest.exists() and not list(Path(tmp).iterdir())
+_assets.requests.get = real_get
+print("three hashes ok")
+
+# the page's policy is sent report-only, and allows the import map by its hash
+_csp = client.get("/").headers["content-security-policy-report-only"]
+assert "script-src 'self' 'wasm-unsafe-eval' 'sha256-" in _csp and "frame-ancestors 'none'" in _csp
+print("csp header ok")

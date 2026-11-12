@@ -68,14 +68,10 @@
              "three/addons/": "/static/assets/three/examples/jsm/"}}
 </script>
 <div id="bootfail" class="card" role="alert" hidden>
-  <p>Lights Out couldn't load. Part of it comes from cdn.jsdelivr.net, which isn't answering or sent a file that doesn't match. Check your connection and try again.</p>
-  <button class="pill" onclick="location.reload()">Reload</button>
+  <p>Lights Out couldn't load. Its first start fetches the page's libraries and 3D assets from the internet, and one of those downloads failed or sent a file that doesn't match. Check your connection and try again.</p>
+  <button id="bootreload" class="pill">Reload</button>
 </div>
-<script>
-  // the module graph didn't load: at once on an error, after 20 s when the CDN just hangs (and gone again if it then arrives)
-  var bootFail = function () { document.getElementById('bootfail').hidden = false; };
-  var bootTimer = setTimeout(bootFail, 20000);
-</script>
-<script type="module" src="/static/app.js" onerror="clearTimeout(bootTimer); bootFail()" onload="clearTimeout(bootTimer); document.getElementById('bootfail').hidden = true"></script>
+<script type="module" id="app-js" src="/static/app.js"></script>
+<script src="/static/boot.js"></script>
 </body>
 </html>
