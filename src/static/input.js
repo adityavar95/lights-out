@@ -11,6 +11,7 @@ const ACTIONS = ['up', 'down', 'drs', 'ers', 'pit', 'camera'];
 const PAD = {drs: 0, ers: 1, pit: 2, camera: 3, down: 4, up: 5};
 
 const held = new Set(), fired = new Set(), padWas = {};
+let activePad = null, rumbledAt = 0;
 export const input = {throttle: 0, brake: 0, steer: 0, clutch: 0, pad: null, deadzone: 0.08};
 let enabled = false;
 
@@ -55,6 +56,7 @@ export function pollInput(dt) {
   input.steer = toward(input.steer, want, rate, dt);
   const pad = [...(navigator.getGamepads?.() ?? [])].find(p => p?.connected);
   input.pad = pad ? pad.id : null;
+  activePad = pad ?? null;
   if (pad) {
     const rt = pad.buttons[7]?.value ?? 0, lt = pad.buttons[6]?.value ?? 0, stick = dead(pad.axes[0] ?? 0, input.deadzone);
     if (rt > 0.02 || lt > 0.02 || stick !== 0) {  // the pad is being used: analogue values win
@@ -72,4 +74,12 @@ export function pollInput(dt) {
   const actions = new Set(fired);
   fired.clear();
   return {throttle: input.throttle, brake: input.brake, steer: input.steer, clutch: input.clutch, actions};
+}
+
+// Force feedback: a 100 ms dual-rumble effect, renewed at most every 80 ms (so a steady kerb or slide is continuous and
+// silence needs nothing sent). {strong, weak} 0..1 from player.js rumbleFor. A keyboard, or a pad with no actuator, does nothing.
+export function rumble({strong, weak}, now = performance.now()) {
+  if (!activePad?.vibrationActuator || now - rumbledAt < 80 || (strong < 0.02 && weak < 0.02)) return;
+  rumbledAt = now;
+  activePad.vibrationActuator.playEffect('dual-rumble', {startDelay: 0, duration: 100, strongMagnitude: strong, weakMagnitude: weak}).catch(() => {});
 }

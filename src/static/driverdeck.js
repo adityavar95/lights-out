@@ -4,10 +4,12 @@
 import {el, led} from './util.js';
 import {nextCamera} from './onboard.js';
 import {setRibbon} from './scene3d.js';
-import {enableInput, pollInput, input} from './input.js';
+import {enableInput, pollInput, input, rumble} from './input.js';
+import {rumbleFor} from './player.js';
 import {trackWetness} from './weather.js';
 
 const SWITCHES = [
+  ['steer', 'STEERING', [['ASSIST', 'ASSIST'], ['RAW', 'RAW']]],  // RAW: you catch the slides
   ['tc', 'TRACTION', [['OFF', 'OFF'], ['MED', 'MED'], ['FULL', 'FULL']]],
   ['abs', 'ABS', [[false, 'OFF'], [true, 'ON']]],
   ['gearbox', 'GEARBOX', [['AUTO', 'AUTO'], ['MANUAL', 'MANUAL']]],
@@ -82,6 +84,7 @@ export function updateDriverDeck(S) {
   // the player's input this frame, and its one-shot actions
   const inp = pollInput(dt);
   Object.assign(R.input, {throttle: inp.throttle, brake: inp.brake, steer: inp.steer, clutch: inp.clutch});
+  rumble(rumbleFor(car));
   if (inp.actions.has('up')) R.input.up = true;
   if (inp.actions.has('down')) R.input.down = true;
   if (inp.actions.has('drs')) R.input.drs = true;

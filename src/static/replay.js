@@ -1,7 +1,7 @@
 // Race replay: the 3D stage with the broadcast HUD round it (timing tower, telemetry, radar, control deck).
 import {teleUrl} from './reallap.js';
 import {compared, openCompare} from './tracemodal.js';
-import {highlightReel} from './highlights.js';
+import {highlightReel, shotsFor} from './highlights.js';
 import {setupStory} from './storypanel.js';
 import {nextMoment} from './moments.js';
 import {markLayer, gpsMarks, lapMarks, NO_MARKS} from './scrubmarks.js';
@@ -482,7 +482,7 @@ async function toggleHighlights() {
   if (!S.data) return;
   if (S.data.mode !== 'gps' || !S.data.intervals?.length) return say(S.data.mode === 'laps' ? 'Highlights need the GPS replay, still loading' : 'Highlights are for races with GPS data');
   count('highlights');
-  S.reel = {list: highlightReel(S.data, lightsOut(S.data)), i: -1, speed: ui.speed, cinematic: ui.stage.classList.contains('cinematic')};
+  S.reel = {list: highlightReel(S.data, lightsOut(S.data)), i: -1, speed: ui.speed, cinematic: ui.stage.classList.contains('cinematic'), cam: S.cam};
   setSpeed(1);
   setCinematic(true);
   ui.reelBtn.setAttribute('aria-pressed', true);
@@ -506,8 +506,21 @@ function reelGo(i) {
   ui.reelText.textContent = clip.text;
   render(true);  // the board at this moment, for a clip with no car of its own: the leader
   S.selected = (S.byId[clip.id] && clip.id) || S.board?.[0]?.d.id || S.selected;
-  const cam = S.cam === 'overview' ? 'chase' : S.cam;
-  if (ui.has3d && cut && cam === S.cam) setView(cam);  // cut to it: chase pans between cars otherwise, across the whole circuit
+  r.shots = shotsFor(clip);  // the director's cuts: the replay's own cameras, in the order the clip calls for
+  r.shot = -1;
+  reelShot(cut);
+}
+
+// the camera the clip's director wants now: a new clip cuts to it (view reset: chase pans between cars otherwise, across
+// the whole circuit), later shots of the same clip change as the clip's time reaches them
+function reelShot(cut = false) {
+  const r = S.reel, clip = r.list[r.i], at = S.t - clip.t0;
+  let k = r.shots.findLastIndex(x => x.at <= at);
+  if (k < 0) k = 0;
+  if (k === r.shot) return;
+  r.shot = k;
+  const cam = r.shots[k].cam;
+  if (ui.has3d && cut && cam === S.cam) setView(cam);
   setMode(cam);
 }
 
@@ -519,6 +532,7 @@ function stopReel() {
   ui.reelBtn.setAttribute('aria-pressed', false);
   setSpeed(r.speed);
   setCinematic(r.cinematic);
+  if (r.cam !== 'overview' && r.cam !== S.cam) setMode(r.cam);  // the viewer's own camera back (overview: the clips left a driver selected, stay on them)
 }
 
 function togglePlay() {
@@ -556,6 +570,7 @@ function tick(now) {
   S.t = S.sim ? S.sim.t : Math.min(S.data.duration, S.t + dt);
   S.last = now;
   if (S.reel && S.t >= S.reel.list[S.reel.i].t1) reelGo(S.reel.i + 1);
+  else if (S.reel) reelShot();
   render(false);
   if (S.sim ? S.sim.done : S.t >= S.data.duration) togglePlay();
   else S.raf = requestAnimationFrame(tick);

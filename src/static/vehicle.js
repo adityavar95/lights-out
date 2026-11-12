@@ -269,12 +269,18 @@ export function vehicleStep(R, car, ctl, h, env) {
   const Fxr = Fd - Fbr - overrun * (lockR ? 0 : 1);
   if (-Fxr > lockR0) lockR = true;  // engine braking on top of the brakes: past the ellipse the rear wheels lock
   // what's left for cornering on each axle (a locked or spinning axle keeps ~25-45 %)
-  const Dyf = lockedF ? 0.25 * Df : Math.sqrt(Math.max(0, Df * Df - (Fbf / c.muLong) ** 2));
-  const Dyr = lockR ? 0.25 * Dr : spinning ? 0.45 * Dr : Math.sqrt(Math.max(0, Dr * Dr - (Fxr / c.muLong) ** 2));
+  // A locked or spinning axle keeps ~25-45 % of its lateral grip, but it gets there over ~0.08 s and recovers over ~0.15 s:
+  // a tyre breaks away and comes back progressively, not at a step (below the limit the ramps sit at 0: the plain ellipse)
+  const ramp = (x, on) => clamp((x ?? 0) + (on ? h / 0.08 : -h / 0.15), 0, 1);
+  car.lkF = ramp(car.lkF, lockedF);
+  car.lkR = ramp(car.lkR, lockR || spinning);
+  const ellF = Math.sqrt(Math.max(0, Df * Df - (Fbf / c.muLong) ** 2)), ellR = Math.sqrt(Math.max(0, Dr * Dr - (Fxr / c.muLong) ** 2));
+  const Dyf = ellF + (Math.min(ellF, 0.25 * Df) - ellF) * car.lkF;
+  const Dyr = ellR + (Math.min(ellR, (lockR ? 0.25 : 0.45) * Dr) - ellR) * car.lkR;
 
   // --- longitudinal ---
   const delta = clamp(ctl.steer, -1, 1) * c.maxLock;
-  const aLong = (Fxr - Fbf - drag - c.crr * N * (off ? 4 : 1) - (car.Fyf ?? 0) * Math.sin(delta)) / M - slope;
+  const aLong = (Fxr - Fbf - drag - c.crr * N * (off === 'gravel' ? 20 : off ? 4 : 1) - (car.Fyf ?? 0) * Math.sin(delta)) / M - slope;
   car.v = Math.max(0, u0 + aLong * h);
   car.aLong = aLong;
 

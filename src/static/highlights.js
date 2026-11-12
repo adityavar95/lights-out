@@ -91,3 +91,28 @@ export function highlightReel(data, from, budget = 300) {
   }
   return out.map(c => ({...c, lap: laps.reduce((n, l) => (l[0] <= c.t0 + 10 && l[2] > n ? l[2] : n), 0)}));
 }
+
+// The camera cuts for a clip, as a broadcast director would cut it: [{at, cam}] with `at` in seconds from the clip's start,
+// the replay's cameras only. Establish from the helicopter for the start, restarts and neutralisations; stay on the car for
+// a lead change; for a pass, chase, then the T-cam as it pulls alongside, back to chase after; the flag from the car, then
+// the helicopter as it falls. No shot runs past MAX_SHOT s: a longer one swaps between chase and T-cam.
+const MAX_SHOT = 8;
+export function shotsFor(clip) {
+  const len = clip.t1 - clip.t0, ev = Math.min(len, Math.max(0, (clip.at ?? clip.t0) - clip.t0));
+  const plan = {
+    start: [[0, 'heli'], [8, 'chase']], restart: [[0, 'heli'], [6, 'chase']],
+    sc: [[0, 'heli']], vsc: [[0, 'heli']], red: [[0, 'heli']],
+    pass: [[0, 'chase'], [Math.max(0, ev - 3), 'tcam'], [ev + 3, 'chase']],
+    finish: [[0, 'chase'], [Math.max(0, ev - 3), 'heli']],
+  }[clip.kind] ?? [[0, 'chase']];
+  const cuts = plan.filter(([at], i) => i === 0 || at < len).map(([at, cam], i) => ({at: i === 0 ? 0 : at, cam}));
+  const out = [];
+  cuts.forEach((c, i) => {
+    const end = cuts[i + 1]?.at ?? len;
+    for (let at = c.at, k = 0; at < end || k === 0; at += MAX_SHOT, k++) {
+      const cam = c.cam === 'heli' ? 'heli' : k % 2 ? (c.cam === 'chase' ? 'tcam' : 'chase') : c.cam;  // long shots swap chase and T-cam
+      if (out.at(-1)?.cam !== cam) out.push({at, cam});
+    }
+  });
+  return out;
+}

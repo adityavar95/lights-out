@@ -1,7 +1,7 @@
 // node tests/test_highlights.mjs
 import assert from 'node:assert/strict';
 import {readFileSync, existsSync} from 'node:fs';
-import {passes, highlightReel} from '../src/static/highlights.js';
+import {passes, highlightReel, shotsFor} from '../src/static/highlights.js';
 
 const drivers = ['A', 'B', 'C', 'D'].map(id => ({id, code: `${id}AA`}));
 const grid = [[-10, 'A', 1], [-10, 'B', 2], [-10, 'C', 3], [-10, 'D', 4]];
@@ -63,4 +63,18 @@ if (existsSync(cached)) {
   assert.equal(real.at(-1).kind, 'finish');
   console.log(`Mexico: ${real.length} clips, ${Math.round(total)} s`);
 }
+// the director: the helicopter establishes, the T-cam joins a pass, no shot runs long, every clip opens on a shot at 0
+const shots = (kind, t0, t1, at) => shotsFor({kind, t0, t1, at});
+assert.deepEqual(shots('sc', 100, 128, 120), [{at: 0, cam: 'heli'}], 'a neutralisation stays on the helicopter');
+assert.deepEqual(shots('start', 0, 46, 6).map(x => x.cam).slice(0, 2), ['heli', 'chase']);
+assert.deepEqual(shots('pass', 100, 116, 110), [{at: 0, cam: 'chase'}, {at: 7, cam: 'tcam'}, {at: 13, cam: 'chase'}], 'chase, T-cam as it passes, chase');
+assert.deepEqual(shots('finish', 0, 31, 25).at(-1), {at: 22, cam: 'heli'}, 'the helicopter as the flag falls');
+for (const kind of ['start', 'finish', 'red', 'restart', 'lead', 'pass', 'sc']) {
+  const s = shots(kind, 50, 100, 70);
+  assert.equal(s[0].at, 0, `${kind}: opens at once`);
+  s.forEach((x, i) => { assert.ok(!i || x.at > s[i - 1].at && x.cam !== s[i - 1].cam, `${kind}: cuts move on`); assert.ok(x.at < 50, `${kind}: inside the clip`); });
+  s.forEach((x, i) => assert.ok(x.cam === 'heli' || (s[i + 1]?.at ?? 50) - x.at <= 8.001, `${kind}: no chase/T-cam shot over 8 s`));
+}
+assert.deepEqual(shots('lead', 0, 18, 10).map(x => x.cam), ['chase', 'tcam', 'chase'], 'an 18 s lead change swaps cameras');
+
 console.log('highlights ok');

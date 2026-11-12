@@ -1,5 +1,5 @@
 // The telemetry trace plot: five channels stacked on one shared lap-distance axis (Δt, speed, throttle, brake,
-// RPM + gear), drawn on a 2D canvas. Two canvases sit on top of each other: the traces (redrawn a few times a second
+// RPM + gear, G-force), drawn on a 2D canvas. Two canvases sit on top of each other: the traces (redrawn a few times a second
 // at most) and the crosshair (redrawn on mouse move), so scrubbing never repaints 2,500 points per lap.
 //
 // High-DPI: the canvas backing store is CSS size x devicePixelRatio and the context is scaled by the same factor
@@ -9,7 +9,8 @@ import {SECTOR_COLORS} from './hud.js';
 
 const HEAD = 26, FOOT = 18, LEFT = 46, RIGHT = 12, GAP = 8;
 // [title, relative height]
-const PANELS = [['Δt  s', 1.1], ['SPEED  km/h', 1.45], ['THROTTLE  %', 0.8], ['BRAKE  %', 0.8], ['RPM · GEAR', 1.1]];
+const PANELS = [['Δt  s', 1.1], ['SPEED  km/h', 1.45], ['THROTTLE  %', 0.8], ['BRAKE  %', 0.8], ['RPM · GEAR', 1.1], ['G-FORCE  lat · long', 1.1]];
+const G_RANGE = 7;  // g either side: a modern car pulls ~6.5 g in a fast corner, ~5 g on the brakes
 const GRID = 'rgb(255 255 255 / .07)', INK = 'rgb(238 240 246 / .85)', MUTED = 'rgb(139 144 160 / .9)', DRS = 'rgb(47 208 111 / .13)';
 
 // Δt axis labels for a scale of ±m on a plot h px tall: zero and the round step either side, at most 5, ~20 px apart
@@ -102,7 +103,7 @@ export function drawTrace(ctx, w, h, v) {
   }
   ctx.restore();
 
-  const [pDt, pV, pThr, pBrk, pRpm] = panels;
+  const [pDt, pV, pThr, pBrk, pRpm, pG] = panels;
   const Yof = (p, lo, hi) => val => p.y + p.h - (val - lo) / (hi - lo) * p.h;
   const frame = (p, lo, hi, ticks, fmt = x => x) => {
     ctx.fillStyle = 'rgb(255 255 255 / .025)';
@@ -243,6 +244,11 @@ export function drawTrace(ctx, w, h, v) {
   ctx.textAlign = 'left';
   ctx.fillStyle = MUTED;
   for (const g of [1, 4, 8]) ctx.fillText(g, L + W + 2, Yg(g));
+
+  // 6. G-force: lateral (+ right) solid, longitudinal (+ accelerating) fainter. Only a simulated lap records it: a real lap's are NaN and draw nothing
+  const YG = frame(pG, -G_RANGE, G_RANGE, [-5, 0, 5]);
+  plot(pG, YG, 'gLong', {width: 1.2, alpha: 0.45});
+  plot(pG, YG, 'gLat', {width: 1.4});
 }
 
 // crosshair at bucket i: a laser line through every panel and a dot on each trace
@@ -255,7 +261,7 @@ export function drawCursor(ctx, w, h, v, i) {
   ctx.shadowBlur = 6;
   ctx.fillRect(Math.round(x), HEAD - 6, 1, h - HEAD - FOOT + 6);
   ctx.shadowBlur = 0;
-  const [, pV, pThr, pBrk, pRpm] = panels;
+  const [, pV, pThr, pBrk, pRpm, pG] = panels;
   const dot = (p, lo, hi, val, col) => {
     if (Number.isNaN(val)) return;
     ctx.fillStyle = col;
@@ -269,6 +275,7 @@ export function drawCursor(ctx, w, h, v, i) {
     dot(pThr, 0, 100, lap.throttle[i], col);
     dot(pBrk, 0, 100, lap.brake[i], col);
     dot(pRpm, 0, v.rpmMax, lap.rpm[i], col);
+    dot(pG, -G_RANGE, G_RANGE, lap.gLat[i], col);
   }
 }
 

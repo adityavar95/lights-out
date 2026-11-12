@@ -65,7 +65,7 @@ export function simState(race, byId) {
     // game chase cam follows)
     fx[c.id] = {sparks: Math.max(c.sparks, c.contact > 0 ? 1 : 0), smoke: c.smoke, spray: c.spray, light: c.ers.harvesting || c.ers.derate,
                 cam: c.player ? {gLat: c.gLat, gLong: c.gLong, steer: c.delta, v: c.v} : null,
-                g: {gLat: c.gLat, gLong: c.gLong, kerb: c.kerb}, drs: c.drs.open || c.aeroX > 0.5};
+                g: {gLat: c.gLat, gLong: c.gLong, kerb: c.kerb, z: c.z, shift: c.shiftT > 0}, drs: c.drs.open || c.aeroX > 0.5};
   }
   const board = race.board().map(({car, pos, lap, gap, lapsDown}) => ({
     d: byId[car.id], pos, lap, gap, tyre: car.tyre.compound, age: car.lapsDone - (car.stintLap ?? 0), out: false,

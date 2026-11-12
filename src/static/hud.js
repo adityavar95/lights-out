@@ -11,7 +11,7 @@ export const SECTOR_COLORS = ['#ff4d5e', '#38b6ff', '#ffd23f'];
 export const STATUS = {GREEN: 'green', YELLOW: 'yellow', SC: 'yellow', 'SC IN': 'yellow', VSC: 'yellow', 'VSC ENDING': 'yellow', RED: 'red', CHEQUERED: 'chequered'};
 const TYRE_LETTER = {SOFT: 'S', MEDIUM: 'M', HARD: 'H', INTERMEDIATE: 'I', WET: 'W'};
 
-let h, radar = null, trail = [], focusNow = null;
+let h, radar = null, trail = [], focusNow = null, peak = {lat: 0, brk: 0};  // peak: the biggest g lately, fading over ~10 s
 
 const glass = (cls, ...children) => el('section', {class: `glass ${cls}`}, ...children);
 
@@ -32,7 +32,7 @@ export function setupHud(wrap, {onClose, onErsMode, onDrsTest}) {
     thr: el('i'), brk: el('i'), drs: el('span', {class: 'drsmod'}), ers: el('i'), ersPct: el('b'), ersMode: el('span'),
     who: el('div', {class: 'who'}),
     gDot: svg('circle', {r: 3.2, class: 'gdot'}), gTrail: svg('polyline', {class: 'gtrail'}),
-    gLat: el('b'), gLong: el('b'),
+    gLat: el('b'), gLong: el('b'), pkLat: el('b', {class: 'pk'}), pkBrk: el('b', {class: 'pk'}),
     tyres: CORNERS.map(name => ({name, swatch: el('i'), temp: el('b'), wear: el('span')})),
     compound: el('span', {class: 'compound'}),
     ersBtns: ERS_MODES.map(([m, text, title]) => el('button', {class: 'neu', title, onclick: () => onErsMode(m)}, led(), text)),
@@ -75,7 +75,7 @@ export function setupHud(wrap, {onClose, onErsMode, onDrsTest}) {
   const tyreCell = (ty, cls) => el('div', {class: `tcell ${cls}`}, ty.swatch, el('div', {}, ty.temp, ty.wear));
   h.gpanel = glass('gpanel',
     el('div', {class: 'phead'}, 'G-FORCE', el('span', {class: 'src'}, 'MODEL')),
-    el('div', {class: 'gwrap'}, gsvg, el('div', {class: 'gread'}, el('small', {}, 'LAT'), h.gLat, el('small', {}, 'LONG'), h.gLong)),
+    el('div', {class: 'gwrap'}, gsvg, el('div', {class: 'gread'}, el('small', {}, 'LAT'), h.gLat, el('small', {}, 'LONG'), h.gLong, el('small', {}, 'PK LAT'), h.pkLat, el('small', {}, 'PK BRK'), h.pkBrk)),
     el('div', {class: 'phead'}, 'TYRES', h.compound),
     el('div', {class: 'tmatrix'},
       tyreCell(h.tyres[0], 'fl'), chassis(), tyreCell(h.tyres[1], 'fr'), tyreCell(h.tyres[2], 'rl'), tyreCell(h.tyres[3], 'rr')));
@@ -171,6 +171,7 @@ export function renderFocus(f) {
   const {d, b} = f;
   if (h.who.dataset.id !== d.id) {  // the headshot only changes with the driver
     h.who.dataset.id = d.id;
+    peak = {lat: 0, brk: 0};
     h.face = d.headshot ? el('img', {src: d.headshot, alt: ''}) : null;
   }
   h.who.replaceChildren(...[h.face].filter(Boolean), el('span', {class: 'chip', style: `background:${d.color}`}), el('b', {}, d.code),
@@ -215,6 +216,10 @@ export function renderFocus(f) {
   h.gDot.setAttribute('cy', y);
   h.gTrail.setAttribute('points', trail.join(' '));
   h.gLat.textContent = Math.abs(f.g.gLat).toFixed(1);
+  peak.lat = Math.max(Math.abs(f.g.gLat), peak.lat * 0.999);  // per frame: ~11 s half-life at 60 fps
+  peak.brk = Math.max(-f.g.gLong, peak.brk * 0.999);
+  h.pkLat.textContent = peak.lat.toFixed(1);
+  h.pkBrk.textContent = peak.brk.toFixed(1);
   h.gLong.textContent = `${f.g.gLong < 0 ? '−' : ' '}${Math.abs(f.g.gLong).toFixed(1)}`;
 
   const ty = f.tyres;

@@ -237,18 +237,25 @@ export function createVfx(scene) {
   ribbon.layers.set(1);
   scene.add(ribbon);
   const RIB_COLOR = [[0.1, 2.2, 0.7], [2.4, 1.4, 0.1], [2.6, 0.12, 0.15]];  // emerald full throttle, amber lift, crimson brake
-  // pts: [{p: Vector3 (scene), state 0/1/2} | null] along the line; null samples (corners-only mode) are transparent
+  // pts: [{p: Vector3 (scene), state 0/1/2, roll: the road's banking} | null] along the line; null samples (corners-only mode)
+  // are transparent. Colours blend over 3 samples (~15 m) at each state change instead of switching, it fades in over the
+  // first 3 samples and out over the last quarter, and each edge sits at the road's height across the banking.
   self.ribbon = (pts, halfWidth) => {
     ribbon.visible = !!pts;
     if (!pts) return;
+    const n = Math.min(RIB, pts.length), tail = Math.max(1, n * 0.25), at = i => pts[Math.min(Math.max(i, 0), pts.length - 1)];
+    const colour = i => { const q = at(i); return q ? RIB_COLOR[q.state] : [0, 0, 0]; };  // additive black = invisible
     for (let i = 0; i < RIB; i++) {
-      const cur = pts[Math.min(i, pts.length - 1)], next = pts[Math.min(i + 1, pts.length - 1)] ?? cur, prevP = pts[Math.max(i - 1, 0)] ?? cur;
+      const cur = at(i), next = at(i + 1) ?? cur, prevP = at(i - 1) ?? cur;
       const a = (cur ?? next ?? prevP)?.p;
-      if (!a) continue;
+      if (!a) { ribCol.fill(0, i * 6, i * 6 + 6); continue; }
       const b = (next ?? cur).p, dir = b.clone().sub((prevP ?? cur).p).setY(0).normalize();
-      const side = new THREE.Vector3(-dir.z, 0, dir.x).multiplyScalar(halfWidth);  // across the line, in the ground plane
-      ribPos.set([a.x - side.x, a.y, a.z - side.z, a.x + side.x, a.y, a.z + side.z], i * 6);
-      const col = cur ? RIB_COLOR[cur.state] : [0, 0, 0];  // additive black = invisible
+      const side = new THREE.Vector3(-dir.z, 0, dir.x).multiplyScalar(halfWidth);  // across the line, in the ground plane (+ is the car's right)
+      const lift = halfWidth * Math.sin((cur ?? next ?? prevP).roll ?? 0);  // + roll: the right edge lower
+      ribPos.set([a.x - side.x, a.y + lift, a.z - side.z, a.x + side.x, a.y - lift, a.z + side.z], i * 6);
+      const c0 = colour(i - 1), c1 = colour(i), c2 = colour(i + 1);
+      const fade = Math.min(1, (i + 1) / 4) * Math.min(1, (n - 1 - i) / tail);
+      const col = [0, 1, 2].map(k => (c0[k] + c1[k] + c2[k]) / 3 * fade);
       ribCol.set([...col, ...col], i * 6);
     }
     ribGeo.attributes.position.needsUpdate = ribGeo.attributes.color.needsUpdate = true;

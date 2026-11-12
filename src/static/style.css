@@ -909,6 +909,7 @@ option { background-color: var(--panel); color: var(--ink); }
 .gread { display: grid; grid-template-columns: auto auto; gap: 2px 8px; align-items: baseline; }
 .gread small, .cgrid small, .ersbox small { font-size: var(--text-1); color: var(--hud-muted); letter-spacing: .06em; }
 .gread b { font-size: 20px; font-weight: 500; }
+.gread b.pk { font-size: var(--text-2, 14px); color: var(--hud-muted); }
 .compound { font-size: 12px; letter-spacing: .06em; }
 .compound[data-c=SOFT] { color: #ff2d2d; }
 .compound[data-c=MEDIUM] { color: #ffd400; }
