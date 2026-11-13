@@ -1,6 +1,6 @@
 // Run: node tests/test_lanes.mjs  — lap-timing replay lanes: grid columns and passing without driving through the car.
 import assert from 'node:assert/strict';
-import {lanes, GRID, apart, headings} from '../src/static/lanes.js';
+import {lanes, GRID, apart, headings, retime} from '../src/static/lanes.js';
 import {CAR_L, CAR_W} from '../src/static/racecraft.js';
 
 const LEN = 5000, HALF = 6.5;
@@ -56,5 +56,21 @@ near(yaws[0], 0); near(yaws[3], 0); near(yaws[5], 0); near(yaws[8], 0);  // set 
 const up = headings([0, 0, 0, 0], [0, 40, 40, 41], 30);
 near(up[0], Math.PI / 2); near(up[3], Math.PI / 2);  // before its first move it faces the way it sets off
 assert.ok(headings([0, 1, 0], [0, 0, 1], 30).every(Number.isNaN));  // never moved: no heading
+// retime: a see-sawing pace along a bent path comes out steady and still on that path; a gap stays a gap
+const sx = [], sy = [];
+for (let i = 0, d = 0; i < 40; i++, d += i % 2 ? 30 : 10) { sx.push(d < 300 ? d : 300); sy.push(d < 300 ? 0 : d - 300); }
+sx.splice(20, 1, null); sy.splice(20, 1, null);
+const [rx, ry] = retime(sx, sy);
+assert.equal(rx[20], null);
+for (let i = 3; i < 17; i++) { const v = Math.hypot(rx[i + 1] - rx[i], ry[i + 1] - ry[i]); assert.ok(Math.abs(v - 20) < 3, `step ${i}: ${v}`); }  // 10/30 see-saw -> ~20
+const offPath = (px, py) => Math.min(...sx.slice(0, -1).map((ax, j) => {  // distance to the raw samples' polyline
+  if (ax === null || sx[j + 1] === null) return Infinity;
+  const ay = sy[j], bx = sx[j + 1] - ax, by = sy[j + 1] - ay, u = Math.max(0, Math.min(1, ((px - ax) * bx + (py - ay) * by) / (bx * bx + by * by || 1)));
+  return Math.hypot(px - ax - u * bx, py - ay - u * by);
+}));
+for (let i = 0; i < 40; i++) if (rx[i] !== null) assert.ok(offPath(rx[i], ry[i]) < 1e-6, `${i} off the path`);
+near(rx[0], sx[0]); near(rx[19], sx[19]); near(ry[39], sy[39]);  // run ends stay put
+const flat = [0, 20, 40, 60, 80];
+retime(flat, flat.map(() => 0))[0].forEach((v, i) => near(v, flat[i]));  // a steady pace is unchanged
 function near(a, b) { assert.ok(Math.abs(a - b) < 1e-6, `${a} != ${b}`); }
 console.log('ok');

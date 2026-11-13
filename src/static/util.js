@@ -131,6 +131,12 @@ const TEAM_COLORS = {
   audi: '#F50537', cadillac: '#C8A562',
 };
 
+// black or white, whichever reads better on a #rrggbb fill (WCAG: equal contrast at relative luminance 0.179)
+export function inkOn(hex) {
+  const [r, g, b] = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255).map(c => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.179 ? '#000' : '#fff';
+}
+
 export function teamColor(teamId = '', fallbackName = '') {
   if (TEAM_COLORS[teamId]) return TEAM_COLORS[teamId];
   let h = 0;

@@ -54,6 +54,9 @@ function pixelRatio(w = innerWidth, h = innerHeight) {
   return high ? Math.max(dpr * MIN_AUTO, budget * autoScale) : dpr;
 }
 const drawnView = new THREE.Matrix4(), drawnProj = new THREE.Matrix4();
+// CSS2DRenderer hides what's behind the camera by NDC z in [-1, 1]; with reversed depth (and WebGPU's [0, 1]) a point
+// behind it lands near z = 0 and passed, so cars behind the camera drew their tags mirrored across the screen
+const labelCam = new THREE.PerspectiveCamera();
 const sky0 = {sun: 3.2, env: 0.35, hemi: 0.5, lamps: 0, fog: new THREE.Color(0xc4d3e2)};
 let skyAt = 0, autoSky = 0, skyToken = 0, weather = null, skyTargets = [];  // clear-sky lighting, for the weather to dim
 // Settings' Auto follows the session's sun (setDaylight), and takes the Overcast sky over a wet or rainy daytime track
@@ -284,7 +287,10 @@ export function init3d(el) {
     stale?.dispose();
     stale = null;
     t0 = performance.now();
-    labels.render(scene, camera);
+    labelCam.copy(camera, false);
+    labelCam.coordinateSystem = THREE.WebGLCoordinateSystem;
+    labelCam.updateProjectionMatrix();
+    labels.render(scene, labelCam);
     timed('tags', t0);
   };
   ready = renderer.init().then(() => {

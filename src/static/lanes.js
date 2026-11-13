@@ -68,6 +68,34 @@ export function headings(x, y, min) {
   return out;
 }
 
+// GPS replays: OpenF1's sample times jitter, so on the 0.5 s grid a car's pace see-saws (226, 163, 200 km/h a frame
+// apart) and every camera saw it surge back and forth. Smooths the distance covered over time (gaussian, sigma frames)
+// and puts each frame back on the car's own path at that distance: the line stays the GPS one, only the surge goes.
+// x, y: frames, null where the car has no data (each run is smoothed on its own). Returns new [x, y].
+export function retime(x, y, sigma = 1.5) {
+  const X = x.slice(), Y = y.slice(), r = Math.ceil(sigma * 3), w = [];
+  for (let k = -r; k <= r; k++) w.push(Math.exp(-k * k / (2 * sigma * sigma)));
+  for (let a = 0; a < x.length; a++) {
+    if (x[a] === null) continue;
+    let b = a;
+    while (b + 1 < x.length && x[b + 1] !== null) b++;
+    const s = [0];
+    for (let i = a + 1; i <= b; i++) s.push(s.at(-1) + Math.hypot(x[i] - x[i - 1], y[i] - y[i - 1]));
+    for (let i = a, j = 0; i <= b; i++) {  // j: the path segment the smoothed distance lands in, only ever moves on
+      let sum = 0, n = 0;
+      const e = Math.min(r, i - a, b - i);  // symmetric near a gap, or a one-sided window would pull the car ahead
+      for (let k = -e; k <= e; k++) { sum += w[k + r] * s[i + k - a]; n += w[k + r]; }
+      const d = sum / n;
+      while (j < b - a && s[j + 1] < d) j++;
+      const f = j < b - a && s[j + 1] > s[j] ? (d - s[j]) / (s[j + 1] - s[j]) : 0;
+      X[i] = x[a + j] + f * ((x[a + j + 1] ?? x[a + j]) - x[a + j]);
+      Y[i] = y[a + j] + f * ((y[a + j + 1] ?? y[a + j]) - y[a + j]);
+    }
+    a = b;
+  }
+  return [X, Y];
+}
+
 // GPS replays: OpenF1 positions are metres off and not quite in sync between cars, so two cars side by side or in a close
 // pass land on top of each other. cars: [{id, x, y, dx, dy}]: position (m, map axes, y down) and unit direction of travel.
 // sides: {pair: +1 / -1}, the caller's between frames: which side of the first car the second keeps until they're apart

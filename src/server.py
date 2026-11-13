@@ -643,6 +643,10 @@ mimetypes.add_type("image/vnd.radiance", ".hdr")
 # a 21 MB sky hardly compresses: gzipping it would only slow the local load
 app.add_middleware(GZipMiddleware, minimum_size=1000, compresslevel=1, exclude_content_types=(*DEFAULT_EXCLUDED_CONTENT_TYPES, "image/vnd.radiance"))
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
+# the trailer Stream plays offline (stream.js): docs/media in a checkout, media/ beside static/ in the exe
+MEDIA = next((m for m in (Path(__file__).parent / "media", Path(__file__).parent.parent / "docs" / "media") if m.is_dir()), None)
+if MEDIA:
+    app.mount("/media", StaticFiles(directory=MEDIA), name="media")
 
 # Anonymous usage counts (docs/ux-audit.md item 11): per day, how often each of these happened. The page sends only the
 # event's name (util.js count): no id, cookie, IP or page address is kept, and nothing goes to a third party.

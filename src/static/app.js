@@ -1,7 +1,7 @@
 // App shell: the Races / Simulate / Stream switch (Stream is the F1 TV browse page, stream.js), the Watch / Simulate switch, race dropdown, race header and tabs. Watch is the race browser (replays of
 // real sessions, results, standings, live timing); Simulate drops the browser chrome for a full-window physics race
 // on the chosen circuit (circuit and car pickers on the stage, season = the cars' era).
-import {get, rows, el, flag, fmtDate, teamColor, count, failed, skeleton} from './util.js';
+import {get, rows, el, flag, fmtDate, teamColor, inkOn, count, failed, skeleton} from './util.js';
 import {setupReplay, showRace, showLive, setSessions, intro, setCinematic, play, replayKind, REPLAY_KINDS, moment, openMoment, stageCommands, ended} from './replay.js';
 import {renderResults, renderLapChart, renderStandings} from './charts.js';
 import {seasonTrends} from './seasonview.js';
@@ -12,6 +12,8 @@ import {showStream, noStream, upcoming, until, at, when, SESSIONS} from './strea
 import {setupGlass} from './glass.js';
 import {capturing} from './input.js';
 import {setupPalette, openPalette, openSheet, openCounts, copyLink} from './palette.js';
+import {openReaction} from './reaction.js';
+import {PRESETS} from './circuits.js';
 import {parseHash, formatHash, held} from './share.js';
 import {resultLedgers} from './ledgers.js';
 import {setupDownloads, startDownload, canDownload} from './downloads.js';
@@ -121,6 +123,18 @@ function activate(name) {
   syncHash();
   drawTab(name);
 }
+
+// team colours: the accent (focus rings, primary buttons, sliders, the next race's tag) in the reader's team's colour
+const TEAMS = [['mercedes', 'Mercedes'], ['ferrari', 'Ferrari'], ['mclaren', 'McLaren'], ['red_bull', 'Red Bull'], ['aston_martin', 'Aston Martin'],
+  ['alpine', 'Alpine'], ['williams', 'Williams'], ['rb', 'Racing Bulls'], ['haas', 'Haas'], ['audi', 'Audi'], ['cadillac', 'Cadillac']];
+function setTeam(id) {
+  const s = document.documentElement.style, c = TEAMS.some(t => t[0] === id) && teamColor(id);
+  if (c) { s.setProperty('--accent', c); s.setProperty('--accent-ink', inkOn(c)); }
+  else { s.removeProperty('--accent'); s.removeProperty('--accent-ink'); }
+  try { if (c) localStorage.setItem('f1team', id); else localStorage.removeItem('f1team'); } catch (e) { /* storage blocked: not remembered */ }
+}
+const teamCommands = () => [...TEAMS.map(([id, name]) => ({label: `Team colours: ${name}`, hint: 'Accent', text: `team colours colour theme ${name}`, run: () => setTeam(id)})),
+  {label: 'Team colours: off', hint: 'Accent', text: 'team colours colour theme off default', run: () => setTeam(null)}];
 
 const THEMES = [['auto', '◐', 'Theme: follows the system'], ['light', '☀', 'Theme: light'], ['dark', '☾', 'Theme: dark']];
 function setTheme(t) {
@@ -444,7 +458,20 @@ async function selectRace(round, sim = A.mode === 'sim', fly = true) {
 // state: the race on screen ('shown') and the next one to run ('next') get their own pin look (style.css .gpin)
 const pin = (r, next) => ({round: r.round, name: r['Circuit.circuitName'], place: `${r['Circuit.Location.locality']}, ${r['Circuit.Location.country']}`,
   country: r['Circuit.Location.country'], state: String(r.round) === String(A.round) ? 'shown' : r === next ? 'next' : '',
-  lat: +r['Circuit.Location.lat'], lng: +r['Circuit.Location.long'], label: hasRun(r) ? '▶ Play' : 'Open'});
+  lat: +r['Circuit.Location.lat'], lng: +r['Circuit.Location.long'], label: hasRun(r) ? '▶ Play' : 'Open', ...dossier(r)});
+// the pin's dossier: what's known about the circuit (length and lap record where circuits.js has a preset) and its other ways in
+function dossier(r) {
+  const p = PRESETS[r['Circuit.circuitId']], watch = hasRun(r) && A.mode !== 'sim';
+  return {
+    facts: [`Round ${r.round} · ${fmtDate(r.date)}`, p?.record && `${p.lengthKm} km · lap record ${p.record[0]} (${p.record[1]}, ${p.record[2]})`].filter(Boolean),  // not every preset has a record
+    actions: [
+      ...(watch ? [{label: 'Highlights', enter: true, run: () => stageCommands.highlights()},
+        {label: 'Strategy lab', enter: true, run: () => activate('strategy')}] : []),
+      {label: 'Drive it', run: () => { if (A.section !== 'analytics') setSection('analytics'); setMode('sim', false); selectRace(r.round); }},
+      {label: 'Stream', run: () => setView('stream')},
+    ],
+  };
+}
 const pins = () => {
   const next = A.races.find(r => !hasRun(r));
   return A.races.filter((r, i, all) => all.findIndex(x => x['Circuit.circuitId'] === r['Circuit.circuitId']) === i).map(r => pin(r, next));
@@ -453,7 +480,7 @@ const showGlobe = () => {
   openGlobe(c => {
     if (String(c.round) !== String(A.round)) selectRace(c.round, undefined, false);  // the header's race is loaded already
     return A.shown;
-  }, entered => { syncHash(); if (entered) play(); });
+  }, (entered, after) => { syncHash(); if (after) { after(); syncHash(); } else if (entered) play(); });
   setPins(pins());
 };
 
@@ -478,7 +505,9 @@ function commands() {
       {label: 'Next time of day', hint: 'L', run: () => { stage(); stageCommands.sky(); }},
       {label: 'Next graphics quality', hint: 'G', run: () => { stage(); stageCommands.tier(); }},
       {label: 'Cinematic view', hint: 'Replay', run: () => { stage(); setCinematic(); }}] : []),
+    {label: 'Start reaction game', hint: 'Five red lights', text: 'lights out reaction start game test', run: openReaction},
     {label: 'Switch theme', run: () => $('themebtn').click()},
+    ...teamCommands(),
     ...('Notification' in globalThis ? [{label: `Session start notices: turn ${notices() ? 'off' : 'on'}`, hint: 'When a session goes live', text: 'notify notification session start live alert', run: () => setNotices(!notices())}] : []),
     {label: `Spoiler-free mode: turn ${spoilerFree() ? 'off' : 'on'}`, hint: 'Hides recent results until watched', text: 'spoiler free mode hide results', run: () => setSpoilers(!spoilerFree())},
     {label: 'Keyboard shortcuts', hint: '?', run: openSheet},
@@ -569,6 +598,8 @@ async function init() {
   try { localStorage.setItem('f1visit', now); } catch (e) { /* storage blocked: no returns counted */ }
   setMode(stored('f1mode') === 'sim' ? 'sim' : 'watch', false);
   setTheme(stored('f1theme') ?? 'dark');
+  setTeam(stored('f1team'));
+  $('teambtn').onclick = () => openPalette(teamCommands());
   $('skip').onclick = e => {  // not a #fragment: the hash is the app's route
     e.preventDefault();
     const to = document.body.dataset.section === 'stream' ? $('stream') : document.querySelector('main');

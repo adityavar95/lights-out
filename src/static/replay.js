@@ -23,7 +23,7 @@ import {drsZones} from './telemetry.js';
 import {fetchCircuit, annotate, f1Coords} from './circuits.js';
 import {focusFrame} from './focus.js';
 import {pitTrace} from './strategy.js';
-import {lanes, GRID, apart, headings} from './lanes.js';
+import {lanes, GRID, apart, headings, retime} from './lanes.js';
 import {commentaryUi, syncCommentary} from './commentary.js';
 import {sessionStart} from './multiviewer.js';
 import {until} from './stream.js';
@@ -442,7 +442,10 @@ async function loadData(autoplay) {
     if (/is live now/.test(e.message)) return showLive();  // server.py LIVE_NOW
     showFailed(e, () => loadData(autoplay));
   } finally {
-    if (S.loading === load) S.loading = null;
+    if (S.loading === load) {
+      S.loading = null;
+      if (S.reelWanted) { S.reelWanted = false; if (S.data) toggleHighlights(); }  // H (or the globe's Highlights) pressed while it loaded
+    }
   }
 }
 
@@ -583,7 +586,7 @@ async function toggleHighlights() {
   if (S?.reel) return stopReel();
   if (!S || S.live || S.sim) return;
   const say = text => (ui.has3d ? announce(text) : setOverlay(text));
-  if (S.loading) return say('Still loading: try again in a moment');
+  if (S.loading) { S.reelWanted = true; return say('Highlights start once the race has loaded'); }
   if (!S.data) await loadData(false);
   if (!S.data) return;
   if (S.data.mode !== 'gps' || !S.data.intervals?.length) return say(S.data.mode === 'laps' ? 'Highlights need the GPS replay, still loading' : 'Highlights are for races with GPS data');
@@ -748,6 +751,7 @@ function prepare(data) {
     }
   }
   if (data.mode === 'gps') {
+    for (const f of Object.values(data.frames)) if (!f.retimed) { [f.x, f.y] = retime(f.x, f.y); f.retimed = true; }  // once: a swapped-in replay is prepared again
     const group = (feed, f) => {
       const m = {};
       for (const e of feed) (m[e[1]] ??= []).push(f(e));

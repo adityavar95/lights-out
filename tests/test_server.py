@@ -1042,3 +1042,8 @@ assert t == {"columns": ["position", "laps", "Driver.code", "Driver.x.y", "Const
              "data": [["1", "58", "RUS", 1, None], ["2", None, None, None, "Ferrari"]], "total": 2}, t
 assert server.table([]) == {"columns": [], "data": [], "total": 0}
 assert server.table([{"a": 1, "b": 2}], ["b"]) == {"columns": ["b"], "data": [[2]], "total": 1}
+
+# the offline trailer (stream.js) is served from docs/media, seekable by range, and nothing outside that folder
+r = client.get("/media/lights-out-trailer.mp4", headers={"Range": "bytes=0-99"})
+assert r.status_code == 206 and r.headers["content-type"] == "video/mp4" and len(r.content) == 100, (r.status_code, r.headers)
+assert client.get("/media/../server.py").status_code == 404

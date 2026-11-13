@@ -237,6 +237,21 @@ async function fill(rowEl, r, settle) {
   }
 }
 
+// the trailer: a local file (server.py /media), so Stream always has something that plays, with or without F1 TV
+function trailer() {
+  return el('button', {class: 'scard', 'aria-label': 'Lights Out trailer, plays here', onclick: () => {
+    count('trailer_play');
+    const dlg = el('dialog', {class: 'dcareer strailer', 'aria-label': 'Lights Out trailer', onclose: () => dlg.remove(), onclick: e => e.target === dlg && dlg.close()},
+      el('button', {class: 'dclose', 'aria-label': 'Close', onclick: () => dlg.close()}, '✕'),
+      el('video', {src: '/media/lights-out-trailer.mp4', poster: '/media/lights-out-trailer.jpg', controls: '', autoplay: '', playsinline: ''}));
+    document.body.append(dlg);
+    dlg.showModal();
+  }},
+  el('div', {class: 'sthumb'}, el('img', {src: '/media/lights-out-trailer.jpg', alt: '', decoding: 'async', loading: 'lazy'}),
+    el('span', {class: 'splay', 'aria-hidden': 'true'}, icon('play'))),
+  el('b', {}, 'Lights Out trailer'), el('small', {}, 'Plays here, no F1 TV needed'));
+}
+
 function build(year, races) {
   Object.assign(S, {year, races, bill: null, picked: false, answers: [], weekends: [], nextVideos: []});
   const now = new Date();
@@ -263,7 +278,7 @@ function build(year, races) {
   };
   const next = () => { const [x, r] = queue.shift() ?? []; return x?.isConnected && fill(x, r, (v, e) => settle(rows.indexOf(x), v, e)).then(next); };  // stops once the season changes
   headline(year, weekends.length ? skeleton(3) : el('h1', {}, 'No race weekends yet'));
-  $('srows').replaceChildren(...(sched.length ? [row(['Coming up'], 'srow-next', sched)] : []), ...rows);
+  $('srows').replaceChildren(...(sched.length ? [row(['Coming up'], 'srow-next', sched)] : []), ...rows, row(['Lights Out'], 'srow-trailer', [trailer()]));
   continueRow();
   refreshLead();  // a session to come leads at once, without waiting for F1 TV
   loadNext(year);

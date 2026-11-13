@@ -67,7 +67,6 @@ button, select, input { font: inherit; color: var(--ink); }
 /* the launch globe (globe.js): under the top bar, over everything else; space is dark in either theme */
 .globe { position: fixed; inset: 0; z-index: 4; overflow: hidden; background: radial-gradient(circle at 50% 55%, #0b1422, #020308 70%); color: #f2f2f2; transition: opacity .9s ease-in; }
 .globe.out { opacity: 0; pointer-events: none; }
-body[data-globe]:not([data-section=stream]) .topbar { position: relative; }  /* on phones the bar is static, where its z-index does nothing: it went under the globe */
 .globe canvas { display: block; width: 100%; height: 100%; touch-action: none; cursor: grab; }
 .globe canvas:active { cursor: grabbing; }
 .gpin { position: absolute; left: 0; top: 0; width: 12px; height: 12px; margin: -6px 0 0 -6px; padding: 0; border: 2px solid #fff; border-radius: 50%; background: var(--flag-red); box-shadow: 0 0 0 1px rgb(0 0 0 / .55), 0 0 10px rgb(225 6 0 / .7); cursor: pointer; }
@@ -1450,7 +1449,6 @@ body.intro .trackmap { height: calc(100dvh - 58px); max-height: none; aspect-rat
 /* phones: the header scrolls away, the hero is one line (the race picker has the rest), the 3D stage gets half the screen */
 @media (max-width: 900px) { .topbar { flex-wrap: wrap; } .brand .title { display: none; } }
 @media (max-width: 640px) {
-  .topbar { position: static; }  /* Stream's fixed bar is more specific and stays */
   .modeswitch button { padding: 4px 8px; }
   .hero { grid-template-columns: minmax(0, 1fr) auto; min-height: 50px; padding: 8px 12px; margin-top: 8px; }
   .herotext { flex-wrap: nowrap; }
@@ -1613,3 +1611,23 @@ kbd { padding: 1px 8px; border: 1px solid var(--hairline); border-radius: var(--
 .trdomtext { font-weight: 500; }
 @media (max-width: 1100px) { .tracedeck .trmain { min-height: 330px; } }  /* stacked: the plot keeps its height instead of sliding under the map */
 @media (max-width: 600px) { .trpick { flex-wrap: wrap; width: 100%; } .trpick small { max-width: none; flex: 1 1 100%; } .trpick select { flex: 1 1 0; min-width: 0; max-width: none; } }
+
+/* start reaction game (reaction.js): five red lights across a gantry */
+.rgame { user-select: none; cursor: pointer; }
+.rlights { display: flex; justify-content: center; gap: 18px; padding: 24px; margin: 8px 0 16px; border-radius: var(--radius); background: #0b0b0c; }
+.rlight { width: 64px; height: 64px; border-radius: 50%; background: #2a0d0d; box-shadow: inset 0 0 0 3px #000; }
+.rlight.on { background: radial-gradient(circle at 40% 35%, #ff6a5f, var(--flag-red) 60%); box-shadow: inset 0 0 0 3px #000, 0 0 24px rgb(225 6 0 / .8); }
+.rout { min-height: 3em; font-size: 18px; font-variant-numeric: tabular-nums; text-align: center; }
+.rbest { text-align: center; font-variant-numeric: tabular-nums; }
+/* the offline trailer (stream.js trailer) */
+.strailer { width: min(1280px, calc(100vw - 48px)); padding: 0; overflow: hidden; background: #000; }
+.strailer video { display: block; width: 100%; aspect-ratio: 16 / 9; }
+.strailer .dclose { z-index: 1; }
+/* the globe card's dossier (globe.js card, app.js dossier): facts under the name, the other ways in under Play */
+.gplay .gfact { font-variant-numeric: tabular-nums; }
+.gacts { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+.gacts:empty { display: none; }
+.gplay .gacts button { padding: 6px 16px; font-size: 13px; background: rgb(242 242 242 / .14); color: #f2f2f2; border: 1px solid rgb(242 242 242 / .35); }
+.gplay .gacts button:is(:hover, :focus-visible) { background: rgb(242 242 242 / .26); }
+/* the team colours button (app.js setTeam): a swatch of the accent it sets */
+.teambtn i { display: block; width: 12px; height: 12px; margin: auto; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 1px var(--hairline); }

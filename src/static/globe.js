@@ -151,8 +151,11 @@ function card(g, c) {
   g.card.classList.toggle('on', !!c);
   g.hint.hidden = !!c;
   if (!c) return;
-  g.card.firstChild.replaceChildren(el('b', {}, c.name), el('small', {}, c.place));
+  g.card.firstChild.replaceChildren(el('b', {}, c.name), el('small', {}, c.place), ...(c.facts ?? []).map(f => el('small', {class: 'gfact'}, f)));
   g.play.textContent = c.label;
+  g.after = null;
+  // the dossier's other ways in (app.js pin): enter flies down and opens the race first; the rest close the globe and go
+  g.acts.replaceChildren(...(c.actions ?? []).map(a => el('button', {onclick: () => { g.after = a.run; a.enter ? enter(g) : closeGlobe(); }}, a.label)));
 }
 
 // Play: the race opens under the globe (pick gives the promise of its stage), the view settles over the circuit, and
@@ -161,6 +164,7 @@ function enter(g) {
   const c = g.over, fly = g.fly = {from: view(g), to: {lat: c.lat, lng: c.lng, alt: END}, t0: performance.now(), ms: 1200, enter: true, ready: false};
   g.controls.enabled = false;
   Object.assign(g.play, {disabled: true, textContent: 'Loading…'});
+  for (const b of g.acts.children) b.disabled = true;
   const go = () => {
     if (G !== g || g.fly !== fly) return;
     fly.ready = true;
@@ -255,8 +259,9 @@ export async function openGlobe(pick, closed) {
   if (G || !ready) return;  // no GPU: the page as it was
   const canvas = el('canvas', {'aria-hidden': 'true'}), pinbox = el('div', {class: 'gpins'});
   const hint = el('p', {class: 'ghint', role: 'status'}, 'Drag to spin. Pick a circuit, zoom in on one, or choose a race above. Esc closes.');
-  const play = el('button', {onclick: () => enter(G)}), card = el('div', {class: 'gplay'}, el('span', {'aria-live': 'polite'}), play);
-  const g = G = {pick, closed, hint, pinbox, play, card, pins: [], ats: [], patches: [], w: 0, h: 0, painted: 0,
+  const play = el('button', {onclick: () => enter(G)}), acts = el('div', {class: 'gacts'});
+  const card = el('div', {class: 'gplay'}, el('span', {'aria-live': 'polite'}), play, acts);
+  const g = G = {pick, closed, hint, pinbox, play, acts, card, pins: [], ats: [], patches: [], w: 0, h: 0, painted: 0,
     el: el('section', {class: 'globe', 'aria-label': 'World map of circuits'}, canvas, pinbox, hint, card,
       el('small', {class: 'gcredit'}, 'Imagery: Esri, Maxar, Earthstar Geographics'),
       el('button', {class: 'themebtn gclose', 'aria-label': 'Close the world map', title: 'Close (Esc)', onclick: closeGlobe}, '✕'))};
@@ -309,5 +314,5 @@ export function closeGlobe() {
     g.scene.traverse(o => { o.geometry?.dispose(); o.material?.map?.dispose(); o.material?.dispose(); });
     g.surface.dispose?.();
   }
-  g.closed?.(!!g.fading);
+  g.closed?.(!!g.fading, g.after);
 }

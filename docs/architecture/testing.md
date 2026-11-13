@@ -14,12 +14,13 @@ node tests/test_globe.mjs                  # launch globe: lat/long on the spher
 node tests/test_trace.mjs                  # distance-resampled lap telemetry, Δt, engineer insights, trace plot smoke test
 node tests/test_whatif.mjs                 # Strategy Lab what-if model (baseline exactness, optimiser, traffic, SC stops)
 node tests/test_multiviewer.mjs            # F1 TV overlay timing (session names, telemetry lookup, lights-out sync)
-node tests/test_lanes.mjs                  # lap-timing replay lanes (two-column grid, passing without overlap)
+node tests/test_lanes.mjs                  # lap-timing replay lanes (two-column grid, passing without overlap); GPS retime (steady pace, same path)
 node tests/test_drivers.mjs                # Drivers tab season/career tallies (wins, podiums, poles, starts)
 node tests/test_glass.mjs                  # Liquid Glass lens map and rim 9-slice
 node tests/test_util.mjs                   # shared helpers (fetch cache TTL, error wording, CSV)
 node tests/test_palette.mjs                # command palette matching and shortcut guards
 node tests/test_pace.mjs                   # race trace, tyre-wear fits, undercut ledger
+node tests/test_reaction.mjs               # start reaction game: hold range, personal best, verdicts
 node tests/test_season.mjs                 # teammate head-to-head, cumulative points, title maths, supertime
 node tests/test_spoilers.mjs               # spoiler-free mode: which races hide their result, reveal list
 node tests/test_share.mjs                  # shareable link parsing, token stripping

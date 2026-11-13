@@ -14,6 +14,7 @@ PyInstaller.__main__.run([
     "--icon", str(ROOT / "src" / "static" / "lightsout.ico"),  # the LO badge, 16-256 px; the windows and taskbar take it from the exe
     "--paths", str(ROOT / "src"),
     "--add-data", f"{ROOT / 'src' / 'static'}:static",
+    "--add-data", f"{ROOT / 'docs' / 'media'}:media",  # the offline trailer on Stream
     "--collect-all", "onnx_asr",  # imported only at the first radio clip, so the analysis misses it
     "--collect-all", "livef1",
     # shortcut: CUDA's 2 GB of DLLs stay out, so radio transcription runs on the CPU (~4.5 s a clip); include them if that's too slow

@@ -63,3 +63,11 @@ assert.equal(rcText('DRS ENABLED'), 'DRS enabled');
 assert.equal(rcText('RISK OF RAIN FOR THE F1 RACE IS 80%'), 'Risk of rain for the F1 race is 80%');
 assert.equal(rcText(''), '');
 console.log('rcText ok');
+
+// inkOn: dark ink on light team colours, white on dark ones
+import {inkOn} from '../src/static/util.js';
+assert.equal(inkOn('#FFFFFF'), '#000');
+assert.equal(inkOn('#27F4D2'), '#000', 'Mercedes teal');
+assert.equal(inkOn('#FF8000'), '#000', 'McLaren orange');
+assert.equal(inkOn('#3671C6'), '#fff', 'Red Bull blue');
+assert.equal(inkOn('#15151e'), '#fff');
