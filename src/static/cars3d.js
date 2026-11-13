@@ -1,8 +1,9 @@
 // Procedural F1 cars in real metres (+x forward, y up, wheels on y = 0), shaped after each era's regulations.
 import * as THREE from 'three';
-import {Fn, attribute, uniform, texture, uv, vec3, vec4, float, fract as nFract, floor, sin, dot, mix, smoothstep as nSmooth, fwidth, abs, max, length, normalize, mod,
-        positionGeometry, normalViewGeometry} from 'three/tsl';
+import {Fn, attribute, uniform, texture, uv, vec2, vec3, vec4, float, fract as nFract, floor, sin, dot, mix, smoothstep as nSmooth, fwidth, abs, max, length, normalize, mod,
+        positionGeometry, normalGeometry, normalViewGeometry} from 'three/tsl';
 import {mergeGeometries, toCreasedNormals} from 'three/addons/utils/BufferGeometryUtils.js';
+import {noise} from './track3d.js';
 import {buildRB22, rb22Ready, inkFor} from './rb22.js';
 import {helmetGeometry, helmetMaterial, GEAR, VISOR} from './driver.js';
 
@@ -313,14 +314,14 @@ const smoothstep = (a, b, v) => THREE.MathUtils.smoothstep(v, a, b);
 
 // ---------- car template, shared by every car of an era ----------
 
-// vertex attributes of a wheel's one merged mesh: base colour, [roughness, metalness], [compound stripe, brake glow]
-function part(g, color, rough, metal, stripe = 0, glow = 0) {
+// vertex attributes of a wheel's one merged mesh: base colour, [roughness, metalness], [compound stripe, brake glow, rubber]
+function part(g, color, rough, metal, stripe = 0, glow = 0, rubber = 0) {
   const flat = g.index ? g.toNonIndexed() : g, n = flat.attributes.position.count, c = new THREE.Color(color);
   flat.deleteAttribute('uv');
   const fill = v => new THREE.Float32BufferAttribute(Array.from({length: n}, () => v).flat(), v.length);
   flat.setAttribute('wcol', fill([c.r, c.g, c.b]));
   flat.setAttribute('wpbr', fill([rough, metal]));
-  flat.setAttribute('wmask', fill([stripe, glow]));
+  flat.setAttribute('wmask', fill([stripe, glow, rubber]));
   return flat;
 }
 
@@ -332,7 +333,7 @@ function corner(s, [r, w], side) {
   for (let i = 0; i <= 5; i++) { const a = i / 5 * Math.PI / 2; prof.push([r - sh + Math.cos(a) * sh, w / 2 - sh + Math.sin(a) * sh]); }
   prof.push([s.rim + (r - s.rim) * 0.5, w / 2 + bulge], [s.rim, w / 2 - 0.012]);
   const tyre = 0x222224, metal = s.era >= 2022 ? 0x24262a : s.era < 1966 ? 0xb9bcc0 : 0x4a4d52, face = side * (w / 2 - 0.03);
-  const parts = [part(new THREE.LatheGeometry(prof.map(([a, b]) => new THREE.Vector2(a, b)), 48), tyre, 0.78, 0),
+  const parts = [part(new THREE.LatheGeometry(prof.map(([a, b]) => new THREE.Vector2(a, b)), 48), tyre, 0.78, 0, 0, 0, 1),
     part(new THREE.CylinderGeometry(s.rim, s.rim, w * 0.9, 32, 1, true), metal, 0.34, 0.9),
     part(new THREE.CylinderGeometry(s.rim * 0.82, s.rim * 0.82, 0.16, 20, 1, true).translate(0, side * (0.08 - w / 2), 0), 0x0c0c0e, 0.6, 0)];  // brake duct drum
   const spoke = (len, across, k, n) => new THREE.BoxGeometry(len, 0.016, across).translate(s.rim * 0.5, face, 0).rotateY(k * 2 * Math.PI / n);
@@ -354,12 +355,18 @@ function corner(s, [r, w], side) {
   return mergeGeometries(parts.map(g => g.rotateX(Math.PI / 2)));
 }
 
-// a wheel's one material: colours from the vertices, the compound's colour on the stripes, the brake glow on the disc
+// a wheel's one material: colours from the vertices, the compound's colour on the stripes, the brake glow on the disc.
+// The rubber: a satin sidewall with a fine grain, and a matte tread scrubbed grey in rings round the tyre (the wheel's
+// own frame: axle along z, so a sidewall's normal is mostly z and the tread's is in xy)
 function wheelMat(stripe) {
-  const m = new THREE.MeshStandardNodeMaterial(), mask = attribute('wmask', 'vec2'), pbr = attribute('wpbr', 'vec2'), t = uniform(0);
-  m.colorNode = mix(attribute('wcol', 'vec3'), uniform(stripe.color), mask.x);
-  m.roughnessNode = pbr.x;
+  const m = new THREE.MeshPhysicalNodeMaterial(), mask = attribute('wmask', 'vec3'), pbr = attribute('wpbr', 'vec2'), t = uniform(0);
+  const p = positionGeometry, tread = nSmooth(0.7, 0.35, abs(normalGeometry.z));
+  const grain = mix(noise(p.xy.mul(380)), noise(vec2(p.z.mul(900), p.x.add(p.y).mul(30))), tread);
+  const rubber = mask.z.mul(mix(mix(0.55, 0.75, grain), mix(1.5, 2.1, grain), tread));
+  m.colorNode = mix(attribute('wcol', 'vec3'), uniform(stripe.color), mask.x).mul(rubber.add(mask.z.oneMinus()));
+  m.roughnessNode = mix(pbr.x, mix(0.62, mix(0.88, 0.98, grain), tread), mask.z);
   m.metalnessNode = pbr.y;
+  m.specularIntensityNode = mix(1, 0.3, mask.z);  // rubber reflects far less than the 4 % a plain dielectric gets
   m.emissiveNode = mix(vec3(0.25, 0.01, 0), vec3(5.5, 1.1, 0.12), t.mul(t)).mul(nSmooth(0.02, 0.2, t)).mul(mask.y);
   m.userData = {brakeTemp: t};
   return m;

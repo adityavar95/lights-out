@@ -2,6 +2,7 @@
 import {el, svg, teamColor, th} from './util.js';
 import {raceModel} from './whatif.js';
 import {raceTrace, roadVsClassified} from './pace.js';
+import {faces} from './drivers.js';
 
 const tipEl = el('div', {class: 'tooltip', role: 'tooltip', hidden: true});
 document.body.append(tipEl);
@@ -41,8 +42,9 @@ export function renderResults(root, results, sprint, quali, view, onView) {
   };
   pick.append(...views.map(v => el('button', {class: 'pill', 'data-view': v[0], onclick: () => { show(v); onView?.(v[0]); }}, v[1])));
   show(views.find(v => v[0] === view) ?? views[0]);
-  const podium = [results[1], results[0], results[2]].filter(Boolean).map(r =>
-    el('div', {class: `step p${r.position}`},
+  const top = [results[1], results[0], results[2]].filter(Boolean), pics = faces(top);
+  const podium = top.map((r, i) =>
+    el('div', {class: `step p${r.position}`}, pics[i],
       el('div', {class: 'stepname'}, chip(teamColor(r['Constructor.constructorId'])), el('b', {}, code(r))),
       el('div', {class: 'muted small'}, name(r)),
       el('div', {class: 'muted small'}, r['Constructor.name']),
@@ -141,7 +143,8 @@ export function secondDrivers(ids, info) {
 function positionChart(laps, ids, info, pitstops, pinned) {
   const byDriver = {};
   for (const l of laps) (byDriver[l.driverId] ??= []).push([+l.number, +l.position]);
-  const L = Math.max(...laps.map(l => +l.number)), N = ids.length;
+  // rows down to the last grid slot: with non-starters ahead of them, the back of the grid used to share the bottom row
+  const L = Math.max(...laps.map(l => +l.number)), N = Math.max(ids.length, ...ids.map(id => +info[id].grid || 0));
   const W = 1000, rowH = 22, m = {l: 64, r: 64, t: 10, b: 30}, H = m.t + m.b + rowH * (N - 1);
   const x = lap => m.l + lap / L * (W - m.l - m.r), y = pos => m.t + (pos - 1) * rowH;
   const chart = svg('svg', {viewBox: `0 0 ${W} ${H}`, class: 'lapchart', role: 'img', 'aria-label': 'Position by lap for every driver'});
@@ -152,7 +155,7 @@ function positionChart(laps, ids, info, pitstops, pinned) {
   const dashed = secondDrivers(ids, info), f = follower(chart, pinned);
   for (const id of ids) {
     const r = info[id], color = teamColor(r['Constructor.constructorId'], r['Constructor.name']);
-    const pts = [...(+r.grid ? [[0, Math.min(+r.grid, N)]] : []), ...byDriver[id].sort((a, b) => a[0] - b[0])];
+    const pts = [...(+r.grid ? [[0, +r.grid]] : []), ...byDriver[id].sort((a, b) => a[0] - b[0])];
     const d = 'M' + pts.map(([lp, ps]) => `${x(lp).toFixed(1)},${y(ps)}`).join('L');
     const g = svg('g', {class: 'series', tabindex: 0, 'aria-label': `${code(r)} finished ${r.positionText}`});
     g.append(svg('path', {d, class: 'line', stroke: color, 'stroke-dasharray': dashed.has(id) ? '6 4' : 'none'}),
@@ -243,12 +246,17 @@ function traceChart(M, ids, info, refId, pitted, pinned) {
 }
 
 // why: what to say when the race has no laps (it hasn't run, or it's before 1996)
+// the followed lines per race (its drivers in finishing order): a tab switch or a redraw keeps them
+const PINS = new Map();
+
 export function renderLapChart(root, laps, results, pitstops, why) {
   if (!laps.length) return root.replaceChildren(empty(why));
   const info = Object.fromEntries(results.map(r => [r['Driver.driverId'], r]));
   const seen = new Set(laps.map(l => l.driverId)), ids = results.map(r => r['Driver.driverId']).filter(id => seen.has(id));
   if (!ids.length) return root.replaceChildren(empty(why));
-  const pinned = new Set(), body = el('div');
+  // 22 lines at full strength read as noise: the podium starts followed, the rest dimmed, until the reader picks
+  const key = ids.join(), pinned = PINS.get(key) ?? new Set(ids.slice(0, 3)), body = el('div');
+  PINS.set(key, pinned);
   let M, refId = ids[0], view = 'position';  // results come in finishing order: ids[0] is the winner
   const refPick = el('select', {'aria-label': 'Reference driver', onchange: e => { refId = e.target.value; draw(); }},
     ids.map(id => new Option(`Gap to ${code(info[id])}${info[id].position === '1' ? ' (winner)' : ''}`, id)));

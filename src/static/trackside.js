@@ -35,7 +35,8 @@ function colored(g, color) {
 const METRES = m => 1 / m(1);
 
 function boardTexture(text) {
-  const c = Object.assign(document.createElement('canvas'), {width: 128, height: 128}), g = c.getContext('2d');
+  const c = Object.assign(document.createElement('canvas'), {width: 256, height: 256}), g = c.getContext('2d');
+  g.scale(2, 2);
   g.fillStyle = '#f4f4f4';
   g.fillRect(0, 0, 128, 128);
   g.fillStyle = '#111';
@@ -43,7 +44,7 @@ function boardTexture(text) {
   g.textAlign = 'center';
   g.textBaseline = 'middle';
   g.fillText(text, 64, 68);
-  return Object.assign(new THREE.CanvasTexture(c), {colorSpace: THREE.SRGBColorSpace, anisotropy: 8});
+  return Object.assign(new THREE.CanvasTexture(c), {colorSpace: THREE.SRGBColorSpace, anisotropy: 16});
 }
 
 // F: road frames; runs: corner runs (arrays of frames); half: half width; wall: barrier distance from the kerb, scene units

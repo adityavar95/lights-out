@@ -133,7 +133,7 @@ export function helmetMaterial(base, accent, num = null) {
   }
   g.fillStyle = '#0c0d0f'; g.fillRect(0, H * 0.95, W, H * 0.05);
   const map = new THREE.CanvasTexture(canvas);
-  Object.assign(map, {colorSpace: THREE.SRGBColorSpace, anisotropy: 8});
+  Object.assign(map, {colorSpace: THREE.SRGBColorSpace, anisotropy: 16});
   map.onUpdate = () => { canvas.width = canvas.height = 0; };  // uploaded once: the canvas can go
   return new THREE.MeshPhysicalMaterial({map, roughness: 0.25, metalness: 0.15, clearcoat: 1, clearcoatRoughness: 0.03});
 }

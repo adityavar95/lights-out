@@ -12,11 +12,17 @@ function draw({state, done, total, failed, missing}) {
   b.classList.toggle('tvbtn', !running && !ready);
   b.disabled = running || ready;
   b.onclick = finished ? () => location.reload() : startDownload;
-  b.textContent = running ? `Downloading ${total ? Math.floor(done / total * 100) : 0}%` : finished ? 'Reload for 4K' : ready ? 'Assets ready' : state === 'error' ? 'Retry download' : 'Download assets';
-  b.title = running ? `${done.toLocaleString()} of ${total.toLocaleString()} files`
+  const label = running ? `Downloading ${total ? Math.floor(done / total * 100) : 0}%` : finished ? 'Reload for 4K' : ready ? 'Assets ready' : state === 'error' ? 'Retry download' : 'Download assets';
+  // a round icon like its neighbours when there's nothing to watch (all here, or not started); words while it runs or needs a click
+  const icon = ready || label === 'Download assets';
+  b.classList.toggle('themebtn', icon);
+  b.setAttribute('aria-label', label);
+  if (icon) b.innerHTML = `<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2v8M4.5 6.5 8 10l3.5-3.5M3 13.5h10"/></svg>${ready ? '<i class="dlok" aria-hidden="true"></i>' : ''}`;
+  else b.textContent = label;
+  b.title = label + ': ' + (running ? `${done.toLocaleString()} of ${total.toLocaleString()} files`
     : ready ? 'Every 4K sky, texture and satellite tile is on this computer'
     : state === 'error' ? `${failed.toLocaleString()} files failed. What's done is kept.`
-    : '4K skies, textures and satellite ground for every circuit, about 600 MB, so nothing has to load later';
+    : '4K skies, textures and satellite ground for every circuit, about 600 MB, so nothing has to load later');
 }
 
 async function refresh() {

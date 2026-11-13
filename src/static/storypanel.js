@@ -11,7 +11,7 @@ const CAVEAT = "Lap times from Jolpica. Beats marked “model” are the Strateg
 // race: () => {year, round} shown now; open: (lap, atEnd, {id, code}) plays that moment
 export function setupStory(stage, race, open) {
   const body = el('div', {class: 'storybody'});
-  const btn = el('button', {class: 'neu', 'aria-expanded': false, 'aria-controls': 'storypanel', title: 'What decided this race, moment by moment', onclick: () => toggle()}, 'Why');
+  const btn = el('button', {class: 'neu', 'aria-expanded': false, 'aria-controls': 'storypanel', title: 'What decided this race, moment by moment', 'aria-label': 'Why positions changed: what decided this race', onclick: () => toggle()}, 'Why positions changed');
   const close = el('button', {class: 'neu', 'aria-label': 'Close', onclick: () => toggle(false)}, '×');
   const panel = el('section', {id: 'storypanel', class: 'storypanel', 'aria-label': 'What decided this race', hidden: true},
     el('header', {class: 'pwhead'}, el('div', {class: 'phead'}, 'WHY'), close), body);

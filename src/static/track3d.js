@@ -1,7 +1,7 @@
 // Track surface: procedural asphalt as a TSL node material. The racing line its rubber follows comes from sim.js.
 import * as THREE from 'three';
 import {Fn, uniform, attribute, texture, uv, vec2, vec3, float, fract, floor, dot, mix, smoothstep, clamp, exp, abs, max, min, sqrt, fwidth,
-        normalize, normalMap as normalMapNode, materialColor} from 'three/tsl';
+        normalize, length, normalMap as normalMapNode, materialColor} from 'three/tsl';
 
 const hash = Fn(([p]) => {
   const q = fract(vec3(p.x, p.y, p.x).mul(0.1031)).toVar();
@@ -63,14 +63,18 @@ export function asphalt(maps, half) {
   mat.colorNode = materialColor.rgb.mul(mix(texture(maps.map, uvA), texture(maps.map, uvB), bmix).rgb)
     .mul(noise(track.mul(0.12)).mul(0.16).add(0.92)).mul(rubber.mul(-0.6).add(1))
     .mul(marks.mul(-0.3).add(1)).mul(joint.mul(-0.2).add(1)).mul(crumbs.mul(-0.55).add(1)).mul(mix(1, 0.45, sqrt(water)));
-  // bare aggregate ~0.72, polished rubber 0.28, a water film 0.035
-  const rough = mix(texture(maps.roughnessMap, uvA).g, texture(maps.roughnessMap, uvB).g, bmix).mul(0.72)
-    .mul(noise(track.mul(0.3).add(7)).mul(0.15).add(0.88));
-  mat.roughnessNode = mix(mix(rough, 0.28, max(rubber, marks.mul(0.5))), 0.035, water);
-  mat.metalnessNode = float(0);
-  mat.clearcoatNode = max(water, rubber.mul(0.15));
-  // the second sample's slopes rotated into the first's frame, blended, and scaled by the water film smoothing the aggregate
   const nA = texture(maps.normalMap, uvA).xyz, nB = texture(maps.normalMap, uvB).xyz.mul(2).sub(1);
+  // bare aggregate is the photo's own roughness (~0.9: dry asphalt has no sheen), rubbered-in line 0.6, a water film 0.035.
+  // Toksvig: far away the normal map's mips average the bumps flat (the mean normal gets shorter than 1), which would turn
+  // the distance into a glossy sheet, so the length lost goes back in as roughness
+  const lost = max(float(1).sub(mix(length(nA.mul(2).sub(1)), length(nB), bmix)), 0);
+  const photoRough = mix(texture(maps.roughnessMap, uvA).g, texture(maps.roughnessMap, uvB).g, bmix)
+    .mul(noise(track.mul(0.3).add(7)).mul(0.12).add(0.9));
+  const rough = min(sqrt(photoRough.mul(photoRough).add(lost)), 1);
+  mat.roughnessNode = mix(mix(rough, min(rough, 0.6), max(rubber, marks.mul(0.5))), 0.035, water);
+  mat.metalnessNode = float(0);
+  mat.clearcoatNode = water;  // only water: dry rubber is matt, a mirror coat on it read as plastic
+  // the second sample's slopes rotated into the first's frame, blended, and scaled by the water film smoothing the aggregate
   const nBack = vec3(dot(nB.xy, vec2(0.8, 0.6)), dot(nB.xy, vec2(-0.6, 0.8)), nB.z).mul(0.5).add(0.5);
   mat.normalNode = normalMapNode(normalize(mix(nA.mul(2).sub(1), nBack.mul(2).sub(1), bmix)).mul(0.5).add(0.5), normalScale);
   return mat;

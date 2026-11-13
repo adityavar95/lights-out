@@ -35,9 +35,13 @@
   </div>
   <button id="nextbtn" class="nextbtn" hidden></button>
   <button id="livebtn" class="livebtn" hidden>● LIVE</button>
-  <button id="dlbtn" class="dlbtn" hidden></button>
-  <button id="palbtn" class="themebtn" aria-label="Open the command palette" aria-keyshortcuts="Control+K Meta+K" title="Commands (Ctrl+K)"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="6" cy="6" r="4.2"/><path d="M9.2 9.2 12.5 12.5"/></svg></button>
-  <button id="themebtn" class="themebtn" aria-label="Theme">◐</button>
+  <button id="topmenu" class="themebtn topmenu" popovertarget="topright" aria-haspopup="true" aria-label="More: assets, world map, commands, theme">⋯</button>
+  <div class="topright" id="topright" popover="auto">
+    <button id="dlbtn" class="dlbtn" hidden></button>
+    <button id="globebtn" class="themebtn" aria-label="World map of circuits" title="World map: every circuit"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="8" cy="8" r="6.3"/><ellipse cx="8" cy="8" rx="2.7" ry="6.3"/><path d="M1.7 8h12.6"/></svg></button>
+    <button id="palbtn" class="themebtn" aria-label="Open the command palette" aria-keyshortcuts="Control+K Meta+K" title="Commands (Ctrl+K)"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="6" cy="6" r="4.2"/><path d="M9.2 9.2 12.5 12.5"/></svg></button>
+    <button id="themebtn" class="themebtn" aria-label="Theme">◐</button>
+  </div>
 </header>
 <section id="hero" class="hero" aria-live="polite"></section>
 <section id="intro" class="introcard" aria-label="Welcome"></section>

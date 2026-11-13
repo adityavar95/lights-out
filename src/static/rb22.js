@@ -4,7 +4,7 @@
 // 2026+ car's THREE.LOD, with our procedural 2026 car as the far level. Car space as in cars3d.js: metres, +x forward,
 // +z right, tyres on y = 0, length centred on the origin.
 import * as THREE from 'three';
-import {mrt, vec4} from 'three/tsl';
+import {mrt, vec3, vec4, texture as tex, uniform, mix, max as tmax} from 'three/tsl';
 import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
 import {MeshoptDecoder} from 'three/addons/libs/meshopt_decoder.module.js';
 import {seatDriver} from './driver.js';
@@ -52,6 +52,9 @@ function bake(scene) {
     // no metallicFactor in the file, so glTF's default 1 made these dark grey parts chrome
     if (m.material.name.startsWith('redbull_detail')) m.material.metalness = 0;
     if (m.material.name.startsWith('redbull_detail')) dropTriangles(geometry, c => NOSE_PLATE.containsPoint(c));
+    // the file ships the tyres glossy as plastic with their normal map (moulded lettering, rubber grain) scaled to 0;
+    // y is negated as GLTFLoader does for glTF's tangent space
+    if (m.material.name.startsWith('sidewall')) Object.assign(m.material, {roughness: 0.82}).normalScale.set(1, -1);
     if (m.material.name.startsWith('rear_light')) {  // one mesh along the car: the tail's part is the rain light
       const tail = dropTriangles(geometry.clone(), c => c.z > TAIL_Z);
       out.add(Object.assign(new THREE.Mesh(tail, m.material), {name: 'rain-light'}));
@@ -244,9 +247,19 @@ const decalMaterial = m => decals ??= Object.assign(new THREE.MeshStandardNodeMa
 
 // ---------- one car ----------
 
+// Pirelli moulds its lettering in the compound's colour: the file's red lettering takes the car's stripe colour (setTyre)
+function tyreMat(base, stripe) {
+  const m = new THREE.MeshPhysicalNodeMaterial();
+  for (const k of ['name', 'map', 'normalMap', 'normalScale', 'roughness', 'metalness', 'specularIntensity', 'side']) m[k] = base[k];
+  // the lettering is pure red (247, 0, 0) over grey rubber: its red excess is its coverage, so antialiased edges unmix cleanly
+  const c = tex(base.map), red = c.r.sub(tmax(c.g, c.b)).max(0);
+  m.colorNode = mix(c.rgb.sub(vec3(red, 0, 0)), uniform(stripe.color), red.div(0.93).min(1));
+  return m;
+}
+
 // paint: the car's own paint material (cars3d.js's livery paint; this adds the race number as its map);
 // accent: the livery's accent (trim, helmet band); ink: the number's colour; helmet: colour; num: race number or null;
-// stripe / light: materials shared with the far LOD level (tyre-compound rings, rear light). Call only once rb22Ready().
+// stripe / light: materials shared with the far LOD level (tyre compound colour, rear light). Call only once rb22Ready().
 // Returns {group, body, halo, paintMesh, wheels: [{pivot, spin, front}], steeringWheel, mirrors, discs (brake-glow
 // materials), tyre: [r, w], len, wb, width, eye, look, tcam, tcamLook, exhaust, plank, fronts, hubs, pose (the driver's
 // arms to the steering wheel's angle), dispose}.
@@ -260,7 +273,7 @@ export function buildRB22({paint, accent, ink, helmet, num, stripe, light}) {
   texels ??= slotTexels(paintMesh, NUMBER);
   Object.assign(paint, {map: paintTexture(ink, num), side: THREE.DoubleSide});
   own.push(paint, paint.map);
-  const accentMats = new Map(), discMats = new Map();
+  const accentMats = new Map(), discMats = new Map(), tyreMats = new Map();
   root.traverse(o => {
     if (!o.isMesh) return;
     const name = o.material.name;
@@ -272,12 +285,15 @@ export function buildRB22({paint, accent, ink, helmet, num, stripe, light}) {
     } else if (name.startsWith('discs')) {  // the model's disc texture, glowing per car under braking
       if (!discMats.has(o.material)) discMats.set(o.material, brakeMat(o.material));
       o.material = discMats.get(o.material);
+    } else if (name.startsWith('sidewall')) {
+      if (!tyreMats.has(o.material)) tyreMats.set(o.material, tyreMat(o.material, stripe));
+      o.material = tyreMats.get(o.material);
     } else if (o.name === 'rain-light') o.material = light;  // flashes with ERS harvesting and in the wet
     else if (name.startsWith('sw_decals')) o.material = decalMaterial(o.material);
     else if (name.startsWith('gp21_LCD')) o.material = screenMaterial();
     if (o.name.startsWith('mirror-')) o.geometry = o.geometry.clone();  // the mirror stretches its glass per car
   });
-  own.push(...accentMats.values(), ...discMats.values());
+  own.push(...accentMats.values(), ...discMats.values(), ...tyreMats.values());
 
   // position: length centred on the origin, the bottoms of the tyres on y = 0
   const box = o => { car.updateMatrixWorld(true); return new THREE.Box3().setFromObject(o); };
@@ -285,7 +301,7 @@ export function buildRB22({paint, accent, ink, helmet, num, stripe, light}) {
   root.position.set(-(all.min.x + all.max.x) / 2, -ground, 0);
 
   // Wheels: the whole corner (tyre, rim, disc) spins about its hub on the wheel's own axle (the fronts are modelled
-  // with camber); the front pivots steer about y. The compound ring sits on each sidewall, on the spinning part.
+  // with camber); the front pivots steer about y.
   const hubs = [];
   const wheels = CORNERS.map((name, i) => {
     const node = root.getObjectByName(name), b = box(node), hub = b.getCenter(new THREE.Vector3());
@@ -295,11 +311,6 @@ export function buildRB22({paint, accent, ink, helmet, num, stripe, light}) {
     const axle = new THREE.Group(); axle.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), axleOf(node)); pivot.add(axle);
     const spin = new THREE.Group(); axle.add(spin); car.updateMatrixWorld(true);
     spin.attach(node);
-    for (const side of [-1, 1]) {
-      const ring = new THREE.Mesh(new THREE.TorusGeometry(r - 0.075, 0.009, 6, 48), stripe);
-      ring.position.z = side * (w / 2 - 0.004);
-      spin.add(ring);
-    }
     return {pivot, spin, front: i < 2};
   });
 
@@ -329,7 +340,7 @@ export function buildRB22({paint, accent, ink, helmet, num, stripe, light}) {
     for (const x of own) x.dispose();
     car.traverse(o => {
       o.userData.disposeMirror?.();
-      if (o.isMesh && (o.name.startsWith('mirror-') || o.geometry.type !== 'BufferGeometry')) o.geometry.dispose();  // clones, rings
+      if (o.isMesh && o.name.startsWith('mirror-')) o.geometry.dispose();  // clones
     });
   };
   return {group: car, body, halo: new THREE.Group(), paintMesh, wheels, steeringWheel, mirrors: MIRRORS.map(n => root.getObjectByName(n)), discs: [...discMats.values()],

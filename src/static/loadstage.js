@@ -3,7 +3,7 @@
 import {el} from './util.js';
 
 const STAGES = new Map();
-let box = null, hide = 0;
+let box = null, hide = 0, show = 0;
 
 export const setupLoadStage = parent => {
   box = el('div', {class: 'loadstage glass', role: 'status', hidden: true});
@@ -18,13 +18,21 @@ function draw() {
   if (!box) return;
   clearTimeout(hide);
   const all = [...STAGES.values()];
-  box.hidden = !all.length;
+  if (!all.length) box.hidden = true;
   box.replaceChildren(...all.map(s => el('div', {class: 'lsrow', 'data-state': s.state},
     el('span', {}, s.label), el('i', {}, el('b', {style: `width:${Math.round(s.frac * 100)}%`})),
     el('small', {}, s.state === 'offline' ? s.note : s.state === 'done' ? 'ready' : `${Math.round(s.frac * 100)}%`))));
-  if (all.length && all.every(s => s.state !== 'loading')) {
+  if (!all.length) return;
+  if (all.every(s => s.state !== 'loading')) {
     reveal();
-    hide = setTimeout(() => { STAGES.clear(); box.hidden = true; }, 1600);
+    clearTimeout(show);
+    show = 0;
+    const read = STAGES.has('say') || all.some(s => s.state === 'offline');  // words to read: an announcement, what's standing in
+    if (box.hidden && !read) return STAGES.clear();  // all ready before it ever showed: a panel of "ready" rows is noise
+    box.hidden = false;
+    hide = setTimeout(() => { STAGES.clear(); box.hidden = true; }, read ? 1600 : 400);
+  } else if (box.hidden && !show) {  // shown only if still loading a moment later
+    show = setTimeout(() => { show = 0; if ([...STAGES.values()].some(s => s.state === 'loading')) box.hidden = false; }, 300);
   }
 }
 

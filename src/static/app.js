@@ -16,6 +16,7 @@ import {parseHash, formatHash, held} from './share.js';
 import {resultLedgers} from './ledgers.js';
 import {setupDownloads, startDownload, canDownload} from './downloads.js';
 import {spoilerFree, setSpoilerFree, hides, reveal, recent} from './spoilers.js';
+import {openGlobe, globeOpen, flyTo, setPins} from './globe.js';
 
 const $ = id => document.getElementById(id);
 const A = {year: null, round: null, races: [], mode: 'watch', section: 'analytics'};
@@ -70,12 +71,13 @@ const TABS = {
 };
 let active = 'replay', drawn = {};
 // the address keeps the view (#stream, #2026/18/results, a Simulation #2026/18/sim), so a reload or a shared link lands on it
-const view = () => (A.section === 'stream' ? '#stream' : A.round ? `#${A.year}/${A.round}/${A.mode === 'sim' ? 'sim' : active}` : null);
+// (none under the globe: the address stays as it was, so a reload of the bare address comes back to the globe)
+const view = () => (globeOpen() ? null : A.section === 'stream' ? '#stream' : A.round ? `#${A.year}/${A.round}/${A.mode === 'sim' ? 'sim' : active}` : null);
 // a link's moment stays in the address, so a reload lands on it again, until the replay moves on or the view changes
 let pending = null;  // {link, path, hash, open}
 const address = () => {
   const h = view();
-  if (pending && (h !== pending.path || (pending.open && !held(pending.link, moment())))) pending = null;
+  if (pending && (!h || h !== pending.path || (pending.open && !held(pending.link, moment())))) pending = null;
   return pending?.hash ?? h;
 };
 // a link to this view, with the replay's moment only when asked for: the address itself doesn't follow playback
@@ -97,6 +99,7 @@ const syncTitle = () => {
 };
 
 function activate(name) {
+  document.body.dataset.tab = name;  // style.css: phones drop the hero over the replay
   const swap = () => {
     for (const b of document.querySelectorAll('[role=tab]')) {
       const on = b.dataset.tab === name;
@@ -338,16 +341,17 @@ async function loadSeason(year, round = null, sim = A.mode === 'sim') {
   }
   if (A.year !== year) return;  // the reader has picked another season meanwhile
   A.races = races;
+  setPins(pins());
   const next = A.races.find(r => !hasRun(r));
   cal.replaceChildren(...A.races.map(r => el('button', {
     class: `racecard ${hasRun(r) ? '' : 'upcoming'}`, 'data-round': r.round,
     onclick: () => { cal.hidePopover(); selectRace(r.round); }},
     el('span', {class: 'rnd'}, ordinal(+r.round)), flag(r['Circuit.Location.country'], 40),
-    el('span', {class: 'rc-name'}, el('b', {}, r['Circuit.Location.country']), el('small', {}, `${r.raceName} · ${fmtDate(r.date)}`)),
-    el('span', {class: 'rc-tags'}, r === next && el('span', {class: 'next'}, 'NEXT'), kindTag(year, r)))));
+    el('span', {class: 'rc-name'}, el('b', {}, r['Circuit.Location.country']), el('small', {}, r.raceName)),  // the name truncates on phones, the date doesn't
+    el('span', {class: 'rc-tags'}, el('small', {class: 'rc-date'}, fmtDate(r.date)), r === next && el('span', {class: 'next'}, 'NEXT'), kindTag(year, r)))));
   const last = A.races.filter(hasRun).at(-1) ?? A.races[0];
   if (!race(round)) round = null;  // e.g. a stale link
-  if (round ?? last) selectRace(round ?? last.round, sim);
+  if (round ?? last) selectRace(round ?? last.round, sim, round !== null);  // the season's default race doesn't fly the globe
   else noRace(`${year} season`, () => el('p', {class: 'empty'}, `No races on the ${year} calendar yet.`));
   if (A.intro && A.round && !sim) startIntro(A.races.find(x => x.round === String(A.round)), A.shown);
   if (A.firstSeason && year === +today().slice(0, 4)) newRace();
@@ -368,7 +372,7 @@ const markRace = round => {
   }
 };
 
-async function selectRace(round, sim = A.mode === 'sim') {
+async function selectRace(round, sim = A.mode === 'sim', fly = true) {
   clearInterval(timer);
   $('norace')?.remove();
   document.querySelector('.tabs').style.display = '';
@@ -385,7 +389,8 @@ async function selectRace(round, sim = A.mode === 'sim') {
       el('span', {class: 'muted'}, `Round ${r.round} · ${new Date(r.date + 'T00:00:00').toLocaleDateString(undefined, {day: 'numeric', month: 'short', year: 'numeric'})}`
         + ` · ${r['Circuit.circuitName']}, ${r['Circuit.Location.locality']}`)),
     // a weekend still to finish: every session in the reader's own time, and the season as a calendar file
-    r.date >= today() && el('div', {class: 'herosched'},
+    // '' when there is none: replaceChildren would print a bare false as text
+    r.date < today() ? '' : el('div', {class: 'herosched'},
       ...SESSIONS.map(([k, name]) => [name, at(r, k)]).filter(([, d]) => d).map(([name, d]) =>
         el('span', {class: d < new Date() ? 'muted' : ''}, el('b', {}, name), ` ${d.toLocaleString(undefined, {weekday: 'short', hour: '2-digit', minute: '2-digit'})}`)),
       el('a', {href: `/api/calendar/${A.year}.ics`, download: `grand-prix-${A.year}.ics`, title: `Every ${A.year} session, for your calendar app`}, 'Add to calendar')),
@@ -413,6 +418,8 @@ async function selectRace(round, sim = A.mode === 'sim') {
   $('racebtn').replaceChildren(el('span', {class: 'rnd'}, ordinal(+r.round)), flag(r['Circuit.Location.country'], 40),
     el('b', {}, r['Circuit.Location.country']), el('span', {class: 'caret', 'aria-hidden': 'true'}, '▾'));
   A.shown = showRace(A.year, round, ['Race'], sim);
+  // chosen with the globe up: it flies to the circuit, where Play fades it into the stage
+  if (fly && globeOpen()) flyTo(pin(r));
   // a results-only race opens on Results, not on a stage with nothing to play; the next replayable race goes back
   const kind = replayKind(A.year, r.date);
   if (!sim && kind === 'results' && active === 'replay') { A.bounced = true; activate('results'); }
@@ -431,6 +438,25 @@ async function selectRace(round, sim = A.mode === 'sim') {
   }).catch(() => {});
 }
 
+// The launch view (globe.js): the Earth with the header season's circuits pinned on it. A pin flies to its circuit, and
+// Play there opens that season's race (its first, where a season went twice), in the mode the header is in, and starts
+// it once the globe has gone; a race picked in the header flies there too (selectRace), and another season changes the pins.
+// state: the race on screen ('shown') and the next one to run ('next') get their own pin look (style.css .gpin)
+const pin = (r, next) => ({round: r.round, name: r['Circuit.circuitName'], place: `${r['Circuit.Location.locality']}, ${r['Circuit.Location.country']}`,
+  country: r['Circuit.Location.country'], state: String(r.round) === String(A.round) ? 'shown' : r === next ? 'next' : '',
+  lat: +r['Circuit.Location.lat'], lng: +r['Circuit.Location.long'], label: hasRun(r) ? '▶ Play' : 'Open'});
+const pins = () => {
+  const next = A.races.find(r => !hasRun(r));
+  return A.races.filter((r, i, all) => all.findIndex(x => x['Circuit.circuitId'] === r['Circuit.circuitId']) === i).map(r => pin(r, next));
+};
+const showGlobe = () => {
+  openGlobe(c => {
+    if (String(c.round) !== String(A.round)) selectRace(c.round, undefined, false);  // the header's race is loaded already
+    return A.shown;
+  }, entered => { syncHash(); if (entered) play(); });
+  setPins(pins());
+};
+
 // the command palette's list (palette.js). Circuits and Cars live in Play; the trace and cinematic on the stage of the current mode
 function commands() {
   const stage = () => { if (A.section !== 'analytics') setSection('analytics'); activate('replay'); };
@@ -443,6 +469,7 @@ function commands() {
       activate(b.dataset.tab);
     }})) : []),
     ...(canDownload() ? [{label: 'Download assets', hint: 'About 600 MB', run: startDownload}] : []),
+    {label: 'World map', hint: 'Every circuit', text: 'world map globe earth circuits', run: showGlobe},
     {label: 'Circuits', hint: 'Play', run: () => { setView('sim'); open('circuitdeck'); }},
     {label: 'Cars', hint: 'Play', run: () => { setView('sim'); open('carsdeck'); }},
     ...(A.round ? [{label: 'Telemetry trace', hint: 'Shift T', run: () => { stage(); open('tracedeck'); }},
@@ -554,6 +581,9 @@ async function init() {
   if (location.hash === '#stream') setSection('stream');
   A.intro = location.hash === '#intro' || (!location.hash && !stored('f1seen'));
   A.firstSeason = true;  // the first season loaded checks for a race new since the last visit
+  // a bare address opens on the globe, over the latest race (a first visit gets the intro instead)
+  if (!location.hash && !A.intro) showGlobe();
+  $('globebtn').onclick = showGlobe;
   // shortcut: polled, since the replay's time moves in a dozen places; replay.js could say so itself if a second reader appears
   setInterval(() => {
     pending?.open && syncHash(true);
@@ -562,7 +592,7 @@ async function init() {
   addEventListener('hashchange', () => {
     takeToken();
     const open = [...document.querySelectorAll('dialog')].filter(d => d.matches(':modal'));
-    if (!open.length) return route();
+    if (!open.length) return location.hash ? route() : showGlobe();  // Back to the bare address: the globe again
     open.forEach(d => d.close());  // Back closes the dialog and stays on the page under it
     syncHash();
   });

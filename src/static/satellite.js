@@ -1,7 +1,7 @@
 // Satellite ground: the replay's outline (F1 timing coordinates, no geographic reference) is georeferenced by fitting it
 // to the circuit's real shape (GeoJSON, local metres), and Esri World Imagery tiles for the area round it are stitched on
 // a canvas. No three.js or DOM here, so groundwork.js's worker runs it: fitGeo is pure (tests/test_circuits.mjs).
-const TILES = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile';
+export const TILES = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile';
 
 // closed polyline -> n points evenly spaced along it
 function resample(pts, n) {

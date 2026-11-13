@@ -53,3 +53,13 @@ assert.match(plain(new Error('502 Bad Gateway')), /server had a problem/);
 assert.match(plain(new Error('429 Too Many Requests')), /Too many requests/);
 assert.equal(plain(new Error('No round 99 in 2026')), 'No round 99 in 2026');
 console.log('util ok');
+
+// race control messages: sentence case, the chip's flag word not repeated, car codes and acronyms kept
+import {rcText} from '../src/static/util.js';
+assert.equal(rcText('CLEAR IN TRACK SECTOR 12', 'CLEAR'), 'In track sector 12');
+assert.equal(rcText('GREEN LIGHT - PIT EXIT OPEN', 'GREEN'), 'Green light - pit exit open');
+assert.equal(rcText('CAR 4 (NOR) TIME 1:12.345 DELETED', null), 'Car 4 (NOR) time 1:12.345 deleted');
+assert.equal(rcText('DRS ENABLED'), 'DRS enabled');
+assert.equal(rcText('RISK OF RAIN FOR THE F1 RACE IS 80%'), 'Risk of rain for the F1 race is 80%');
+assert.equal(rcText(''), '');
+console.log('rcText ok');
