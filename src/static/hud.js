@@ -1,6 +1,6 @@
 // Broadcast / pit-wall HUD: glass panels laid round the edge of the 3D view (bento layout, the centre stays clear),
 // with the telemetry cluster, g-force friction circle, tyre thermal matrix and circuit radar.
-import {el, svg, fmtClock, lastBefore, led} from './util.js';
+import {el, svg, fmtClock, lastBefore, led, rcText} from './util.js';
 import {CORNERS, tyreColor} from './telemetry.js';
 import {nearestPoint} from './pitdata.js';
 
@@ -74,7 +74,7 @@ export function setupHud(wrap, {onClose, onErsMode, onDrsTest}) {
   gsvg.append(svg('line', {x1: -55, x2: 55, y1: 0, y2: 0, class: 'axis'}), svg('line', {x1: 0, x2: 0, y1: -55, y2: 55, class: 'axis'}), h.gTrail, h.gDot);
   const tyreCell = (ty, cls) => el('div', {class: `tcell ${cls}`}, ty.swatch, el('div', {}, ty.temp, ty.wear));
   h.gpanel = glass('gpanel',
-    el('div', {class: 'phead'}, 'G-FORCE', el('span', {class: 'src'}, 'MODEL')),
+    el('div', {class: 'phead'}, 'G-FORCE', el('span', {class: 'src', title: 'Estimated from speed and track curvature, not measured on the car'}, 'ESTIMATED')),
     el('div', {class: 'gwrap'}, gsvg, el('div', {class: 'gread'}, el('small', {}, 'LAT'), h.gLat, el('small', {}, 'LONG'), h.gLong, el('small', {}, 'PK LAT'), h.pkLat, el('small', {}, 'PK BRK'), h.pkBrk)),
     el('div', {class: 'phead'}, 'TYRES', h.compound),
     el('div', {class: 'tmatrix'},
@@ -236,7 +236,8 @@ export function renderFocus(f) {
 export function renderFeed(ui, data, t) {
   const rc = data.race_control || [], n = lastBefore(rc, t);
   ui.rc.replaceChildren(...rc.slice(Math.max(0, n - 3), n + 1).reverse().map(([mt, , flag, msg]) =>
-    el('li', {}, el('time', {}, fmtClock(mt)), flag ? el('b', {class: `rcflag ${(STATUS[flag] || flag).toLowerCase()}`}, flag) : null, msg)));
+    el('li', {'data-t': mt, title: 'Jump the replay here'}, el('time', {}, fmtClock(mt)),
+      flag ? el('b', {class: `rcflag ${(STATUS[flag] || flag).toLowerCase()}`}, flag.charAt(0) + flag.slice(1).toLowerCase()) : null, rcText(msg, flag))));
   const w = data.weather?.[lastBefore(data.weather || [], t)];
   ui.weather.replaceChildren(...(w ? [
     el('span', {title: 'Air temperature'}, `AIR ${w[1]}°`), el('span', {title: 'Track temperature'}, `TRACK ${w[2]}°`),

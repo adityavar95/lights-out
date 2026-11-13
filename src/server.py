@@ -1,6 +1,6 @@
 """Lights Out backend: livef1/Jolpica tables, track maps and race replay data."""
 import os
-# Before numpy loads (via livef1/pandas): OpenBLAS commits a buffer per CPU thread, ~740 MB on a 32-thread CPU, and
+# Before numpy loads (via livef1/pandas, on the first old-season table): OpenBLAS commits a buffer per CPU thread, ~740 MB on a 32-thread CPU, and
 # nothing here does matrix maths
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 import ipaddress
@@ -15,8 +15,6 @@ from functools import lru_cache
 from pathlib import Path
 from urllib.parse import urlsplit
 
-import livef1
-import pandas as pd
 import uvicorn
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
@@ -29,12 +27,11 @@ import f1auth
 import f1tv
 import ledgers
 import radio
-from jolpica import JOLPICA, calendar_ics, driver_career, jolpica_fetch, races
+from jolpica import JOLPICA, calendar_ics, driver_career, jolpica_fetch, list_seasons, races
 from replay import CACHE, OpenF1Locked, ReplayUnavailable, elevation, find_session, laps_replay, pitlane, replay, save, saved_replay, scheduled_session, session_events, season_session_rows, session_telemetry, telemetry
 import live
 from tracks import _geo_track, mv_track, track
 
-livef1.set_log_level("ERROR")
 app = FastAPI(title="Lights Out")
 MAX_ROWS = 5000  # shortcut: bigger tables are truncated in the data explorer
 
@@ -44,7 +41,24 @@ def raw_json(data) -> Response:
     return Response(json.dumps(data, separators=(",", ":")), media_type="application/json")
 
 
-def table(df: pd.DataFrame) -> dict:
+def _flat(d: dict, pre: str = "") -> dict:
+    out = {}
+    for k, v in d.items():
+        out.update(_flat(v, f"{pre}{k}.") if isinstance(v, dict) else {pre + k: v})
+    return out
+
+
+def table(rows: list, columns: list | None = None) -> dict:
+    """Row dicts as {columns, data, total}, nested dicts flattened to dotted names ('Driver.code'): what pandas'
+    json_normalize gave, top-level fields first, without the second it took to import."""
+    flat = [{**{k: v for k, v in r.items() if not isinstance(v, dict)}, **_flat({k: v for k, v in r.items() if isinstance(v, dict)})}
+            for r in rows[:MAX_ROWS]]
+    columns = columns or list(dict.fromkeys(k for r in flat for k in r))
+    return {"columns": columns, "data": [[r.get(c) for c in columns] for r in flat], "total": len(rows)}
+
+
+def frame_table(df) -> dict:
+    """The same for a livef1 DataFrame (old seasons' session lists, the F1.com schedule)."""
     out = json.loads(df.head(MAX_ROWS).to_json(orient="split", index=False, date_format="iso", default_handler=str))
     return {"columns": out["columns"], "data": out["data"], "total": len(df)}
 
@@ -60,6 +74,8 @@ def check_season(year: int, round: int | None = None):
 @lru_cache(maxsize=None)
 def season(year: int):
     try:
+        import livef1  # here, not at the top: it brings pandas, a second of every start for a table few open
+        livef1.set_log_level("ERROR")
         return livef1.get_season(year)
     except Exception as e:  # e.g. livef1 1.2.11 fails on 2010 with KeyError 'turkey'
         raise HTTPException(502, f"livef1 could not load the {year} season: {e!r}")
@@ -87,7 +103,7 @@ def seasons():
     except (OSError, ValueError):
         pass
     try:
-        years = livef1.list_seasons()
+        years = list_seasons()
         save(SEASONS, years)
         return years
     except Exception:
@@ -114,12 +130,12 @@ def season_sessions(year: int):
     if year >= 2023:
         try:
             rows = season_session_rows(year)
-            return table(pd.DataFrame(rows, columns=["Round", "Session Name", "StartDate", "EndDate"]))
+            return table(rows, ["Round", "Session Name", "StartDate", "EndDate"])
         except OpenF1Locked:
             pass  # OpenF1 is locked while a session is live and has no saved copy yet: livef1's slower table instead
         except Exception as e:
             raise HTTPException(502, f"OpenF1 could not load the {year} session list: {e!r}")
-    return table(season(year).season_table.reset_index())
+    return frame_table(season(year).season_table.reset_index())
 
 
 def _session_names(session: str) -> list[str]:
@@ -131,7 +147,7 @@ def _session_names(session: str) -> list[str]:
 def f1_schedule(year: int):
     check_season(year)
     try:
-        return table(season(year).get_schedule())
+        return frame_table(season(year).get_schedule())
     except Exception as e:
         raise HTTPException(502, f"formula1.com schedule unavailable: {e}")
 
@@ -148,7 +164,7 @@ def jolpica(year: int, kind: str, round: int | None = None):
         rows = last_or_fetch(f"{year}_{kind}_{round}", fetch) if year >= date.today().year else fetch()
     except Exception as e:
         raise HTTPException(502, f"Jolpica request failed: {e}")
-    return table(pd.json_normalize(rows))
+    return table(rows)
 
 
 LAST = CACHE.parent / "jolpica"  # the last answer to each of this season's Jolpica requests
@@ -563,7 +579,7 @@ def live_table(topic: str):
     topics = live.snapshot()["topics"]
     if topic not in topics:
         raise HTTPException(404, f"No live topic '{topic}'. Available: {', '.join(topics) or 'none yet'}")
-    return table(pd.json_normalize(live.rows(topics[topic])))
+    return table(live.rows(topics[topic]))
 
 
 @app.get("/api/telemetry/{year}/{round}")

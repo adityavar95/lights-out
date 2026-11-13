@@ -36,7 +36,7 @@ export function renderStrategyLab(root, laps, results, pits, year, why, round) {
     draw();
   }}, '+ Stop');
   const resetBtn = el('button', {class: 'labbtn', onclick: () => { S.plan = [...M.stops[S.id]]; draw(); }}, 'Real strategy');
-  const search = el('button', {class: 'labbtn primary', onclick: findBest}, 'Find best strategy');
+  const search = el('button', {class: 'labbtn primary', onclick: () => findBest()}, 'Find best strategy');
 
   driver.value = S.id;
   pass.value = S.pass;
@@ -45,7 +45,8 @@ export function renderStrategyLab(root, laps, results, pits, year, why, round) {
   pass.onchange = () => { S.pass = pass.value; best.replaceChildren(); draw(); };
   S.plan = [...M.stops[S.id]];
 
-  async function findBest() {
+  // apply: load the best plan too (the tab opens on it, so the first thing shown is an answer, not "±0.0 s")
+  async function findBest(apply = false) {
     best.replaceChildren(el('div', {class: 'loading'}, el('div', {class: 'spinner'}), 'Trying every 1, 2 and 3-stop plan…'));
     const id = S.id, opts = {pass: PASS[S.pass], minStops: year >= 2007 ? 1 : 0}, n = Math.min(8, navigator.hardwareConcurrency || 2);
     // the plans split over the CPU's cores (optimiser.js workers): ~0.3 s on this thread froze the page
@@ -61,6 +62,7 @@ export function renderStrategyLab(root, laps, results, pits, year, why, round) {
       class: 'labplan', onclick: () => { S.plan = [...p.plan]; draw(); }},
       el('b', {}, `P${p.finish}`), ` ${p.plan.length ? `stop${p.plan.length > 1 ? 's' : ''} on lap ${p.plan.join(', ')}` : 'no stop'}`,
       el('span', {class: p.time < real.time ? 'up' : 'down'}, ` ${signed(p.time - real.time)}`))));
+    if (apply && plans[0]) { S.plan = [...plans[0].plan]; draw(); }
   }
 
   function draw() {
@@ -87,7 +89,7 @@ export function renderStrategyLab(root, laps, results, pits, year, why, round) {
         ...warnings(res.plan, n, real));
       notes.textContent = `Pit stop ≈ ${M.pitLoss.toFixed(1)} s (this race's green-flag stops), ≈ ${(M.pitLoss * SC_LOSS).toFixed(1)} s under SC/VSC, `
         + `and the queue closes up behind it. ${label(id)}'s tyres lost ${fits} s/lap per stint relative to the field. `
-        + 'Other cars keep their real race; shaded laps were neutralised.';
+        + 'Other cars keep their real race.';
       chart.replaceChildren(positionChart(real, res, id, n));
       order.replaceChildren(...res.order.slice(0, Math.max(10, res.finish + 1)).map((o, i) => {
         const was = real.order.findIndex(x => x.id === o.id) - i;
@@ -214,8 +216,9 @@ export function renderStrategyLab(root, laps, results, pits, year, why, round) {
     el('div', {class: 'controls lab-controls'}, driver, pass, resetBtn, search),
     el('div', {class: 'lab-grid'},
       el('div', {}, stopsBox, verdict, chart,
-        el('p', {class: 'legend-line muted small'}, el('span', {class: 'key real'}), 'real race ', el('span', {class: 'key whatif'}), 'what-if ', '● stop'),
+        el('p', {class: 'legend-line muted small'}, el('span', {class: 'key real'}), 'real race ', el('span', {class: 'key whatif'}), 'what-if ', '● stop ', el('span', {class: 'key sc'}), 'safety car laps'),
         notes),
       el('div', {}, best, el('h3', {}, 'What-if finishing order'), order))),
     pace, ledgerCard());
+  findBest(true);
 }

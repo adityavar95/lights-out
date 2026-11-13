@@ -1,4 +1,4 @@
-"""Jolpica (Ergast successor) access through livef1's bundled client, flattened to one dict per row."""
+"""Jolpica (Ergast successor) access through basef1, flattened to one dict per row."""
 import json
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -7,11 +7,12 @@ from functools import lru_cache
 from pathlib import Path
 
 from basef1 import BaseF1Client, SQLiteCache
-from livef1.adapters.jolpicaf1_adapter import jolpica_client  # its cache is in memory and lasts 5 minutes
 
 # Answers about finished races don't change, so they are kept on disk: a race's lap times are ~15 Jolpica pages (~9 s).
 SETTLED = BaseF1Client(cache=SQLiteCache(Path(__file__).resolve().parent.parent / ".cache" / "jolpica.sqlite",
                                          ttl_seconds=365 * 86400, clock=time.time))
+
+jolpica_client = BaseF1Client()  # this season: its cache is in memory and lasts 5 minutes
 
 # Jolpica resource -> (query method, path from response table down to one row)
 JOLPICA = {
@@ -73,6 +74,10 @@ def _pages(q, method: str, rows_of) -> list:
         offset += 100
         if offset >= int(res.pagination.total):
             return rows
+
+
+def list_seasons() -> list:
+    return [s.season for s in jolpica_client.get_seasons(limit=100).data.seasons]
 
 
 def driver_career(driver_id: str) -> dict:

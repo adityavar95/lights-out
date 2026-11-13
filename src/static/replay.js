@@ -6,7 +6,7 @@ import {setupStory} from './storypanel.js';
 import {nextMoment} from './moments.js';
 import {markLayer, gpsMarks, lapMarks, NO_MARKS} from './scrubmarks.js';
 import {get, el, rows, failed, teamColor, fmtClock, fmtLap, lastBefore, trackStatus, led, covered, dropUp, count} from './util.js';
-import {init3d, setTrack, setCars, updateCars, setView, setParts, setTyre, setGround, setPitLane, setStartLights, setDaylight, nextSky, nextTier, announce, hasCockpitWheel, setGhost, timed} from './scene3d.js';
+import {init3d, setTrack, setCars, updateCars, setView, setParts, setTyre, setGround, setPitLane, setStartLights, setDaylight, nextSky, nextTier, announce, hasCockpitWheel, setGhost, setTagPositions, timed} from './scene3d.js';
 import {setupOnboard, setCameraUi, setWheelAngle, nextCamera} from './onboard.js';
 import {liveInfo, liveStatus, liveClock} from './live.js';
 import {setupLive} from './replaylive.js';
@@ -96,7 +96,9 @@ export function setupReplay(root, copyView) {
   });
   const viewport = el('div', {class: 'viewport'}, ui.map, ui.overlay);  // the 3D view; HUD panels float round it
   ui.stage = el('div', {class: 'mapwrap'}, viewport);
-  root.append(el('div', {class: 'replay'}, ui.stage, ui.rc));
+  // race control under the stage: a row seeks the replay to that message
+  ui.rc.onclick = e => { const li = e.target.closest('li[data-t]'); if (li) pickMark({t: +li.dataset.t, label: li.lastChild.textContent}); };
+  root.append(el('div', {class: 'replay'}, ui.stage, el('section', {class: 'card rcpanel', 'aria-label': 'Race control'}, el('h3', {}, 'Race control'), ui.rc)));
   let cams = null;
   try {
     init3d(ui.map);
@@ -114,7 +116,7 @@ export function setupReplay(root, copyView) {
   const hud = setupHud(ui.stage, {onClose: () => S?.selected && select(S.selected),
     onErsMode: m => S?.sim?.setErsMode(S.selected, m), onDrsTest: () => S?.sim?.toggleDrsTest(S.selected)});
   hud.top.append(ui.flag, ui.lap, ui.mode, ui.weather);
-  ui.reelBtn = el('button', {class: 'neu reelbtn', title: 'Race highlights: the key moments in about 5 minutes (H)', onclick: toggleHighlights}, 'Highlights');
+  ui.reelBtn = el('button', {class: 'neu reelbtn', title: 'Race highlights: the key moments in about 5 minutes (H)', onclick: toggleHighlights}, 'Play highlights');
   ui.story = setupStory(ui.stage, () => S, openLap);
   ui.story.btn.classList.add('storybtn');
   ui.reelText = el('b');
@@ -123,14 +125,22 @@ export function setupReplay(root, copyView) {
     el('button', {class: 'neu', title: 'Next clip (.)', onclick: () => S.reel && reelGo(S.reel.i + 1)}, 'Skip'),
     el('button', {class: 'neu', title: 'Back to the full replay (Esc)', onclick: () => stopReel()}, 'Exit'));
   ui.stage.append(ui.startLights, ui.reelBar);
-  hud.left.append(el('div', {class: 'towerhead'}, el('span', {}, 'TIMING'), ui.colBtn), el('div', {class: 'towerscroll'}, ui.tower));
+  hud.left.append(el('div', {class: 'towerhead'}, el('span', {}, 'TIMING'), ui.colBtn),
+    el('div', {class: 'towerkey'}, 'S soft · M med · H hard · I inter · W wet'), el('div', {class: 'towerscroll'}, ui.tower));
   // the deck itself: session, play, speed, position, camera. Cinematic and the telemetry trace sit in the ⋯ menu; sound and graphics in Settings, top right
   const moreBtn = el('button', {class: 'neu', popovertarget: 'moremenu', 'aria-haspopup': 'true', 'aria-expanded': false,
     title: 'More: cinematic view, commentary, telemetry trace', 'aria-label': 'More controls'}, '⋯');
-  hud.more = el('div', {class: 'deckmenu', id: 'moremenu', popover: 'auto', 'aria-label': 'More controls'}, el('div', {class: 'deckgroup'}, ui.view, commentaryUi(),
+  // phones: the session, Highlights and Why leave the bar for this menu (style.css hides the bar's own), so the bar keeps one row
+  const phoneSession = el('select', {class: 'neu', 'aria-label': 'Session to replay', onchange: e => { ui.session.value = e.target.value; ui.session.onchange(); hud.more.hidePopover(); }});
+  const phoneGroup = el('div', {class: 'deckgroup phoneonly'}, phoneSession,
+    el('button', {class: 'neu', onclick: () => { hud.more.hidePopover(); toggleHighlights(); }}, 'Play highlights'),
+    el('button', {class: 'neu', onclick: () => { hud.more.hidePopover(); ui.story.btn.click(); }}, 'Why positions changed'));
+  hud.more = el('div', {class: 'deckmenu', id: 'moremenu', popover: 'auto', 'aria-label': 'More controls'}, phoneGroup, el('div', {class: 'deckgroup'}, ui.view, commentaryUi(),
     el('button', {class: 'neu', title: 'Copy a link to this moment of the replay', onclick: () => { hud.more.hidePopover(); copyView(); }}, 'Copy link')));
   hud.more.addEventListener('click', e => e.target.closest('[aria-controls=tracedeck]') && hud.more.hidePopover());  // the trace panel takes over
   dropUp(moreBtn, hud.more);
+  hud.more.addEventListener('toggle', e => e.newState === 'open' &&
+    phoneSession.replaceChildren(...[...ui.session.options].map(o => new Option(o.text, o.value, false, o.value === ui.session.value))));
   hud.deck.append(
     el('div', {class: 'deckgroup'}, ui.session, ui.play, ui.speeds, ui.reelBtn, ui.story.btn),
     el('div', {class: 'deckgroup grow'}, (ui.marks = markLayer(ui.scrub, pickMark)).wrap, ui.clock),
@@ -194,6 +204,7 @@ export const replayKind = (year, date) => date > new Date().toISOString().slice(
 // sim: Simulate mode, a physics race on this circuit (the session list is then just that, and hidden)
 export async function showRace(year, round, sessions, sim = false) {
   reset({year, round});
+  ui.stage.classList.remove('setup');
   ui.session.replaceChildren(...(sim ? [SIM] : sessions).map(s => new Option(s, s)));
   ui.session.value = sim ? SIM : sessions.includes('Race') ? 'Race' : sessions.at(-1) ?? '';
   const token = S.token;
@@ -235,11 +246,13 @@ async function showSetup() {
   const list = await entries(S.year, S.round).catch(() => []);
   if (token !== S.token) return;
   setOverlay(setupCard({year: S.year, race: S.race, list, onStart: startPlay}));
+  ui.stage.classList.add('setup');  // the card is the only input: ▶, the scrubber and the deck buttons wait for Start
 }
 
 async function startPlay(setup) {
   const token = S.token, driving = setup.mode !== 'spectate', first = !played;
   halt();
+  ui.stage.classList.remove('setup');
   S.setup = setup;
   if (driving) S.selected = setup.driver;  // loadData keeps it, so no car is picked for us
   setSpeed(1);
@@ -383,6 +396,7 @@ function setOverlay(text, spinner = false, action = null) {  // text: words, or 
   ui.overlay.replaceChildren(...(text ? [spinner && el('div', {class: 'spinner'}), body, action].filter(Boolean) : []));
   ui.overlay.hidden = !text;
   ui.overlay.classList.toggle('hint', !spinner);  // hints leave the map visible; loading blurs it
+  ui.map.classList.toggle('nolabels', !!text && typeof text !== 'string');  // a card (setup, pause, results): the turn and car labels would show through it
 }
 
 async function loadData(autoplay) {
@@ -967,6 +981,7 @@ function render(force) {
     if (S.cam === 'onboard') setWheelAngle(steer, hasCockpitWheel(S.selected));
   }
   S.board = st.board;
+  if (ui.has3d && st.board) setTagPositions(st.board);
   syncCommentary(S);
   renderRadar(st.cars, S.selected);
   if (+ui.scrub.value !== Math.floor(t) || !ui.scrub.style.getPropertyValue('--p')) {

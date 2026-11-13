@@ -79,6 +79,7 @@ export function dropUp(button, menu) {
 // a modal dialog (the F1 TV viewer) covers the whole page: the 3D stage behind it needn't draw (getElementsByTagName is
 // a cached live list, so this is cheap every frame)
 export const covered = () => document.body.dataset.section === 'stream'  // the Stream page hides the stage too
+  || document.body.dataset.globe === 'on'  // and the globe (globe.js), until its flight has a circuit to fade into
   || [...document.getElementsByTagName('dialog')].some(d => d.matches(':modal'));
 
 // placeholder bars in the shape of the rows to come, not a spinner: the layout doesn't jump when they land
@@ -189,4 +190,14 @@ export function trackStatus(rc, t) {
     else if ((flag === 'GREEN' && m.includes('GREEN LIGHT')) || m.includes('TRACK CLEAR')) s = 'GREEN';
   }
   return s;
+}
+
+// an FIA race-control message in sentence case, the flag word that leads it dropped when the chip already says it:
+// "CLEAR IN TRACK SECTOR 12" with flag CLEAR -> "In track sector 12". "(NOR)" and the acronyms stay capitals
+const RC_CAPS = new Set(['DRS', 'SC', 'VSC', 'FIA', 'DNF', 'RC']);
+export function rcText(msg, flag) {
+  let m = String(msg ?? '').trim();
+  if (flag && m.toUpperCase().startsWith(`${flag.toUpperCase()} IN `)) m = m.slice(flag.length + 1);  // "CLEAR IN TRACK SECTOR 12", not "GREEN LIGHT"
+  const out = m.split(' ').map(w => (/^\([A-Z]{3}\)/.test(w) || /^[A-Z]+\d+$/.test(w) || RC_CAPS.has(w.replace(/[^A-Z]/g, '')) ? w : w.toLowerCase())).join(' ');
+  return out.charAt(0).toUpperCase() + out.slice(1);
 }

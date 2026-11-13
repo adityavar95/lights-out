@@ -598,6 +598,14 @@ function warmCockpit(token) {
 // Play's time-trial ghost: the best lap's car, see-through and unlit (so no csmSync), with no tag, sound or effects.
 // p, ahead: map points now and 0.5 s on; null hides it. Built on first use, dropped with the cars (disposeCars).
 let ghost = null;
+// the tags show the race position, as the timing tower does (board: [{d: {id}, pos}]; 99 = not classified yet); the car number stays in the driver card
+export function setTagPositions(board) {
+  for (const b of board) {
+    const n = cars[b.d.id]?.tag.element.firstChild, text = b.pos < 99 ? `P${b.pos}` : '';
+    if (n && n.textContent !== text) n.textContent = text;
+  }
+}
+
 export function setGhost(p, ahead, year) {
   if (!p || !map || !circuit) { if (ghost) ghost.group.visible = false; return; }
   if (!ghost) {

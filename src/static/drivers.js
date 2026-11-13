@@ -62,9 +62,19 @@ async function portraits(drivers) {
 }
 function photo(d, cls = 'dphoto') {
   const box = el('div', {class: cls}, el('span', {}, `${d.given[0] ?? ''}${d.family[0] ?? ''}`));
-  const put = () => PHOTOS.get(d.id) && box.replaceChildren(el('img', {src: PHOTOS.get(d.id), alt: `${d.given} ${d.family}`}));
+  // has-photo once the picture has loaded: a driver card shows no photo area until then (style.css)
+  const put = () => PHOTOS.get(d.id) && box.replaceChildren(el('img', {src: PHOTOS.get(d.id), alt: `${d.given} ${d.family}`, onload: () => [box, box.parentElement].forEach(e => e?.classList.add('has-photo'))}));
   put();
   return Object.assign(box, {put});
+}
+// results rows -> a round portrait each (the Results podium), filled in when Wikipedia answers
+export function faces(results) {
+  const ds = results.map(r => ({id: id(r), given: r['Driver.givenName'] ?? '', family: r['Driver.familyName'] ?? '', url: r['Driver.url']}));
+  // no photo (yet): the driver's code on their team's colour, not a bare disc
+  const boxes = ds.map((d, i) => Object.assign(photo(d, 'dphoto face'), {style: `--team:${teamColor(results[i]['Constructor.constructorId'], results[i]['Constructor.name'])}`}));
+  boxes.forEach((b, i) => results[i]['Driver.code'] && b.querySelector('span') && (b.querySelector('span').textContent = results[i]['Driver.code']));
+  portraits(ds).then(() => boxes.forEach(b => b.put()));
+  return boxes;
 }
 
 const stat = (label, v, title) => el('div', {title}, el('b', {}, v ?? '–'), el('small', {}, label));

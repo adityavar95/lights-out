@@ -10,6 +10,7 @@ node tests/test_sim.mjs                    # race simulation physics (aero, DRS,
 node tests/test_player.mjs                 # player driving (steering, TC/ABS, gearbox) and AI racecraft
 node tests/test_eras.mjs                   # era profiles: turbo lag, 2026 active aero / MGU-K taper, skirts, lap times by era
 node tests/test_circuits.mjs               # auto aero trim, elevation grade, banking
+node tests/test_globe.mjs                  # launch globe: lat/long on the sphere, tile blocks, the flight to a circuit
 node tests/test_trace.mjs                  # distance-resampled lap telemetry, Δt, engineer insights, trace plot smoke test
 node tests/test_whatif.mjs                 # Strategy Lab what-if model (baseline exactness, optimiser, traffic, SC stops)
 node tests/test_multiviewer.mjs            # F1 TV overlay timing (session names, telemetry lookup, lights-out sync)

@@ -263,15 +263,15 @@ assert "visit" in EVENTS and "../etc" not in EVENTS
 print("usage counts ok")
 
 # /api/seasons: a fresh copy from disk; Jolpica down with a stale copy -> that copy; down with none -> every year since 1950
-import os, tempfile, livef1, server
+import os, tempfile, server
 from datetime import date
 with tempfile.TemporaryDirectory() as tmp:
-    real, server.SEASONS = (livef1.list_seasons, server.SEASONS), Path(tmp) / "seasons.json"
+    real, server.SEASONS = (server.list_seasons, server.SEASONS), Path(tmp) / "seasons.json"
     try:
-        livef1.list_seasons = lambda: ["2025", "2026"]
+        server.list_seasons = lambda: ["2025", "2026"]
         assert server.seasons() == ["2025", "2026"] and server.SEASONS.exists()
         def down(): raise TimeoutError("read timed out")
-        livef1.list_seasons = down
+        server.list_seasons = down
         assert server.seasons() == ["2025", "2026"]  # still fresh
         os.utime(server.SEASONS, (0, 0))  # a day old: Jolpica is asked, fails, the old list stands
         assert server.seasons() == ["2025", "2026"]
@@ -279,7 +279,7 @@ with tempfile.TemporaryDirectory() as tmp:
         years = server.seasons()
         assert years[0] == "1950" and years[-1] == str(date.today().year), years
     finally:
-        livef1.list_seasons, server.SEASONS = real
+        server.list_seasons, server.SEASONS = real
 print("seasons fallback ok")
 
 # this season's Jolpica answers: the first waits; later ones come from disk at once, a stale one refreshes in the background,
@@ -1035,3 +1035,10 @@ print("three hashes ok")
 _csp = client.get("/").headers["content-security-policy-report-only"]
 assert "script-src 'self' 'wasm-unsafe-eval' 'sha256-" in _csp and "frame-ancestors 'none'" in _csp
 print("csp header ok")
+
+# tables without pandas: nested dicts become dotted columns after the top-level fields, a row's missing field is null
+t = server.table([{"position": "1", "Driver": {"code": "RUS", "x": {"y": 1}}, "laps": "58"}, {"position": "2", "Constructor": {"name": "Ferrari"}}])
+assert t == {"columns": ["position", "laps", "Driver.code", "Driver.x.y", "Constructor.name"],
+             "data": [["1", "58", "RUS", 1, None], ["2", None, None, None, "Ferrari"]], "total": 2}, t
+assert server.table([]) == {"columns": [], "data": [], "total": 0}
+assert server.table([{"a": 1, "b": 2}], ["b"]) == {"columns": ["b"], "data": [[2]], "total": 1}

@@ -9,11 +9,13 @@ const CDN = 'https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k';
 let seed = 1;
 const rand = () => (seed = (seed * 16807) % 2147483647) / 2147483647;  // seeded so textures don't change between loads
 
-function canvasTex(w, h, draw, repeat = true) {
-  const c = document.createElement('canvas');
-  c.width = w;
-  c.height = h;
-  draw(c.getContext('2d'), w, h);
+// k: draws the same picture on k times the pixels (sharper edges and lettering up close)
+function canvasTex(w, h, draw, repeat = true, k = 1) {
+  const c = document.createElement('canvas'), g = c.getContext('2d');
+  c.width = w * k;
+  c.height = h * k;
+  g.scale(k, k);
+  draw(g, w, h);
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace;
   t.anisotropy = 16;  // three clamps it to what the GPU supports
@@ -204,14 +206,14 @@ export function textures(high) {
       for (let x = -h; x < w + h; x += 10) {
         g.beginPath(); g.moveTo(x, 0); g.lineTo(x + h, h); g.moveTo(x, h); g.lineTo(x + h, 0); g.stroke();
       }
-    }),
+    }, true, 2),
     // relief for the terrain under its satellite / grass colour: tufts and soil in the normal and roughness maps
     ground: photo('sparse_grass', 3, 0, speckle('#5a7a3a', 2000, 0.2), high ? '4k' : '2k'),
     foliageOf: (cache => kind => cache[kind] ??= foliage(kind))({}),  // atlas per tree kind, drawn when a circuit first needs it
-    grass: canvasTex(256, 256, (g, w, h) => {  // plain speckle: mowing stripes shimmer from a distance
+    grass: canvasTex(1024, 1024, (g, w, h) => {  // plain speckle: mowing stripes shimmer from a distance
       g.fillStyle = '#427f31';
       g.fillRect(0, 0, w, h);
-      for (let i = 0; i < 6000; i++) {
+      for (let i = 0; i < 96000; i++) {
         g.fillStyle = `rgba(0,${40 + rand() * 60},0,${0.25 * rand()})`;
         g.fillRect(rand() * w, rand() * h, 2, 2);
       }
@@ -221,7 +223,7 @@ export function textures(high) {
       g.fillRect(0, 0, w, h / 2);
       g.fillStyle = '#e8e8e4';
       g.fillRect(0, h / 2, w, h / 2);
-    }),
+    }, true, 4),
     // one 8 m tile of barrier, 1.1 m tall: two boards on a concrete base, tyre scuffs low down, a joint at each block
     wall: canvasTex(2048, 282, (g, w, h) => {
       const boardH = h * 0.8;
@@ -245,7 +247,7 @@ export function textures(high) {
       }
       g.fillStyle = 'rgba(0,0,0,0.5)';
       for (const x of [0, w / 2]) g.fillRect(x - 2, 0, 4, h);
-    }),
+    }, true, 2),
     // three-rail Armco, 1.1 m tall: 8 m of rails over dark gaps, each rail bright along its bulge
     armco: canvasTex(256, 128, (g, w, h) => {
       g.fillStyle = '#34363a';
@@ -258,13 +260,13 @@ export function textures(high) {
       }
       g.fillStyle = '#2a2c30';
       for (const x of [0, w / 2]) g.fillRect(x, 0, 6, h);
-    }),
+    }, true, 2),
     checker: canvasTex(64, 16, (g, w, h) => {
       for (let x = 0; x < 8; x++) for (let y = 0; y < 2; y++) {
         g.fillStyle = (x + y) % 2 ? '#111' : '#f5f5f5';
         g.fillRect(x * 8, y * 8, 8, 8);
       }
-    }),
+    }, true, 8),
     blob: canvasTex(64, 64, (g, w, h) => {
       const grad = g.createRadialGradient(w / 2, h / 2, 0, w / 2, h / 2, w / 2);
       grad.addColorStop(0, 'rgba(0,0,0,0.55)');

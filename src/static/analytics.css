@@ -27,7 +27,7 @@
 .alive p { margin: 4px 0; }
 
 /* Drivers: the teammate line on a card, the table in the career dialog */
-.dh2h { font-size: 12px; color: var(--muted); font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.dh2h { font-size: 12px; color: var(--muted); font-family: var(--face); font-variant-numeric: tabular-nums; }
 .dh2h:empty { display: none; }
 .ch2h { margin: 16px 0; }
 .ch2h h3 { margin: 0 0 8px; }
@@ -45,4 +45,4 @@
 .stratbars { display: grid; gap: 2px; margin: 8px 0 16px; }
 .stratrow { display: grid; grid-template-columns: 44px 1fr; align-items: center; gap: 8px; font-size: 12px; }
 .stratbar { display: flex; gap: 2px; height: 16px; }
-.stratbar i { min-width: 2px; border-radius: 3px; color: #111; font: 500 12px/16px var(--mono, monospace); text-align: center; overflow: hidden; font-style: normal; }
+.stratbar i { min-width: 2px; border-radius: var(--r-sm); color: #111; font: 500 12px/16px var(--mono, monospace); text-align: center; overflow: hidden; font-style: normal; }
