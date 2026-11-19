@@ -776,7 +776,7 @@ export async function setGround(year, round, maxPx = 2048) {
     const u = a * X + b * Z + u0, v = d * X + e * Z + v0;
     return u < 0 || u >= 1 || v < 0 || v >= 1 || data[Math.floor(v * h) * w + Math.floor(u * w)] === 1;
   };
-  c.satellite(texture, new THREE.Matrix3().set(...g.m, 0, 0, 1), green, new THREE.Color().setRGB(...g.mean, THREE.SRGBColorSpace));
+  c.satellite(texture, new THREE.Matrix3().set(...g.m, 0, 0, 1), green, new THREE.Color().setRGB(...g.mean, THREE.SRGBColorSpace), g.mask);
   if (maxPx < full) setGround(year, round, full);
 }
 
