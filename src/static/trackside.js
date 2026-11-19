@@ -179,6 +179,28 @@ export function buildTrackside({F, runs, half, wall, m, armco}) {
   const roofGeo = mergeGeometries(roofParts).scale(1 / METRES(m), 1 / METRES(m), 1 / METRES(m));
   roofParts.forEach(t => t.dispose());
   const roofMat = new THREE.MeshStandardNodeMaterial({vertexColors: true, metalness: 0.2, roughness: 0.6});
+  // The crowd: a seated body and a head on a seat every 55 cm, a fifth of the seats empty and an aisle every 11 m, shirts in
+  // a fan palette. One stand's people are one merged geometry, instanced like the stand: one draw call for every stand's
+  // crowd, and no shadow pass (the roof's shadow still falls on them). The painted treads under them fill the gaps.
+  const peopleGeo = (() => {
+    let s = 5;
+    const r = () => (s = (s * 16807) % 2147483647) / 2147483647;
+    // mostly dark, white and grey, as a real crowd is; team and flag colours muted, or the stand looked like confetti
+    const shirts = [0x1a1c22, 0x23262e, 0x2c3242, 0xd8d8d4, 0xbfc0bc, 0x6e737c, 0x4a4f58, 0x8f2a2e, 0x2b4277, 0xc9a63a, 0x2f6b48, 0xb86a32, 0x3f8aa8];
+    const skins = [0xe6b996, 0xc68f63, 0x8d5a3b, 0x5a3825];
+    const body = new THREE.BoxGeometry(0.42, 0.62, 0.28), head = new THREE.BoxGeometry(0.2, 0.24, 0.22), parts = [];
+    for (let k = 0; k < ROWS; k++) for (let x = -WIDE / 2 + 0.4; x < WIDE / 2 - 0.3; x += 0.55) {
+      if (((x + WIDE / 2) % 11) < 0.9 || r() < 0.2) continue;
+      const y = BASE + k * RISE + 0.45, z = -(k + 0.62) * TREAD, dx = (r() - 0.5) * 0.08, lean = (r() - 0.5) * 0.12;
+      const shirt = shirts[Math.floor(r() * shirts.length)], tall = 0.92 + 0.16 * r();
+      parts.push(colored(body.clone().scale(1, tall, 1).translate(x + dx, y + 0.31 * tall, z), shirt),
+        colored(head.clone().translate(x + dx + lean * 0.3, y + 0.62 * tall + 0.14, z + 0.02), r() < 0.25 ? shirt : skins[Math.floor(r() * skins.length)]));
+    }
+    const g = mergeGeometries(parts).scale(1 / METRES(m), 1 / METRES(m), 1 / METRES(m));
+    parts.forEach(p => p.dispose()); body.dispose(); head.dispose();
+    return g;
+  })();
+  const peopleMat = new THREE.MeshStandardNodeMaterial({vertexColors: true, roughness: 0.85});
   const stands = [];
   const addStand = (f, side) => {
     const front = half + wall + m(7), out = dir => f.N.clone().multiplyScalar(side * dir);
@@ -200,7 +222,7 @@ export function buildTrackside({F, runs, half, wall, m, armco}) {
     addStand(F[i], -1);
   }
   runs.forEach((run, r) => { if (r % 2 === 0 && run.length > 3) { const f = run[run.length >> 1]; addStand(f, -Math.sign(f.P.clone().sub(run[0].P).dot(run[0].N)) || 1); } });
-  const standMeshes = stands.length ? [instanced(standGeo, crowd, stands), instanced(roofGeo, roofMat, stands)] : [];
+  const standMeshes = stands.length ? [instanced(standGeo, crowd, stands), instanced(roofGeo, roofMat, stands), instanced(peopleGeo, peopleMat, stands, {shadow: false})] : [];
   made.push(...standMeshes);
 
   const stanchionGeo = new THREE.CylinderGeometry(m(0.05), m(0.05), m(4.1), 6).translate(0, m(2.05), 0);
@@ -239,7 +261,7 @@ export function buildTrackside({F, runs, half, wall, m, armco}) {
       roofMat.dispose();
       for (const o of made) { world.remove(o); o.geometry.dispose(); o.dispose(); }
       for (const mat of boardMats) { mat.map.dispose(); mat.dispose(); }
-      steel.dispose(); lamp.dispose(); crowd.dispose(); postMat.dispose();
+      steel.dispose(); lamp.dispose(); crowd.dispose(); peopleMat.dispose(); postMat.dispose();
     },
   };
 }

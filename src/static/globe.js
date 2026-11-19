@@ -9,7 +9,7 @@ import * as THREE from 'three';
 import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
 import {min, normalView, positionView, smoothstep, uniform, uv} from 'three/tsl';
 import {el} from './util.js';
-import {ready, setDeck, shared} from './scene3d.js';
+import {ready, setDeck, shared, warmStage} from './scene3d.js';
 import {TILES, fetchTile} from './satellite.js';
 import {llToVec, vecToLL, tileLL, tilesRound, flight, over} from './globemath.js';
 
@@ -170,7 +170,7 @@ function enter(g) {
     fly.ready = true;
     document.body.dataset.globe = 'fade';  // util.js covered(): the stage draws again from here, under the last of the globe
   };
-  Promise.resolve(g.pick(c)).then(go, go);
+  Promise.resolve(g.pick(c)).then(warmStage).then(go, go);  // the circuit's shaders compiled before it shows
 }
 
 const v = new THREE.Vector3();

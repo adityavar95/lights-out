@@ -37,8 +37,10 @@ function speckle(base, n, alpha) {
 // Material maps {map, normalMap, roughnessMap} for Poly Haven set `name`, one image `metres` across, on strips whose UVs
 // repeat every `tile` metres. They exist at once (canvas colour, flat normal, roughness 1), so materials compile with
 // every map, and each photo replaces its canvas when it lands; dispose() first, as the GPU texture changes size.
-// res: '1k', '2k' or '4k' (on the high tier every set is 4k: the road, seen from a chase camera a few metres up, gets 0.5 mm texels).
-function photo(name, metres, tile, fallback, res = '1k') {
+// The photos are fetched by textures().load(big) when a circuit is first shown, not on the globe page: 4k when big (Ultra on
+// the high tier: the road, seen from a chase camera a few metres up, gets 0.5 mm texels), else `low`.
+const pending = [];
+function photo(name, metres, tile, fallback, low = '2k') {
   const plain = fill => { const t = canvasTex(4, 4, g => { g.fillStyle = fill; g.fillRect(0, 0, 4, 4); }); t.colorSpace = THREE.NoColorSpace; return t; };
   const set = {map: fallback, normalMap: plain('#8080ff'), roughnessMap: plain('#ffffff')};
   for (const [k, file] of [['map', 'diff'], ['normalMap', 'nor_gl'], ['roughnessMap', 'rough']]) {
@@ -55,8 +57,11 @@ function photo(name, metres, tile, fallback, res = '1k') {
         t.needsUpdate = true;
         t.onUpdate = () => img.close();  // decoded photos (up to 64 MB each at 4k) aren't needed once on the GPU
     };
-    loader.load(`${PH}/${res}/${name}/${name}_${file}_${res}.jpg`, landed, undefined,
-      () => loader.load(`${CDN}/${name}/${name}_${file}_1k.jpg`, landed, undefined, () => {}));
+    pending.push(big => new Promise(done => {  // settles when the photo is in (or for good not)
+      const res = big ? '4k' : low, land = img => { landed(img); done(); };
+      loader.load(`${PH}/${res}/${name}/${name}_${file}_${res}.jpg`, land, undefined,
+        () => loader.load(`${CDN}/${name}/${name}_${file}_1k.jpg`, land, undefined, done));
+    }));
   }
   return set;
 }
@@ -115,26 +120,25 @@ function dry(g, S, u, shade, kind) {
 }
 
 function lush(g, S, u, shade) {
-  // broadleaf: dark inner clumps so the crown is solid inside, then leaves, darker in the middle and underneath
-  const R = 470 * u, cx = 512 * u, cy = 512 * u;
-  for (let i = 0; i < 40; i++) {
-    const a = rand() * 2 * Math.PI, r = R * 0.55 * Math.sqrt(rand());
-    g.fillStyle = shade(0.32 + 0.1 * rand(), rand());
-    g.beginPath();
-    g.ellipse(cx + Math.cos(a) * r, cy + Math.sin(a) * r, R * (0.15 + 0.1 * rand()), R * (0.12 + 0.08 * rand()), rand() * Math.PI, 0, 2 * Math.PI);
-    g.fill();
-  }
+  // broadleaf: a cluster of seven leafy lobes with gaps between them, each with a dark core and lit on its upper side, so
+  // the crown keeps clumps of light and shade (and holes) when the atlas is a few mips down, not one even green disc
+  const R = 470 * u, cx = 512 * u, cy = 512 * u, lobes = [[0, 0.05, 0.4]];
+  for (let i = 0; i < 6; i++) { const a = (i + 0.35 * rand()) / 6 * 2 * Math.PI; lobes.push([Math.cos(a) * 0.56, Math.sin(a) * 0.52, 0.27 + 0.08 * rand()]); }
   g.strokeStyle = '#4a3a2c';
-  for (let i = 0; i < 26; i++) {  // twigs out of the middle
-    const a = rand() * 2 * Math.PI;
-    g.lineWidth = (2 + 3 * rand()) * u;
-    g.beginPath(); g.moveTo(cx, cy); g.lineTo(cx + Math.cos(a) * R * 0.8, cy + Math.sin(a) * R * 0.8); g.stroke();
+  for (const [lx, ly] of lobes) {  // a twig out to each lobe
+    g.lineWidth = (3 + 3 * rand()) * u;
+    g.beginPath(); g.moveTo(cx, cy + 0.1 * R); g.lineTo(cx + lx * R, cy + ly * R); g.stroke();
   }
   const leaves = [];
-  for (let i = 0; i < 9000; i++) {
-    const a = rand() * 2 * Math.PI, edge = R * (0.82 + 0.1 * Math.sin(5 * a + 1) + 0.08 * Math.sin(11 * a)), r = edge * Math.sqrt(rand());
-    const x = cx + Math.cos(a) * r, y = cy + Math.sin(a) * r, up = 1 - (y - cy + R) / (2 * R);
-    leaves.push([x, y, a, 0.45 + 0.35 * (r / edge) * (0.6 + 0.4 * up) + 0.2 * rand()]);
+  for (const [lx, ly, lr] of lobes) {
+    const ox = cx + lx * R, oy = cy + ly * R, r0 = lr * R;
+    g.fillStyle = shade(0.26 + 0.06 * rand(), rand());
+    g.beginPath(); g.ellipse(ox, oy + 0.1 * r0, r0 * 0.7, r0 * 0.62, rand() * Math.PI, 0, 2 * Math.PI); g.fill();
+    for (let i = 0; i < 1300 * lr / 0.3; i++) {
+      const a = rand() * 2 * Math.PI, edge = r0 * (0.9 + 0.1 * Math.sin(7 * a)), r = edge * Math.sqrt(rand());
+      const x = ox + Math.cos(a) * r, y = oy + Math.sin(a) * r, lit = 0.5 - 0.5 * (y - oy) / r0;  // 1 at the lobe's top
+      leaves.push([x, y, a, 0.3 + 0.45 * lit * (0.5 + 0.5 * r / edge) + 0.15 * (1 - Math.hypot(lx, ly)) + 0.2 * rand()]);
+    }
   }
   leaves.sort((p, q) => p[3] - q[3]);  // lit leaves on top
   for (const [x, y, a, k] of leaves) {
@@ -195,8 +199,8 @@ function foliageTex(g, S) {
 
 export function textures(high) {
   return {
-    asphalt: photo('asphalt_pit_lane', 2, 4, speckle('#2e2f34', 26000, 0.12), high ? '4k' : '2k'),  // fresh, uncracked: cracks would repeat every tile
-    gravel: photo('gravel_floor', 2.25, 6, speckle('#b8a580', 30000, 0.3), high ? '4k' : '1k'),
+    asphalt: photo('asphalt_pit_lane', 2, 4, speckle('#2e2f34', 26000, 0.12)),  // fresh, uncracked: cracks would repeat every tile
+    gravel: photo('gravel_floor', 2.25, 6, speckle('#b8a580', 30000, 0.3), high ? '2k' : '1k'),
     // kerb: red/white blocks a metre long (strip UVs repeat every 2 m) with ridges every 12.5 cm across them
     kerbRidges: normalTex(64, (u, v) => 0.5 * Math.sin(2 * Math.PI * 16 * v), 0.006),
     // debris fence on the barriers: 8 cm diamond mesh; stanchions and rails are real geometry (trackside.js, circuit3d.js)
@@ -208,7 +212,9 @@ export function textures(high) {
       }
     }, true, 2),
     // relief for the terrain under its satellite / grass colour: tufts and soil in the normal and roughness maps
-    ground: photo('sparse_grass', 3, 0, speckle('#5a7a3a', 2000, 0.2), high ? '4k' : '2k'),
+    ground: photo('sparse_grass', 3, 0, speckle('#5a7a3a', 2000, 0.2)),
+    // once, when a circuit is first seen (scene3d.js loadPhotos); later calls get the same promise
+    load(big) { return this.loaded ??= Promise.all(pending.splice(0).map(start => start(big))); },
     foliageOf: (cache => kind => cache[kind] ??= foliage(kind))({}),  // atlas per tree kind, drawn when a circuit first needs it
     grass: canvasTex(1024, 1024, (g, w, h) => {  // plain speckle: mowing stripes shimmer from a distance
       g.fillStyle = '#427f31';

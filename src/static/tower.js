@@ -1,6 +1,6 @@
 // Broadcast timing tower: position, team colour, driver code, a switchable timing column (gap to leader / interval
 // to the car ahead / last lap), tyre compound and live 3-segment sector bars. Rows slide to their new position.
-import {el, fmtLap, lastBefore} from './util.js';
+import {el, fmtLap, lastBefore, setAttr, setText} from './util.js';
 
 export const ROW_H = 30;
 export const TYRES = {SOFT: ['S', '#ff2d2d'], MEDIUM: ['M', '#ffd400'], HARD: ['H', '#f2f2f2'], INTERMEDIATE: ['I', '#3ec455'], WET: ['W', '#2b8cff']};
@@ -138,26 +138,26 @@ export function renderTower(rows, board, cols, column, selected, onTyre) {
     row.style.transform = `translateY(calc(${i} * var(--row-h, ${ROW_H}px)))`;
     row.classList.toggle('out', b.out);
     row.classList.toggle('sel', selected === b.d.id);
-    row.dataset.i = i;
-    if (!inside) row.tabIndex = i ? -1 : 0;  // Tab lands on the leader
-    row.setAttribute('aria-pressed', selected === b.d.id);
-    row.setAttribute('aria-label', `${b.out ? 'Out' : `P${b.pos}`}, ${b.d.name ?? b.d.code}`);
-    pos.textContent = b.out ? '–' : b.pos;
+    setAttr(row, 'data-i', i);
+    if (!inside) setAttr(row, 'tabindex', i ? -1 : 0);  // Tab lands on the leader
+    setAttr(row, 'aria-pressed', selected === b.d.id);
+    setAttr(row, 'aria-label', `${b.out ? 'Out' : `P${b.pos}`}, ${b.d.name ?? b.d.code}`);
+    setText(pos, b.out ? '–' : b.pos);
     // places gained or lost since the first order shown (the grid, unless a link opened the replay mid-race)
     row.dataset.start ??= b.pos;
     const gained = row.dataset.start - b.pos, chg = code.firstChild.lastChild;
-    chg.textContent = b.out || !gained ? '' : `${gained > 0 ? '▲' : '▼'}${Math.abs(gained)}`;
-    chg.dataset.up = gained > 0;
-    gap.textContent = c[column] || '';
-    gap.dataset.c = column === 'last' ? c.lastCls : column === 'trap' ? c.trapCls : column === 'champ' ? c.champCls : '';
-    [...code.lastChild.children].forEach((bar, k) => { bar.dataset.s = c.sectors[k] || ''; });
+    setText(chg, b.out || !gained ? '' : `${gained > 0 ? '▲' : '▼'}${Math.abs(gained)}`);
+    setAttr(chg, 'data-up', gained > 0);
+    setText(gap, c[column] || '');
+    setAttr(gap, 'data-c', column === 'last' ? c.lastCls : column === 'trap' ? c.trapCls : column === 'champ' ? c.champCls : '');
+    [...code.lastChild.children].forEach((bar, k) => setAttr(bar, 'data-s', c.sectors[k] || ''));
     const ty = TYRES[b.tyre];
-    tyre.textContent = ty ? ty[0] : '';
+    setText(tyre, ty ? ty[0] : '');
     tyre.style.borderColor = ty ? ty[1] : 'transparent';
-    tyre.title = b.tyre ? `${b.tyre}${b.age ? `, ${b.age} laps old` : ''}${b.stops ? `, ${b.stops} stop${b.stops > 1 ? 's' : ''}` : ''}` : '';
+    setAttr(tyre, 'title', b.tyre ? `${b.tyre}${b.age ? `, ${b.age} laps old` : ''}${b.stops ? `, ${b.stops} stop${b.stops > 1 ? 's' : ''}` : ''}` : '');
     onTyre(b.d.id, ty?.[1]);
-    badge.textContent = b.pit ? 'PIT' : b.stops ? `${b.stops}` : '';
-    badge.dataset.k = b.pit ? 'pit' : 'stops';
-    badge.title = b.stops ? `${b.stops} pit stop${b.stops > 1 ? 's' : ''}` : '';
+    setText(badge, b.pit ? 'PIT' : b.stops ? `${b.stops}` : '');
+    setAttr(badge, 'data-k', b.pit ? 'pit' : 'stops');
+    setAttr(badge, 'title', b.stops ? `${b.stops} pit stop${b.stops > 1 ? 's' : ''}` : '');
   });
 }

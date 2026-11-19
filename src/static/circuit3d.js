@@ -4,7 +4,7 @@
 import * as THREE from 'three';
 import {CSS2DObject} from 'three/addons/renderers/CSS2DRenderer.js';
 import {mergeGeometries} from 'three/addons/utils/BufferGeometryUtils.js';
-import {Fn, uniform, texture, uv, vec2, vec3, vec4, float, fract, abs, floor as cellOf, mrt, fwidth, positionGeometry, positionLocal, normalViewGeometry, mix, smoothstep, clamp, dot, min, time, sin, max} from 'three/tsl';
+import {Fn, uniform, texture, uv, vec2, vec3, vec4, float, fract, abs, mrt, fwidth, normalMap, positionGeometry, positionLocal, normalViewGeometry, mix, smoothstep, clamp, dot, min, time, sin, max} from 'three/tsl';
 import {asphalt, noise} from './track3d.js';
 import {racingLine} from './sim.js';
 import {garages} from './pit3d.js';
@@ -125,6 +125,7 @@ function gridSlots(F, m, mps, material, slots = 22) {
 
 // stands in for the satellite image until it loads: a node material's textures must exist when it compiles
 const BLANK = Object.assign(new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1), {colorSpace: THREE.SRGBColorSpace, needsUpdate: true});
+const VEG = Object.assign(new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1), {needsUpdate: true});  // all green, until an image's mask lands
 
 // runs of consecutive outline points that are part of a corner (radius under ~130 m), for kerbs and gravel traps. A run
 // must turn at least ~20 degrees in all: a wobble in the outline on a straight clears the radius test for a few metres,
@@ -225,11 +226,19 @@ export function buildCircuit(world, {pts, map, tex, width, startKnown, ann, corn
   // grain stays on it as fine detail the ~1 m imagery can't show up close.
   // tufts and soil in the light from a photographed ground's normal and roughness (textures3d.js ground), under any colour
   const cloudAmt = uniform(0.3);  // how dark the cloud shadows are: 0 under a clear sky, more under cloud (scene3d.js setWeather)
+  // wet grass and soil read ~25 % darker: 1 dry, 0.75 soaked (scene3d.js setWeather, from the track's wetness)
+  const wetDark = uniform(1);
   const grass = mat({map: tex.grass, normalMap: tex.ground.normalMap, roughnessMap: tex.ground.roughnessMap},
                     0xffffff, {normalScale: new THREE.Vector2(0.9, 0.9)});
-  // The satellite image swaps in by changing this node's texture, so the material needn't recompile when it lands
+  // The satellite image swaps in by changing these nodes' textures (satellite() below), so the material needn't recompile.
+  // satBlur: the image a few mip levels from the top (satLod), sampled clamped, so past the square each border pixel runs
+  // on outwards as a soft smear of the land at the edge. vegNode: the vegetation mask (1 = green), a few metres a texel.
   const satM = uniform(new THREE.Matrix3()), suv = satM.mul(vec3(positionGeometry.xz, 1)).xy, satNode = texture(BLANK, suv), satOn = uniform(0), satMean = uniform(new THREE.Color());
-  Object.assign(grass.userData, {sat: satNode, satM, satOn, satMean});
+  const satLod = uniform(0), satBlur = texture(BLANK, clamp(suv, 0, 1), satLod), vegNode = texture(VEG, suv);
+  // the ground photo's tufts belong on grass, not on the car parks and roofs the image shows: half strength off the vegetation
+  const veg = mix(float(1), vegNode.r, satOn);
+  grass.normalNode = normalMap(texture(tex.ground.normalMap).setUpdateMatrix(true), vec2(mix(0.45, 0.9, veg)));
+  Object.assign(grass.userData, {sat: satNode, satBlur, veg: vegNode, satLod, satM, satOn, satMean});
   grass.userData.cloud = cloudAmt;
   grass.colorNode = Fn(() => {
     const g = positionGeometry.xz, gm = g.mul(map.mps);  // metres
@@ -237,18 +246,22 @@ export function buildCircuit(world, {pts, map, tex, width, startKnown, ann, corn
     const patchTint = mix(vec3(0.84, 0.88, 0.84), vec3(1.08, 1.04, 0.86), smoothstep(0.15, 0.85, patches));
     const tile = texture(tex.grass).setUpdateMatrix(true);
     const grain = clamp(dot(tile.rgb, vec3(0.2126, 0.7152, 0.0722)).div(0.16), 0.8, 1.2);
-    const cover = satOn.mul(smoothstep(0, 0.08, min(min(suv.x, suv.x.oneMinus()), min(suv.y, suv.y.oneMinus()))));
-    // beyond the image, farmland: cells of crop tints, warped so they aren't a grid, hedged in dark lines that fade with distance
-    const fg = vec2(dot(g, vec2(0.92, 0.39)), dot(g, vec2(-0.39, 0.92))).mul(map.mps).add(noise(gm.div(300)).mul(120)), cell = fg.div(vec2(260, 190));
-    const crop = noise(cellOf(cell).add(0.5).mul(7.3)), hedgeAt = abs(fract(cell).sub(0.5)), hedge = smoothstep(0.47, 0.495, hedgeAt.x.max(hedgeAt.y)).mul(clamp(float(0.25).sub(fwidth(cell.x).mul(6)), 0, 0.25).mul(4));
-    const fields = mix(mix(vec3(0.82, 0.84, 0.72), vec3(1.15, 1.08, 0.72), smoothstep(0.3, 0.55, crop)), vec3(0.7, 0.92, 0.72), smoothstep(0.6, 0.8, crop)).mul(hedge.mul(-0.45).add(1));
-    const around = mix(tile.rgb.mul(patchTint), satMean.mul(grain).mul(patchTint).mul(fields), satOn);  // mean colour of the image
-    // the imagery is ~1 m a pixel: ground grain at 1.5 and 6 m gives it something to resolve from close by
+    const cover = satOn.mul(smoothstep(0, 0.03, min(min(suv.x, suv.x.oneMinus()), min(suv.y, suv.y.oneMinus()))));
+    // beyond the image: its own border smeared outwards, turning over ~0.15 of the image's width into its mean colour, a
+    // little greyed, so the land past the square reads as more of the same at a distance instead of a new landscape
+    const out = max(max(suv.x.negate(), suv.x.sub(1)), max(suv.y.negate(), suv.y.sub(1))).max(0);
+    const far = mix(satBlur.rgb, satMean, smoothstep(0, 0.15, out)), muted = mix(far, vec3(dot(far, vec3(0.2126, 0.7152, 0.0722))), 0.2);
+    const around = mix(tile.rgb, muted.mul(grain), satOn).mul(patchTint);
+    // the imagery is ~1 m a pixel: from close by, ground grain at 1.5 and 6 m, and a photo's own grain at its 3 m scale:
+    // the grass tile's speckle on vegetation, the gravel photo's stones elsewhere, each over its own mean (a top mip level)
     const near = noise(gm.div(1.5).add(3)).mul(0.14).add(noise(gm.div(6)).mul(0.14)).add(0.86);
+    const lum = c => dot(c, vec3(0.2126, 0.7152, 0.0722));
+    const stones = clamp(lum(texture(tex.gravel.map, gm.div(2.25)).rgb).div(lum(texture(tex.gravel.map, gm.div(2.25), 12).rgb).max(0.05)), 0.7, 1.3);
+    const detail = mix(mix(1, stones, 0.6), grain, vegNode.r);
     // cloud shadows: soft dark patches drifting over the ground on the wind, a few hundred metres across
     const cloud = smoothstep(0.45, 0.8, noise(g.mul(map.mps).div(260).add(time.mul(vec2(0.012, 0.004)))).mul(0.6).add(noise(gm.div(90).sub(time.mul(0.02))).mul(0.4)));
     const shade = float(1).sub(cloud.mul(cloudAmt));
-    return mix(around, satNode.rgb.mul(grain).mul(near), cover).mul(shade);
+    return mix(around, satNode.rgb.mul(detail).mul(near), cover).mul(shade).mul(wetDark);
   })();
   add(new THREE.Mesh(ground, grass)).receiveShadow = true;
   // height of the terrain mesh under scene (x, z): bilinear between the grid vertices (row j = z, column i = x)
@@ -279,14 +292,23 @@ export function buildCircuit(world, {pts, map, tex, width, startKnown, ann, corn
   // the track limit: an 18 cm line right at the road's edge, the kerb against it
   for (const s of [-1, 1]) add(strip(F, s * (half - m(0.18)), s * half, 0.03, white, true, 50, map.mps));
   if (startKnown) add(gridSlots(F, m, map.mps, white));
-  // mown grass between the apron and the barrier, in the satellite image's stead (a metre a pixel is a smear up close):
-  // the grass tile in world space, the mower's stripes along the road, patches of a drier green
+  // Mown grass between the apron and the barrier, in the satellite's stead (a metre a pixel is a smear up close): the
+  // mower's stripes along the road (~3 m passes, lighter and darker as the blades lean towards or away), the ground
+  // photo's tufts as a detail normal, and over its outer half a ragged blend into the satellite image under it, so the
+  // verge ends in the land rather than on a line.
+  let vergeSat = null;
   if (wall > runoff + m(1)) {
-    const verge = mat(null);
+    const verge = mat(null), wide = (wall - runoff) * map.mps;  // metres
+    const vp = positionGeometry.xz, gm = vp.mul(map.mps);
+    vergeSat = texture(BLANK, satM.mul(vec3(vp, 1)).xy);
+    verge.normalNode = normalMap(texture(tex.ground.normalMap, gm.div(3)), vec2(0.7));
     verge.colorNode = Fn(() => {
-      const gm = positionGeometry.xz.mul(map.mps), mow = smoothstep(0.2, 0.3, abs(fract(uv().y.div(2)).sub(0.5)));
+      const across = uv().x.mul(12), pass = across.div(3);  // strip uv: metres / 12 across; a gang mower passes ~3 m wide
+      const mow = mix(0.5, smoothstep(0.35, 0.65, abs(fract(pass).sub(0.5)).mul(2)), clamp(float(1).sub(fwidth(pass).mul(2)), 0, 1));
       const patch = noise(gm.div(14)).mul(0.26).add(noise(gm.div(2.5)).mul(0.16)).add(0.8);
-      return texture(tex.grass, gm.div(9)).rgb.mul(vec3(0.62, 0.62, 0.36)).mul(mix(0.9, 1.08, mow)).mul(patch);
+      const own = texture(tex.grass, gm.div(9)).rgb.mul(vec3(0.52, 0.56, 0.38)).mul(mix(0.84, 1.08, mow)).mul(patch);
+      const t = smoothstep(0.5, 1, across.div(wide).add(noise(gm.div(4)).sub(0.5).mul(0.25)));
+      return mix(own, vergeSat.rgb.mul(patch), t.mul(satOn)).mul(wetDark);
     })();
     for (const s of [-1, 1]) add(strip(F, s * (half + runoff), s * (half + wall), 0.008, verge, true, 12, map.mps));
   }
@@ -486,7 +508,7 @@ export function buildCircuit(world, {pts, map, tex, width, startKnown, ann, corn
   let laneMeshes = [], laneMat, laneLine;
 
   return {
-    trackMat, cloud: cloudAmt, wettable, surface, groundAt, pts, half, night: side.night,
+    trackMat, cloud: cloudAmt, wetDark, wettable, surface, groundAt, pts, half, night: side.night,
     // graphics.js settings; hiding also spares them their draw calls in every shadow cascade
     show({trees, trackside}) {
       for (const o of [trunks, cones, leaves]) o.visible = trees;
@@ -552,9 +574,15 @@ export function buildCircuit(world, {pts, map, tex, width, startKnown, ann, corn
     },
     // satellite ground: texture, uv = M (scene x, z, 1) over the terrain, keep(x, z): whether a tree there stands on
     // vegetation in the image (the others go), mean: the image's mean colour, for the land beyond it
-    satellite(texture, M, keep, mean) {
-      if (grass.userData.sat.value !== BLANK) grass.userData.sat.value.dispose();  // the coarse first image, when the sharp one replaces it
-      grass.userData.sat.value = texture;
+    satellite(texture, M, keep, mean, mask) {
+      const u = grass.userData;
+      if (u.sat.value !== BLANK) u.sat.value.dispose();  // the coarse first image, when the sharp one replaces it
+      if (u.veg.value !== VEG) u.veg.value.dispose();
+      for (const n of [u.sat, u.satBlur, vergeSat]) if (n) n.value = texture;
+      u.satLod.value = Math.max(0, Math.log2(texture.image.width / 8));  // the border smear: the image ~8 texels across
+      const veg = Object.assign(new THREE.DataTexture(mask.data.map(k => k * 255), mask.w, mask.h, THREE.RedFormat),
+        {magFilter: THREE.LinearFilter, minFilter: THREE.LinearFilter, needsUpdate: true});
+      u.veg.value = veg;
       grass.userData.satMean.value.copy(mean);
       grass.userData.satM.value.copy(M);
       grass.userData.satOn.value = 1;
@@ -565,6 +593,7 @@ export function buildCircuit(world, {pts, map, tex, width, startKnown, ann, corn
     // free every geometry and material this circuit created (textures are shared and kept)
     dispose() {
       if (grass.userData.sat.value !== BLANK) grass.userData.sat.value.dispose();  // the satellite image is this circuit's own
+      if (grass.userData.veg.value !== VEG) grass.userData.veg.value.dispose();
       for (const mt of start?.userData.mats ?? []) mt.dispose();
       side.dispose(world);
       for (const o of owned) {
@@ -613,13 +642,18 @@ function basis() {
   return [n, e, new THREE.Vector3().crossVectors(n, e)];
 }
 
-// broadleaf: ~3.8 x 3.2 m ellipsoid crown centred 6 m up, 60 cards of 2.4-3.4 m, most of them in its outer shell
+// broadleaf: ~3.8 x 3.2 m ellipsoid crown centred 6 m up, 20 clumps of three crossed cards (2.4-3.4 m) in its outer shell.
+// A clump reads as a volume from any side, above too, and the gaps between clumps break the crown's outline; 60 cards
+// at random angles made one even ball.
 function broadleaf(m) {
   const C = new THREE.Vector3(0, m(6), 0), R = new THREE.Vector3(m(3.8), m(3.2), m(3.8)), quads = [];
-  for (let i = 0; i < 60; i++) {
-    const [d] = basis(), at = C.clone().add(d.clone().multiply(R).multiplyScalar(0.35 + 0.6 * Math.cbrt(rand())));
-    const s = m(2.4 + rand() * 1), [, e2, f2] = basis();
-    quads.push([at.clone().addScaledVector(e2, -s / 2).addScaledVector(f2, -s / 2), e2.multiplyScalar(s), f2.multiplyScalar(s), [0, 0, 0.5, 1]]);
+  for (let i = 0; i < 20; i++) {
+    const [d] = basis(), at = C.clone().add(d.clone().multiply(R).multiplyScalar(0.45 + 0.45 * Math.cbrt(rand())));
+    const s = m(2.4 + rand() * 1), axes = basis();
+    for (let j = 0; j < 3; j++) {
+      const e = axes[j].clone().multiplyScalar(s), f = axes[(j + 1) % 3].clone().multiplyScalar(s);
+      quads.push([at.clone().addScaledVector(e, -0.5).addScaledVector(f, -0.5), e, f, [0, 0, 0.5, 1]]);
+    }
   }
   const rel = v => v.clone().sub(C).divide(R);
   return cards(quads, v => rel(v).normalize(), v => { const r = rel(v); return Math.min(1, (0.45 + 0.55 * Math.min(1, r.length())) * (0.78 + 0.22 * r.y)); });

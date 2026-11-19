@@ -224,6 +224,7 @@ function screenMaterial() {
 
 // The steering wheel's decal texture without its two ORACLE logos, as [x0, y0, x1, y1] fractions of the image.
 const WHEEL_LOGOS = [[250 / 1024, 934 / 1024, 770 / 1024, 1008 / 1024], [900 / 1024, 690 / 1024, 1016 / 1024, 900 / 1024]];
+const TYRE_PIE = [230 / 1024, 465 / 1024, 500 / 1024, 725 / 1024];
 const WHEEL_DECALS = new WeakMap();  // source texture -> cleaned copy, shared by every car
 function wheelDecals(map) {
   if (!map?.image) return map;
@@ -232,6 +233,12 @@ function wheelDecals(map) {
     canvas.width = w; canvas.height = h;
     const ctx = canvas.getContext('2d'); ctx.drawImage(map.image, 0, 0);
     for (const [x0, y0, x1, y1] of WHEEL_LOGOS) ctx.clearRect(x0 * w, y0 * h, (x1 - x0) * w, (y1 - y0) * h);
+    // the tyre-phase switch's label is a fully saturated pie the size of the whole lower wheel: from the cockpit it read as
+    // a rainbow patch. Redrawn muted, its wedge lines and text stay.
+    const [x0, y0, x1, y1] = TYRE_PIE.map((f, i) => f * (i % 2 ? h : w));
+    ctx.save(); ctx.beginPath(); ctx.rect(x0, y0, x1 - x0, y1 - y0); ctx.clip();
+    ctx.clearRect(x0, y0, x1 - x0, y1 - y0);
+    ctx.filter = 'saturate(0.2) brightness(0.55)'; ctx.drawImage(map.image, 0, 0); ctx.restore();
     const texture = new THREE.CanvasTexture(canvas);
     for (const k of ['colorSpace', 'flipY', 'wrapS', 'wrapT', 'anisotropy', 'channel']) texture[k] = map[k];
     WHEEL_DECALS.set(map, texture);

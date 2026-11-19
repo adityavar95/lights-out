@@ -1,7 +1,7 @@
 // Driver Control & Assist Deck (simulation only, under the timing tower): take over the selected car or hand it back,
 // driver assists, AI pace and aggression, and the input status. Each frame it feeds the player's input into the
 // simulation and draws the racing-line ribbon.
-import {el, led} from './util.js';
+import {el, led, setAttr, setText} from './util.js';
 import {nextCamera} from './onboard.js';
 import {setRibbon} from './scene3d.js';
 import {enableInput, pollInput, input, rumble} from './input.js';
@@ -68,25 +68,34 @@ function pitCompound(R, car) {
   return car.tyre.compound === 'MEDIUM' ? 'HARD' : 'MEDIUM';
 }
 
+// the status lights, [class, text] each: rebuilt only when one changes
+let statusKey = '';
+function setStatus(spans) {
+  const key = JSON.stringify(spans);
+  if (key === statusKey) return;
+  statusKey = key;
+  D.status.replaceChildren(...spans.map(([c, t]) => el('span', {class: c}, t)));
+}
+
 export function updateDriverDeck(S) {
   const now = performance.now(), dt = Math.min((now - lastFrame) / 1000, 0.1), R = S?.sim;
   lastFrame = now;
-  D.panel.hidden = !R;
+  if (D.panel.hidden !== !R) D.panel.hidden = !R;
   if (!R) { enableInput(false); setRibbon(null); return; }
   const car = R.player && R.car(R.player), sel = S.selected && S.byId[S.selected];
   // master switch: what clicking it would do / is doing for the selected car
   const driving = !!car && R.player === S.selected;
-  D.master.setAttribute('aria-pressed', driving);
+  setAttr(D.master, 'aria-pressed', driving);
   D.master.disabled = !sel;
-  D.master.lastChild.textContent = !sel ? 'SELECT A CAR TO DRIVE' : driving ? `MANUAL DRIVE (PLAYER) · ${sel.code}` : `AI AUTOPILOT (SPECTATE) · ${sel.code}`;
-  for (const r of D.rows) r.btns.forEach((b, i) => b.setAttribute('aria-pressed', R.assists[r.key] === r.opts[i][0]));
-  D.paceVal.textContent = `${Math.round(R.ai.pace * 100)}%`;
+  setText(D.master.lastChild, !sel ? 'SELECT A CAR TO DRIVE' : driving ? `MANUAL DRIVE (PLAYER) · ${sel.code}` : `AI AUTOPILOT (SPECTATE) · ${sel.code}`);
+  for (const r of D.rows) r.btns.forEach((b, i) => setAttr(b, 'aria-pressed', R.assists[r.key] === r.opts[i][0]));
+  setText(D.paceVal, `${Math.round(R.ai.pace * 100)}%`);
   if (document.activeElement !== D.pace) D.pace.value = Math.round(R.ai.pace * 100);  // Play's difficulty sets it too
-  D.aggrVal.textContent = R.ai.aggression < 0.25 ? 'conservative' : R.ai.aggression > 0.75 ? 'max attack' : 'balanced';
-  D.badge.querySelector('.pad').textContent = input.pad ? `GAMEPAD · ${input.pad.split('(')[0].trim().slice(0, 24)}` : 'NO GAMEPAD';
+  setText(D.aggrVal, R.ai.aggression < 0.25 ? 'conservative' : R.ai.aggression > 0.75 ? 'max attack' : 'balanced');
+  setText(D.badge.querySelector('.pad'), input.pad ? `GAMEPAD · ${input.pad.split('(')[0].trim().slice(0, 24)}` : 'NO GAMEPAD');
   D.badge.classList.toggle('active', !!car);
 
-  if (!car) { setRibbon(null); D.status.replaceChildren(el('span', {}, 'AI driving')); return; }  // "every car" overran the tower's width
+  if (!car) { setRibbon(null); setStatus([['', 'AI driving']]); return; }  // "every car" overran the tower's width
   // the player's input this frame, and its one-shot actions
   const inp = pollInput(dt);
   Object.assign(R.input, {throttle: inp.throttle, brake: inp.brake, steer: inp.steer, clutch: inp.clutch});
@@ -97,10 +106,9 @@ export function updateDriverDeck(S) {
   if (inp.actions.has('ers')) R.setErsMode(car.id, car.ers.user === 'PUSH' ? null : 'PUSH');
   if (inp.actions.has('pit')) R.box(car.id, car.pit.box ? null : pitCompound(R, car));
   if (inp.actions.has('camera')) nextCamera();
-  D.status.replaceChildren(
-    el('span', {class: car.tcCut ? 'on' : ''}, 'TC'), el('span', {class: car.absOn ? 'on' : ''}, 'ABS'),
-    el('span', {class: car.overRev > 0 || car.grind > 0 ? 'warn' : ''}, car.overRev > 0 ? 'OVER-REV' : car.grind > 0 ? 'CLUTCH!' : `G${car.gear}`),
-    el('span', {class: car.ers.user === 'PUSH' ? 'on' : ''}, 'OVERTAKE'), el('span', {class: car.pit.box ? 'on' : ''}, 'PIT'));
+  setStatus([[car.tcCut ? 'on' : '', 'TC'], [car.absOn ? 'on' : '', 'ABS'],
+    [car.overRev > 0 || car.grind > 0 ? 'warn' : '', car.overRev > 0 ? 'OVER-REV' : car.grind > 0 ? 'CLUTCH!' : `G${car.gear}`],
+    [car.ers.user === 'PUSH' ? 'on' : '', 'OVERTAKE'], [car.pit.box ? 'on' : '', 'PIT']]);
   if (car.overRev > 0) car.overRev -= dt;
   if (car.grind > 0) car.grind -= dt;
   // racing-line ribbon ahead of the player: ON everywhere, CORNERS only where it matters (corners, lift, braking)
