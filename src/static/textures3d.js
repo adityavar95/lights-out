@@ -37,8 +37,10 @@ function speckle(base, n, alpha) {
 // Material maps {map, normalMap, roughnessMap} for Poly Haven set `name`, one image `metres` across, on strips whose UVs
 // repeat every `tile` metres. They exist at once (canvas colour, flat normal, roughness 1), so materials compile with
 // every map, and each photo replaces its canvas when it lands; dispose() first, as the GPU texture changes size.
-// res: '1k', '2k' or '4k' (on the high tier every set is 4k: the road, seen from a chase camera a few metres up, gets 0.5 mm texels).
-function photo(name, metres, tile, fallback, res = '1k') {
+// The photos are fetched by textures().load(big) when a circuit is first shown, not on the globe page: 4k when big (Ultra on
+// the high tier: the road, seen from a chase camera a few metres up, gets 0.5 mm texels), else `low`.
+const pending = [];
+function photo(name, metres, tile, fallback, low = '2k') {
   const plain = fill => { const t = canvasTex(4, 4, g => { g.fillStyle = fill; g.fillRect(0, 0, 4, 4); }); t.colorSpace = THREE.NoColorSpace; return t; };
   const set = {map: fallback, normalMap: plain('#8080ff'), roughnessMap: plain('#ffffff')};
   for (const [k, file] of [['map', 'diff'], ['normalMap', 'nor_gl'], ['roughnessMap', 'rough']]) {
@@ -55,8 +57,11 @@ function photo(name, metres, tile, fallback, res = '1k') {
         t.needsUpdate = true;
         t.onUpdate = () => img.close();  // decoded photos (up to 64 MB each at 4k) aren't needed once on the GPU
     };
-    loader.load(`${PH}/${res}/${name}/${name}_${file}_${res}.jpg`, landed, undefined,
-      () => loader.load(`${CDN}/${name}/${name}_${file}_1k.jpg`, landed, undefined, () => {}));
+    pending.push(big => new Promise(done => {  // settles when the photo is in (or for good not)
+      const res = big ? '4k' : low, land = img => { landed(img); done(); };
+      loader.load(`${PH}/${res}/${name}/${name}_${file}_${res}.jpg`, land, undefined,
+        () => loader.load(`${CDN}/${name}/${name}_${file}_1k.jpg`, land, undefined, done));
+    }));
   }
   return set;
 }
@@ -195,8 +200,8 @@ function foliageTex(g, S) {
 
 export function textures(high) {
   return {
-    asphalt: photo('asphalt_pit_lane', 2, 4, speckle('#2e2f34', 26000, 0.12), high ? '4k' : '2k'),  // fresh, uncracked: cracks would repeat every tile
-    gravel: photo('gravel_floor', 2.25, 6, speckle('#b8a580', 30000, 0.3), high ? '4k' : '1k'),
+    asphalt: photo('asphalt_pit_lane', 2, 4, speckle('#2e2f34', 26000, 0.12)),  // fresh, uncracked: cracks would repeat every tile
+    gravel: photo('gravel_floor', 2.25, 6, speckle('#b8a580', 30000, 0.3), high ? '2k' : '1k'),
     // kerb: red/white blocks a metre long (strip UVs repeat every 2 m) with ridges every 12.5 cm across them
     kerbRidges: normalTex(64, (u, v) => 0.5 * Math.sin(2 * Math.PI * 16 * v), 0.006),
     // debris fence on the barriers: 8 cm diamond mesh; stanchions and rails are real geometry (trackside.js, circuit3d.js)
@@ -208,7 +213,9 @@ export function textures(high) {
       }
     }, true, 2),
     // relief for the terrain under its satellite / grass colour: tufts and soil in the normal and roughness maps
-    ground: photo('sparse_grass', 3, 0, speckle('#5a7a3a', 2000, 0.2), high ? '4k' : '2k'),
+    ground: photo('sparse_grass', 3, 0, speckle('#5a7a3a', 2000, 0.2)),
+    // once, when a circuit is first seen (scene3d.js loadPhotos); later calls get the same promise
+    load(big) { return this.loaded ??= Promise.all(pending.splice(0).map(start => start(big))); },
     foliageOf: (cache => kind => cache[kind] ??= foliage(kind))({}),  // atlas per tree kind, drawn when a circuit first needs it
     grass: canvasTex(1024, 1024, (g, w, h) => {  // plain speckle: mowing stripes shimmer from a distance
       g.fillStyle = '#427f31';

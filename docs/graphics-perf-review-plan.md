@@ -10,7 +10,7 @@ session starts from that handover alone, with no need for the earlier conversati
 ## Status
 
 - [x] Phase 0: review and plan (handover: `docs/handover/phase-0.md`)
-- [ ] Phase 1: speed
+- [x] Phase 1: speed (handover: `docs/handover/phase-1.md`; item 2 only partly met, see there)
 - [ ] Phase 2: ground and edges
 - [ ] Phase 3: camera look
 - [ ] Phase 4: trackside life

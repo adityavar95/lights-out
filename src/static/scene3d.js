@@ -43,15 +43,17 @@ let cloudShadow = null, carsToken = 0, mode = 'overview', chased = null, glide =
 let stale = null;
 let drawnAt = 0, resized = true, stageW = 0, stageH = 0;  // the stage's CSS size, kept by fit()
 let gfx = loadGraphics(), framesShown = 0, lastFrameAt = 0;
-let shadowFrame = 0, high = false, autoScale = 1, frameTime = 0, calm = 0, calmNeed = 120;  // GPU quality tier (init3d) and dynamic resolution (the render loop)
+let shadowFrame = 0, high = false, autoScale = 1, frameTime = 0, calm = 0, calmNeed = 120, upAt = 0;  // GPU quality tier (init3d) and dynamic resolution (the render loop)
 
 // Canvas pixels per CSS pixel: the high tier renders up to 2x (supersampling on a 1-1.25x display), within a 4K frame's
 // pixel budget, so a big window on a 4K monitor isn't rendered at 8K
 const MIN_AUTO = 0.75;  // Auto never goes under 75 % of the display's own pixels: below that the picture is soft, and a slow CPU isn't helped
+const budgetOf = (w, h) => Math.max(Math.min(devicePixelRatio, 2), Math.min(2, Math.sqrt(3840 * 2160 / (w * h))));
+// Auto: autoScale is a factor on the display's own pixels, from 1x (where it starts) up to the budget
 function pixelRatio(w = innerWidth, h = innerHeight) {
-  const dpr = Math.min(devicePixelRatio, 2), budget = Math.max(dpr, Math.min(2, Math.sqrt(3840 * 2160 / (w * h))));
+  const dpr = Math.min(devicePixelRatio, 2), budget = budgetOf(w, h);
   if (gfx.res !== 'auto') return gfx.res > 1 ? Math.min(dpr * gfx.res, budget) : dpr * gfx.res;
-  return high ? Math.max(dpr * MIN_AUTO, budget * autoScale) : dpr;
+  return high ? THREE.MathUtils.clamp(dpr * autoScale, dpr * MIN_AUTO, budget) : dpr;
 }
 const drawnView = new THREE.Matrix4(), drawnProj = new THREE.Matrix4();
 // CSS2DRenderer hides what's behind the camera by NDC z in [-1, 1]; with reversed depth (and WebGPU's [0, 1]) a point
@@ -212,8 +214,10 @@ export function init3d(el) {
     // tab hidden, no size yet, or under the F1 TV viewer (it drew ~1,800 calls a frame there, beside 4K video decoding)
     // (the size is the ResizeObserver's, 0 while hidden: reading the layout here, after the replay has written to the page, forced a second layout every frame)
     if (!stageW || !stageH || covered()) return;
-    // Dynamic resolution holds 60 fps: Auto starts supersampled (2x on a laptop's 2560x1440 panel is a 4K frame with 4x MSAA,
-    // 39 fps on an RTX 4080) and steps down while the GPU's passes take over 8 ms a frame, by as much as the overshoot asks
+    if (circuit) loadPhotos();  // the stage is seen: not while the globe covers it (the race under it, ~150 MB of photos)
+    // Dynamic resolution holds 60 fps: Auto starts at 1x (starting supersampled, 2x on a laptop's 2560x1440 panel is a 4K frame
+    // with 4x MSAA, 39 fps on an RTX 4080, and a window behind another app never measured its way down), steps up to the
+    // budget while the GPU's passes take under 4 ms, and down while they take over 8 ms a frame, by as much as the overshoot asks
     // for (their time goes with the pixel count), and back up once they take under 4. (At 9 ms, 2-4 % of frames missed
     // 16.7 ms; at 4 ms, 0.3 %: the browser's own compositing comes on top.) Without timestamp queries it goes by the
     // frame rate: down under ~55 fps unless the main thread itself fills the frame (fewer pixels don't help that), up only
@@ -221,19 +225,21 @@ export function init3d(el) {
     // drawn back to back; hitches (a circuit loading, shaders compiling) don't count, or loading the page alone tripped it.
     if (high && (gpuMs || !gfx.fps) && gfx.res === 'auto' && performance.now() - lastUpdate < 200 && performance.now() - drawnAt < 40 && dt < 0.1) {
       frameTime += (dt - frameTime) * 0.02;  // ~50-frame average
-      const pr = mainSurface.getPixelRatio(), floor = Math.min(devicePixelRatio, 2) * MIN_AUTO;
+      const pr = mainSurface.getPixelRatio(), dpr = Math.min(devicePixelRatio, 2), floor = dpr * MIN_AUTO;
       const busy = Object.values(stats).reduce((a, b) => a + b, 0) / 1000;  // the main thread's share of the frame, s
       const over = gpuMs ? gpuMs > 8 : frameTime > 1 / 55 && busy < 0.8 * frameTime, under = gpuMs ? gpuMs < 4 : frameTime > 0 && frameTime < 1 / 90;
       calm = under ? calm + 1 : 0;
-      const k = over && pr > floor ? THREE.MathUtils.clamp(Math.sqrt(gpuMs ? 6 / gpuMs : 1 / 60 / frameTime), 0.7, 0.95) : autoScale < 1 && calm > calmNeed ? 1.15 : 1;
+      const k = over && pr > floor ? THREE.MathUtils.clamp(Math.sqrt(gpuMs ? 6 / gpuMs : 1 / 60 / frameTime), 0.7, 0.95) : pr < budgetOf(stageW, stageH) - 0.01 && calm > (gpuMs && gpuMs < 2 ? 30 : calmNeed) ? 1.15 : 1;
       if (k !== 1) {
-        autoScale = Math.min(1, autoScale * k);
+        autoScale = pr / dpr * k;  // from what's drawn: a resize may have clamped it
         fit();
         const now = mainSurface.getPixelRatio();
         gpuMs *= (now / pr) ** 2;  // what the new size should cost, until the average catches up
         frameTime = k < 1 ? 0 : 1 / 60;  // the average climbs again from nothing: ~1 s before the next step down
         calm = 0;
-        if (k < 1) calmNeed = Math.min(calmNeed * 2, 7200);  // each step down doubles the wait before trying up again: it see-sawed every few seconds
+        // a step up undone within 3 s doubles the wait before trying up again (it see-sawed every few seconds); one that held resets it
+        if (k < 1) calmNeed = performance.now() - upAt < 3000 ? Math.min(calmNeed * 2, 7200) : 120;
+        else upAt = performance.now();
         console.info(`3D: resolution ${pr.toFixed(2)}x -> ${now.toFixed(2)}x`);
       }
     }
@@ -583,14 +589,35 @@ export function setCars(drivers, onSelect, year) {
   warmCockpit(token);
 }
 
+// the ground photos, once: 4k for Ultra (or a tuned Ultra) on the high tier, else 2k
+const loadPhotos = () => tex.load(high && ['Ultra', 'Custom'].includes(presetOf(gfx)));
+
+// one visible mesh per material in the scene: what a warm-up compiles
+function warmable(seen = new Set()) {
+  const meshes = [];
+  scene.traverse(o => { if (o.isMesh && o.visible && !o.material.userData.readsViewport && !seen.has(o.material)) { seen.add(o.material); meshes.push(o); } });
+  return meshes;
+}
+
+// The circuit's shaders, built in slices while the globe still covers the stage (globe.js waits on this before it fades):
+// drawn cold, the first frames after the globe took 0.2-0.6 s each, compiling. The cars come later, with the race's data
+// (0.3-15 s): warming theirs with the stage showing cost more than drawing them cold (docs/handover/phase-1.md).
+export async function warmStage() {
+  await ready?.catch(() => {});
+  const at = circuit;
+  if (!at || !post) return;
+  await Promise.race([loadPhotos(), new Promise(r => setTimeout(r, 4000))]);  // the photos while the globe flies down
+  try { await warmFor(renderer, scene, warmable(), post.scenePass.renderTarget, post.scenePass.getMRT(), () => circuit === at); }
+  catch (e) { console.warn('stage shaders', e); }
+}
+
 // The shaders the close cameras need, built in the background once the cars are there: first the main view's (a far camera has
 // drawn only the cars' far level), then the cockpit mirrors', which keep their modelled glass until then.
 function warmCockpit(token) {
   mirrorsWarm = false;
   setTimeout(async () => {
     if (token !== carsToken) return;
-    const seen = new Set(), meshes = [];
-    scene.traverse(o => { if (o.isMesh && o.visible && !o.material.userData.readsViewport && !seen.has(o.material)) { seen.add(o.material); meshes.push(o); } });
+    const seen = new Set(), meshes = warmable(seen);
     for (const c of Object.values(cars)) c.steeringWheel?.traverse(o => { if (o.isMesh && !seen.has(o.material)) { seen.add(o.material); meshes.push(o); } });
     const wanted = () => token === carsToken;
     try {
