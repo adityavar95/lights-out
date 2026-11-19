@@ -46,6 +46,10 @@ export function tvHeaders() {
 // {columns, data} table -> array of row objects
 export const rows = t => t.data.map(r => Object.fromEntries(t.columns.map((c, i) => [c, r[i]])));
 
+// for what's written every frame: a write of the same value still dirties style and layout (Play wrote ~16k a second)
+export const setAttr = (e, k, v) => { v = String(v); if (e.getAttribute(k) !== v) e.setAttribute(k, v); };
+export const setText = (e, v) => { v = String(v); if (e.textContent !== v) e.textContent = v; };
+
 export function el(tag, attrs = {}, ...children) {
   const e = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {

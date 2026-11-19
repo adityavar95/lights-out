@@ -15,7 +15,7 @@ session starts from that handover alone, with no need for the earlier conversati
 - [x] Phase 3: camera look (handover: `docs/handover/phase-3.md`)
 - [x] Phase 4: trackside life (handover: `docs/handover/phase-4.md`)
 - [x] Phase 5: untested areas (handover: `docs/handover/phase-5.md`; Play-driving and Monsoon fps need re-taking, see there)
-- [ ] Phase 6: Play's page cost (`driverdeck.js`, `pitwall.js`, `hud.js`, `tower.js`)
+- [x] Phase 6: Play's page cost (handover: `docs/handover/phase-6.md`; Free Orbit and Helicopter within noise of the 10 % goal, see there)
 - [ ] Phase 7: wet ground (`circuit3d.js`, `scene3d.js`)
 
 ## 1. Measured (Phase 0)
@@ -130,7 +130,11 @@ grass beside the track reads as sunlit.
 - Use agent-browser with its own session and its window in front (`--headed`, viewport 2040x1000). The user's Chrome
   throttles to 1-3 fps when its window is behind another app, so its numbers are not usable.
 - In the page: `const m = await import('/static/scene3d.js')`; `m.framesDrawn()` over 5 s gives fps, `m.frameStats()`
-  the ms per part, `document.querySelector('.trackmap canvas').width` the resolution. Keys 1-5 switch cameras.
+  the ms per part (`rest` is the frame-to-frame time the parts don't cover: the page's layout, style and paint,
+  and vsync or GPU waits), `document.querySelector('.trackmap canvas').width` the resolution. Keys 1-5 switch cameras.
+- Check the CPU still boosts before a run: `(Get-Counter '\Processor Information(_Total)\% Processor Performance')`
+  read ~175 % under load on the RTX 4080 laptop when clean and ~90 % once it stopped boosting, which slowed every
+  main-thread part 3-4x (phase 6).
 - Start the replay with the "Play replay" button; a paused stage redraws 4 times a second by design.
 
 ## 5. Handover template (`docs/handover/phase-N.md`)

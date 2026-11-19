@@ -1,6 +1,6 @@
 // Broadcast / pit-wall HUD: glass panels laid round the edge of the 3D view (bento layout, the centre stays clear),
 // with the telemetry cluster, g-force friction circle, tyre thermal matrix and circuit radar.
-import {el, svg, fmtClock, lastBefore, led, rcText} from './util.js';
+import {el, svg, fmtClock, lastBefore, led, rcText, setAttr, setText} from './util.js';
 import {CORNERS, tyreColor} from './telemetry.js';
 import {nearestPoint} from './pitdata.js';
 
@@ -11,7 +11,7 @@ export const SECTOR_COLORS = ['#ff4d5e', '#38b6ff', '#ffd23f'];
 export const STATUS = {GREEN: 'green', YELLOW: 'yellow', SC: 'yellow', 'SC IN': 'yellow', VSC: 'yellow', 'VSC ENDING': 'yellow', RED: 'red', CHEQUERED: 'chequered'};
 const TYRE_LETTER = {SOFT: 'S', MEDIUM: 'M', HARD: 'H', INTERMEDIATE: 'I', WET: 'W'};
 
-let h, radar = null, trail = [], focusNow = null, peak = {lat: 0, brk: 0};  // peak: the biggest g lately, fading over ~10 s
+let h, radar = null, trail = [], focusNow = null, whoKey = '', peak = {lat: 0, brk: 0};  // peak: the biggest g lately, fading over ~10 s
 
 const glass = (cls, ...children) => el('section', {class: `glass ${cls}`}, ...children);
 
@@ -151,11 +151,11 @@ export function renderRadar(cars, selected) {
   for (const [id, dot] of Object.entries(radar.dots)) {
     const p = cars[id];
     dot.style.display = p ? '' : 'none';
-    if (p) { dot.setAttribute('cx', p[0]); dot.setAttribute('cy', p[1]); }
+    if (p) { setAttr(dot, 'cx', p[0]); setAttr(dot, 'cy', p[1]); }
   }
   const p = selected && cars[selected];
   radar.ring.style.display = p ? '' : 'none';
-  if (p) { radar.ring.setAttribute('cx', p[0]); radar.ring.setAttribute('cy', p[1]); }
+  if (p) { setAttr(radar.ring, 'cx', p[0]); setAttr(radar.ring, 'cy', p[1]); }
 }
 
 // ---------- focused car ----------
@@ -166,7 +166,7 @@ const dash = v => (v === null || v === undefined || Number.isNaN(v) ? '–' : v)
 //              ers: {soc, mode}, g: {gLat, gLong}, tyres: {temps, wear, compound}}
 export function renderFocus(f) {
   focusNow = f;
-  for (const p of [h.cluster, h.gpanel]) p.hidden = !f;
+  for (const p of [h.cluster, h.gpanel]) if (p.hidden !== !f) p.hidden = !f;
   if (!f) { trail = []; return; }
   const {d, b} = f;
   if (h.who.dataset.id !== d.id) {  // the headshot only changes with the driver
@@ -174,25 +174,29 @@ export function renderFocus(f) {
     peak = {lat: 0, brk: 0};
     h.face = d.headshot ? el('img', {src: d.headshot, alt: ''}) : null;
   }
-  h.who.replaceChildren(...[h.face].filter(Boolean), el('span', {class: 'chip', style: `background:${d.color}`}), el('b', {}, d.code),
-    el('span', {class: 'muted'}, d.team || ''), el('span', {class: 'pos'}, b && b.pos < 99 ? `P${b.pos}` : ''));
-  h.speed.textContent = dash(f.kmh === null ? null : Math.round(f.kmh));
-  h.gear.textContent = f.gear === 0 ? 'N' : dash(f.gear);
-  h.src.textContent = f.sim ? 'PHYSICS SIMULATION' : f.estimated ? 'ESTIMATED FROM GPS' : 'CAR DATA · OPENF1';
-  h.simCtl.hidden = !f.sim;
-  h.proxL.dataset.level = f.radar?.left ?? '';  // blind-spot chevrons either side of the cluster
-  h.proxR.dataset.level = f.radar?.right ?? '';
-  if (f.sim) {
-    h.ersBtns.forEach((btn, i) => btn.setAttribute('aria-pressed', ERS_MODES[i][0] === f.ers.user));
-    h.drsTest.setAttribute('aria-pressed', !!f.drsForced);
+  const pos = b && b.pos < 99 ? `P${b.pos}` : '', key = [d.id, d.color, d.code, d.team, pos, h.face?.src].join();
+  if (key !== whoKey) {
+    whoKey = key;
+    h.who.replaceChildren(...[h.face].filter(Boolean), el('span', {class: 'chip', style: `background:${d.color}`}), el('b', {}, d.code),
+      el('span', {class: 'muted'}, d.team || ''), el('span', {class: 'pos'}, pos));
   }
-  h.lap.hidden = !f.lap;
+  setText(h.speed, dash(f.kmh === null ? null : Math.round(f.kmh)));
+  setText(h.gear, f.gear === 0 ? 'N' : dash(f.gear));
+  setText(h.src, f.sim ? 'PHYSICS SIMULATION' : f.estimated ? 'ESTIMATED FROM GPS' : 'CAR DATA · OPENF1');
+  if (h.simCtl.hidden !== !f.sim) h.simCtl.hidden = !f.sim;
+  setAttr(h.proxL, 'data-level', f.radar?.left ?? '');  // blind-spot chevrons either side of the cluster
+  setAttr(h.proxR, 'data-level', f.radar?.right ?? '');
+  if (f.sim) {
+    h.ersBtns.forEach((btn, i) => setAttr(btn, 'aria-pressed', ERS_MODES[i][0] === f.ers.user));
+    setAttr(h.drsTest, 'aria-pressed', !!f.drsForced);
+  }
+  if (h.lap.hidden !== !f.lap) h.lap.hidden = !f.lap;
   if (f.lap) {
     const lapT = s => `${Math.floor(s / 60)}:${(s % 60).toFixed(3).padStart(6, '0')}`, dt = f.lap.delta;
-    h.lapT.textContent = f.lap.time === null ? '–:––.–––' : lapT(f.lap.time);
-    h.lapD.textContent = dt === null ? '' : `${dt < 0 ? '−' : '+'}${Math.abs(dt).toFixed(3)}`;
-    h.lapD.dataset.s = dt < 0 ? '-' : '+';
-    h.lapB.textContent = f.lap.best ? `BEST ${lapT(f.lap.best)}` : '';
+    setText(h.lapT, f.lap.time === null ? '–:––.–––' : lapT(f.lap.time));
+    setText(h.lapD, dt === null ? '' : `${dt < 0 ? '−' : '+'}${Math.abs(dt).toFixed(3)}`);
+    setAttr(h.lapD, 'data-s', dt < 0 ? '-' : '+');
+    setText(h.lapB, f.lap.best ? `BEST ${lapT(f.lap.best)}` : '');
   }
   h.thr.style.height = `${f.throttle ?? 0}%`;
   h.brk.style.height = `${f.brake ?? 0}%`;
@@ -200,13 +204,13 @@ export function renderFocus(f) {
   const frac = f.rpm ? Math.min(1, Math.max(0, (f.rpm - RPM_LOW) / (RPM_HIGH - RPM_LOW))) : 0, lit = Math.round(frac * LEDS);
   h.leds.forEach((led, i) => led.classList.toggle('on', i < lit));
   h.cluster.classList.toggle('limiter', frac >= 0.97);
-  h.drs.textContent = f.drsName;
-  h.drs.dataset.state = f.drs ?? 'off';
-  h.drs.title = {open: 'Active', detected: 'Detected: within 1 s at the detection point', off: 'Unavailable'}[f.drs ?? 'off'];
+  setText(h.drs, f.drsName);
+  setAttr(h.drs, 'data-state', f.drs ?? 'off');
+  setAttr(h.drs, 'title', {open: 'Active', detected: 'Detected: within 1 s at the detection point', off: 'Unavailable'}[f.drs ?? 'off']);
   h.ers.style.width = `${Math.round(f.ers.soc * 100)}%`;
-  h.ersPct.textContent = `${Math.round(f.ers.soc * 100)}%`;
-  h.ersMode.textContent = f.ers.mode;
-  h.ersMode.dataset.mode = f.ers.mode;
+  setText(h.ersPct, `${Math.round(f.ers.soc * 100)}%`);
+  setText(h.ersMode, f.ers.mode);
+  setAttr(h.ersMode, 'data-mode', f.ers.mode);
 
   // friction circle: x = lateral (right turn to the right), y = longitudinal (acceleration up, braking down)
   const x = f.g.gLat * G_PX, y = -f.g.gLong * G_PX;
@@ -215,20 +219,20 @@ export function renderFocus(f) {
   h.gDot.setAttribute('cx', x);
   h.gDot.setAttribute('cy', y);
   h.gTrail.setAttribute('points', trail.join(' '));
-  h.gLat.textContent = Math.abs(f.g.gLat).toFixed(1);
+  setText(h.gLat, Math.abs(f.g.gLat).toFixed(1));
   peak.lat = Math.max(Math.abs(f.g.gLat), peak.lat * 0.999);  // per frame: ~11 s half-life at 60 fps
   peak.brk = Math.max(-f.g.gLong, peak.brk * 0.999);
-  h.pkLat.textContent = peak.lat.toFixed(1);
-  h.pkBrk.textContent = peak.brk.toFixed(1);
-  h.gLong.textContent = `${f.g.gLong < 0 ? '−' : ' '}${Math.abs(f.g.gLong).toFixed(1)}`;
+  setText(h.pkLat, peak.lat.toFixed(1));
+  setText(h.pkBrk, peak.brk.toFixed(1));
+  setText(h.gLong, `${f.g.gLong < 0 ? '−' : ' '}${Math.abs(f.g.gLong).toFixed(1)}`);
 
   const ty = f.tyres;
-  h.compound.textContent = ty.compound ? `${TYRE_LETTER[ty.compound] ?? ''} ${ty.compound}` : 'compound unknown';
-  h.compound.dataset.c = ty.compound || '';
+  setText(h.compound, ty.compound ? `${TYRE_LETTER[ty.compound] ?? ''} ${ty.compound}` : 'compound unknown');
+  setAttr(h.compound, 'data-c', ty.compound || '');
   h.tyres.forEach((t, i) => {
     t.swatch.style.background = tyreColor(ty.temps[i], ty.compound);
-    t.temp.textContent = `${Math.round(ty.temps[i])}°`;
-    t.wear.textContent = `${Math.round(ty.wear[i])}% worn`;
+    setText(t.temp, `${Math.round(ty.temps[i])}°`);
+    setText(t.wear, `${Math.round(ty.wear[i])}% worn`);
   });
 }
 

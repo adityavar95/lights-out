@@ -1,7 +1,7 @@
 // Pit-wall console (simulation only): the race engineer's strategy controls for the selected car (box call, compound,
 // pace), the weather deck and the race director's neutralisations. Also, in every session: the broadcast
 // race-control banner and the scene's weather look (the simulation's weather, or a replay's rain flag).
-import {el, lastBefore, led} from './util.js';
+import {el, lastBefore, led, setAttr, setText} from './util.js';
 import {setWeather} from './scene3d.js';
 import {setGhost} from './hud.js';
 import {stintLife} from './tyres.js';
@@ -87,7 +87,7 @@ function banner(rc, t, sim) {
     const [, cat, flag, text] = rc[i];
     if (sim || cat === 'SafetyCar' || ['RED', 'CHEQUERED'].includes(flag) || /DRS|SLIPPERY/.test(text)) { m = rc[i]; break; }
   }
-  P.banner.hidden = !m;
+  if (P.banner.hidden !== !m) P.banner.hidden = !m;  // every frame: a same-value write still dirties style
   if (!m || m === bannerMsg) return;
   bannerMsg = m;
   const text = m[3].toUpperCase();
@@ -103,7 +103,7 @@ function banner(rc, t, sim) {
 export function updatePitwall(S) {
   const R = S.sim, t = S.t;
   banner(S.data?.race_control, t, !!R);
-  P.panel.hidden = !R;
+  if (P.panel.hidden !== !R) P.panel.hidden = !R;
   const now = performance.now();
   if (now - updatedAt < 150) return;  // the console only needs ~6 updates a second
   updatedAt = now;
@@ -117,41 +117,41 @@ export function updatePitwall(S) {
   // strategy: box state, compounds with the stint each would last now, predicted rejoin and its ghost on the radar
   if (car) {
     const pit = car.pit, health = car.tyre.health.reduce((a, b) => a + b) / 4;
-    P.who.textContent = `${S.byId[id].code} · ${car.tyre.compound} ${Math.round(health)}% · stops ${pit.stops} · ${car.pace.toLowerCase()} pace`;
+    setText(P.who, `${S.byId[id].code} · ${car.tyre.compound} ${Math.round(health)}% · stops ${pit.stops} · ${car.pace.toLowerCase()} pace`);
     const confirmed = pit.state === 'RACING' && !!pit.box;
-    P.box.setAttribute('aria-pressed', confirmed || pit.state !== 'RACING');
-    P.box.lastChild.textContent = PIT_STATE[pit.state] ?? (confirmed ? `BOX CONFIRMED · ${pit.box.compound}` : 'BOX THIS LAP');
+    setAttr(P.box, 'aria-pressed', confirmed || pit.state !== 'RACING');
+    setText(P.box.lastChild, PIT_STATE[pit.state] ?? (confirmed ? `BOX CONFIRMED · ${pit.box.compound}` : 'BOX THIS LAP'));
     P.box.disabled = pit.state !== 'RACING';
     const showing = pit.box?.compound ?? chosen;
     P.comps.forEach((b, i) => {
       const c = COMPS[i][0];
-      b.setAttribute('aria-pressed', c === showing);
-      b.lastChild.textContent = `~${Math.round(stintLife(c, wet, PACE[car.pace].wear))}L`;  // laps to the 35 % cliff
+      setAttr(b, 'aria-pressed', c === showing);
+      setText(b.lastChild, `~${Math.round(stintLife(c, wet, PACE[car.pace].wear))}L`);  // laps to the 35 % cliff
     });
     const pr = R.predict(id);
     if (pr?.pos && pit.state === 'RACING') {
       const name = o => (o ? `${S.byId[o.id]?.code} ${o.gap.toFixed(1)}s` : '—');
-      P.rejoin.textContent = `Box now: ${pr.loss < 0 ? '' : '+'}${pr.loss.toFixed(1)}s → P${pr.pos} · behind ${name(pr.ahead)} · ahead of ${name(pr.behind)}`;
+      setText(P.rejoin, `Box now: ${pr.loss < 0 ? '' : '+'}${pr.loss.toFixed(1)}s → P${pr.pos} · behind ${name(pr.ahead)} · ahead of ${name(pr.behind)}`);
       setGhost(trackPos(R.T, pr.s, R.T.line[Math.floor(((pr.s % R.T.len) + R.T.len) % R.T.len / R.T.ds) % R.T.n]));
     } else {
-      P.rejoin.textContent = pit.state === 'RACING' ? 'Rejoin prediction after the first lap' : '';
+      setText(P.rejoin, pit.state === 'RACING' ? 'Rejoin prediction after the first lap' : '');
       setGhost(null);
     }
-    P.paces.forEach((b, i) => b.setAttribute('aria-pressed', PACES[i][0] === car.paceUser));
+    P.paces.forEach((b, i) => setAttr(b, 'aria-pressed', PACES[i][0] === car.paceUser));
   } else {
-    P.who.textContent = 'Select a driver in the tower to run their strategy';
-    P.rejoin.textContent = '';
+    setText(P.who, 'Select a driver in the tower to run their strategy');
+    setText(P.rejoin, '');
     setGhost(null);
   }
   if (document.activeElement !== P.wing) P.wing.value = R.wing;
-  P.wingText.textContent = `REAR WING ${R.wing > 0 ? '+' : ''}${R.wing} · downforce ${R.wing >= 0 ? '+' : ''}${R.wing * 4}% · drag ${R.wing >= 0 ? '+' : ''}${R.wing * 3}%`;
+  setText(P.wingText, `REAR WING ${R.wing > 0 ? '+' : ''}${R.wing} · downforce ${R.wing >= 0 ? '+' : ''}${R.wing * 4}% · drag ${R.wing >= 0 ? '+' : ''}${R.wing * 3}%`);
   // weather deck: requested sky, live state, wetness (the slider follows the track unless it's being dragged)
-  P.skies.forEach((b, i) => b.setAttribute('aria-pressed', SKIES[i] === R.W.target));
-  P.sky.textContent = SKY[R.W.state];
+  P.skies.forEach((b, i) => setAttr(b, 'aria-pressed', SKIES[i] === R.W.target));
+  setText(P.sky, SKY[R.W.state]);
   if (document.activeElement !== P.wet) P.wet.value = Math.round(wet * 100);
-  P.wetText.textContent = `Rain ${pct(R.W.rain)} · racing line ${pct(R.W.wetLine)} · off-line ${pct(R.W.wetOff)}`;
+  setText(P.wetText, `Rain ${pct(R.W.rain)} · racing line ${pct(R.W.wetLine)} · off-line ${pct(R.W.wetOff)}`);
   // race director
-  P.director.forEach((b, i) => b.setAttribute('aria-pressed', DIRECTOR[i][2].includes(R.control.state)));
-  P.drs.textContent = `${R.control.drsName} ${R.control.drs ? 'ENABLED' : 'DISABLED'}`;
-  P.drs.dataset.state = R.control.drs ? 'open' : 'off';
+  P.director.forEach((b, i) => setAttr(b, 'aria-pressed', DIRECTOR[i][2].includes(R.control.state)));
+  setText(P.drs, `${R.control.drsName} ${R.control.drs ? 'ENABLED' : 'DISABLED'}`);
+  setAttr(P.drs, 'data-state', R.control.drs ? 'open' : 'off');
 }

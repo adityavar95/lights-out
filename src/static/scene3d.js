@@ -263,6 +263,7 @@ export function init3d(el) {
       && !Object.values(cars).some(c => c.group.visible && c.haze.visible);  // the heat haze shimmers
     if (still && now - drawnAt < 250) return;
     if (now - drawnAt > 100) post.reset();  // no motion blur across the gap
+    else frameMs += (now - drawnAt - frameMs) * 0.05;  // drawn back to back: the frame-to-frame time, for frameStats' rest
     drawnAt = now;
     resized = false;
     drawnView.copy(camera.matrixWorld);
@@ -338,9 +339,10 @@ export const framesDrawn = () => framesShown;
 
 // Where a frame's main-thread time goes, ms, smoothed over ~20 frames: the frame-rate counter shows it (settings.js)
 const stats = {};
-let gpuMs = 0;
+let gpuMs = 0, frameMs = 0;
 export const timed = (k, t0) => { const d = performance.now() - t0; stats[k] = (stats[k] ?? d) + (d - (stats[k] ?? d)) * 0.05; };
-export const frameStats = () => gpuMs ? {...stats, gpu: gpuMs} : stats;
+// rest: frame-to-frame time not in the timed parts (the page's layout, style and paint, waiting on the GPU or vsync)
+export const frameStats = () => ({...stats, ...(gpuMs && {gpu: gpuMs}), ...(frameMs && {rest: Math.max(0, frameMs - Object.values(stats).reduce((a, b) => a + b, 0))})});
 
 // Applies graphics.js's settings, stores them and tells the panel (settings.js)
 export function setGraphics(patch) {
