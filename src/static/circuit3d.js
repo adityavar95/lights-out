@@ -226,6 +226,8 @@ export function buildCircuit(world, {pts, map, tex, width, startKnown, ann, corn
   // grain stays on it as fine detail the ~1 m imagery can't show up close.
   // tufts and soil in the light from a photographed ground's normal and roughness (textures3d.js ground), under any colour
   const cloudAmt = uniform(0.3);  // how dark the cloud shadows are: 0 under a clear sky, more under cloud (scene3d.js setWeather)
+  // wet grass and soil read ~25 % darker: 1 dry, 0.75 soaked (scene3d.js setWeather, from the track's wetness)
+  const wetDark = uniform(1);
   const grass = mat({map: tex.grass, normalMap: tex.ground.normalMap, roughnessMap: tex.ground.roughnessMap},
                     0xffffff, {normalScale: new THREE.Vector2(0.9, 0.9)});
   // The satellite image swaps in by changing these nodes' textures (satellite() below), so the material needn't recompile.
@@ -259,7 +261,7 @@ export function buildCircuit(world, {pts, map, tex, width, startKnown, ann, corn
     // cloud shadows: soft dark patches drifting over the ground on the wind, a few hundred metres across
     const cloud = smoothstep(0.45, 0.8, noise(g.mul(map.mps).div(260).add(time.mul(vec2(0.012, 0.004)))).mul(0.6).add(noise(gm.div(90).sub(time.mul(0.02))).mul(0.4)));
     const shade = float(1).sub(cloud.mul(cloudAmt));
-    return mix(around, satNode.rgb.mul(detail).mul(near), cover).mul(shade);
+    return mix(around, satNode.rgb.mul(detail).mul(near), cover).mul(shade).mul(wetDark);
   })();
   add(new THREE.Mesh(ground, grass)).receiveShadow = true;
   // height of the terrain mesh under scene (x, z): bilinear between the grid vertices (row j = z, column i = x)
@@ -306,7 +308,7 @@ export function buildCircuit(world, {pts, map, tex, width, startKnown, ann, corn
       const patch = noise(gm.div(14)).mul(0.26).add(noise(gm.div(2.5)).mul(0.16)).add(0.8);
       const own = texture(tex.grass, gm.div(9)).rgb.mul(vec3(0.52, 0.56, 0.38)).mul(mix(0.84, 1.08, mow)).mul(patch);
       const t = smoothstep(0.5, 1, across.div(wide).add(noise(gm.div(4)).sub(0.5).mul(0.25)));
-      return mix(own, vergeSat.rgb.mul(patch), t.mul(satOn));
+      return mix(own, vergeSat.rgb.mul(patch), t.mul(satOn)).mul(wetDark);
     })();
     for (const s of [-1, 1]) add(strip(F, s * (half + runoff), s * (half + wall), 0.008, verge, true, 12, map.mps));
   }
@@ -506,7 +508,7 @@ export function buildCircuit(world, {pts, map, tex, width, startKnown, ann, corn
   let laneMeshes = [], laneMat, laneLine;
 
   return {
-    trackMat, cloud: cloudAmt, wettable, surface, groundAt, pts, half, night: side.night,
+    trackMat, cloud: cloudAmt, wetDark, wettable, surface, groundAt, pts, half, night: side.night,
     // graphics.js settings; hiding also spares them their draw calls in every shadow cascade
     show({trees, trackside}) {
       for (const o of [trunks, cones, leaves]) o.visible = trees;

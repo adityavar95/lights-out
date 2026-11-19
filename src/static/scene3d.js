@@ -530,6 +530,7 @@ export function setTrack(pts, span, corners, startKnown, mpu, width = 13, ann = 
   circuit.night(sky0.lamps);
   applyDetail();
   wettable = circuit.wettable;  // scenery that turns darker and glossier in the rain
+  if (weather) circuit.wetDark.value = 1 - 0.25 * (weather.wetLine + weather.wetOff) / 2;
   vfx.mps = map.mps;
   post.setMps(map.mps);
   controls.minDistance = m(4);  // close enough to read a car's livery, never inside it
@@ -708,7 +709,8 @@ export const setStartLights = n => circuit?.lights(n);
 // colour band on the tyre sidewalls for the current compound
 // Weather look, from the simulation's weather (or a replay's rain flag). cloud / rain 0..1; wetLine / wetOff: water
 // depth on and off the racing line. Overcast cuts the direct sun by up to 85 % and the sky light by half and greys the
-// fog; rain pulls the fog in; the track shader gets its water depths, and other surfaces lose roughness as they wet.
+// fog; rain pulls the fog in; the track shader gets its water depths, other surfaces lose roughness as they wet, and the
+// verge and the ground darken (circuit3d.js wetDark).
 export function setWeather({cloud, rain, wetLine, wetOff}) {
   if (!scene) return;
   weather = {cloud, rain, wetLine, wetOff};
@@ -728,6 +730,7 @@ export function setWeather({cloud, rain, wetLine, wetOff}) {
     trackMat.userData.normalScale.value = 1 - 0.8 * wet;  // the water film smooths over the aggregate
   }
   for (const m of wettable) m.roughness = 0.9 - 0.6 * wet;
+  if (circuit) circuit.wetDark.value = 1 - 0.25 * wet;  // the verge and the ground under it
   if (cloudShadow) cloudShadow.value = 0.2 + 0.6 * Math.max(0, cloud - 0.1) / 0.9;  // darker under more cloud; the sky at 0 is a clear one
   vfx.rain = rain;
 }
