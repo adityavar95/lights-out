@@ -93,6 +93,7 @@ Watching a race tells you what happened. Lights Out lets you **look inside it**:
 
 | | |
 |---|---|
+| 🌍 **A globe to start from** | Pick your race by spinning a satellite Earth; a click flies you down to the circuit, with imagery that sharpens as you approach |
 | 🎬 **Every race since 1996 in 3D** | Real GPS for 2023+ (every car, every session), real lap timing back to 1996, on true-scale circuits with real elevation, banking and satellite ground |
 | 🔴 **Live timing, free** | During a race weekend, follow the session as it happens: tower, gaps, tyres, race control and weather, no subscription needed |
 | 🕹️ **A race simulator, 1950 to 2026** | A physics race on any circuit with any era's cars, driven by AI or by you on keyboard or gamepad |
@@ -107,6 +108,10 @@ Watching a race tells you what happened. Lights Out lets you **look inside it**:
 
 The app has three sections, switched in the header: **Races** (real races), **Play** (drive a physics race yourself) and **Stream** (F1 TV).
 
+### 🌍 Globe launch view
+
+The app opens on a live satellite Earth. Every circuit on the season calendar is pinned on it. Drag to spin; click a pin (or choose a race in the header) and the view flies down to that circuit, with satellite imagery that loads in sharper patches as you approach. Close enough and **Play** appears: open it and the globe cross-fades into the 3D circuit once it has loaded.
+
 ### 🎬 3D race replay
 
 Pick any race, press ▶ and watch the cars move round a true-scale 3D circuit with a live timing tower, flags, race control and weather.
@@ -115,8 +120,9 @@ Pick any race, press ▶ and watch the cars move round a true-scale 3D circuit w
 <img src="docs/screenshots/replay-satellite.jpg" alt="Circuit of the Americas in 3D with satellite imagery draped on the terrain" width="100%">
 </p>
 
-- **Real circuits in 3D** (three.js): real heights and banking from OpenF1 elevation, real track width, kerbs, run-off, Armco or concrete barriers, trees, the Monaco tunnel, a pit lane traced from real GPS, and **satellite imagery** fitted to the circuit and draped on the terrain
-- **Cinema-grade lighting:** HDRI skies with the sun aimed at their brightest point, cascaded sun shadows, a rubbered-in racing line that darkens as the session goes on, motion blur, bloom, heat haze, sparks and spray
+- **Real circuits in 3D** (three.js): real heights and banking from OpenF1 elevation, real track width, kerbs, run-off, Armco or concrete barriers, trees with wind sway, the Monaco tunnel, a pit lane traced from real GPS, and **satellite imagery** fitted to the circuit and draped on the terrain with a mown verge, vegetation-keyed ground detail and a painted racing line that darkens as rubber goes down
+- **Cinema-grade lighting:** HDRI skies with the sun aimed at their brightest point, cascaded sun shadows, floodlights at night, drifting cloud shadows on the ground, tyre skid marks, motion blur, bloom, heat haze, sparks and spray; **in the wet**, the verge and satellite ground visibly darken
+- **Crowds in the stands:** instanced spectators fill the grandstands, with clusters of broadleaf trees behind them
 - **Cars** in team colours with race numbers, built to each era's regulation dimensions; 2026+ cars use a detailed RB22 model up close
 - **GPS replay (2023+):** real car positions from OpenF1 for every session (practice, qualifying, sprint and race), with real speed, rpm, gear, throttle, brake and DRS
 - **Lap-timing replay (1996+):** cars move at each lap's real pace, exact at every lap line, starting from a two-column grid and passing side by side without overlapping
@@ -159,6 +165,7 @@ The **Play** view is a racing game on the real circuit, with a grid from the rea
 - **Pit wall:** box this lap, tyre choice with a pit-loss and rejoin predictor, pace modes, rear-wing trim, weather from clear to monsoon, and a race director for VSC and safety car
 - **Take control** of any car with a keyboard or gamepad: speed-sensitive steering, traction control, ABS and braking assists, auto or manual gears and clutch, only the aids that era allowed if you want it real
 - **AI racecraft:** tow, attack, one-move defence, leaving the space, contact and wing damage
+- **Reaction game:** five red lights, one a second, a random hold, then lights out — press as fast as you can. Rates your time against the driver average (~0.2 s) and remembers your personal best
 
 <table>
 <tr>
@@ -497,19 +504,35 @@ F1/
 │   └── static/          # Frontend: vanilla JS modules, no build step
 │       ├── index.html, launcher.html, style.css, circuitdeck.css
 │       ├── app.js            # Races / Play / Stream, calendar, hero, tabs
+│       ├── boot.js           # first-paint bootstrap, theme
+│       ├── globe.js          # satellite Earth launch view, flight to circuit
+│       ├── globemath.js      # Mercator math for the globe
 │       ├── replay.js         # Replay engine (GPS, lap timing, live)
-│       ├── scene3d.js        # three.js scene, cameras, shadows, ground
-│       ├── circuit3d.js, track3d.js, cars3d.js, rb22.js, post.js, vfx.js, mirror.js
+│       ├── replaylive.js     # Live-session replay overlay
+│       ├── scene3d.js        # three.js WebGPU scene, cameras, shadows, ground
+│       ├── circuit3d.js, track3d.js, pit3d.js, trackside.js  # circuit geometry
+│       ├── cars3d.js, rb22.js, showroom.js                    # car models and showroom
+│       ├── post.js, vfx.js, mirror.js, textures3d.js         # post-processing and effects
 │       ├── satellite.js, groundwork.js   # satellite imagery fitted in a worker
+│       ├── graphics.js, glass.js, palette.js  # quality governor, glass material, colour palette
 │       ├── sim.js, vehicle.js, eras.js, simmode.js, player.js, racecraft.js,
 │       │   tyres.js, weather.js, racecontrol.js, strategy.js, track.js, circuits.js   # race simulation
+│       ├── playsetup.js      # setup card before a sim race (car, driver, circuit)
+│       ├── pace.js, quali.js, reallap.js, pitdata.js  # timing helpers for sim
 │       ├── hud.js, tower.js, onboard.js, pitwall.js, driverdeck.js, decks.js
 │       ├── circuitdeck.js, carsdeck.js, trace.js, tracechart.js, tracemodal.js
-│       ├── audio.js, audiodeck.js       # procedural engine sound
-│       ├── stream.js, multiviewer.js, tvcontrols.js   # F1 TV
-│       ├── whatif.js, strategylab.js, optimiser.js    # Strategy lab
-│       ├── drivers.js, charts.js, explorer.js, live.js, lanes.js
-│       ├── focus.js, telemetry.js, input.js, util.js
+│       ├── teledrawer.js     # canvas telemetry overlay on video tiles
+│       ├── audio.js, audiodeck.js, commentary.js  # procedural engine sound and commentary
+│       ├── stream.js, multiviewer.js, tvcontrols.js, radiopanel.js  # F1 TV and radio
+│       ├── whatif.js, strategylab.js, optimiser.js  # Strategy lab
+│       ├── story.js, storypanel.js, moments.js, highlights.js  # race stories and moments
+│       ├── season.js, seasonview.js    # season page and calendar
+│       ├── drivers.js, driver.js, charts.js, explorer.js, live.js, lanes.js
+│       ├── focus.js, telemetry.js, scrubmarks.js  # telemetry trace helpers
+│       ├── spoilers.js, share.js, settings.js, ledgers.js  # spoiler guard, sharing, prefs
+│       ├── reaction.js       # F1 lights-out reaction-time minigame
+│       ├── downloads.js      # Download assets button
+│       ├── input.js, util.js, dash.js, loadstage.js
 │       └── models/           # rb22.glb and its credits
 ├── scripts/build_exe.py # PyInstaller build of LightsOut.exe
 ├── tests/               # test_server.py and the Node .mjs tests
@@ -529,6 +552,7 @@ uv run python tests/test_server.py   # backend
 node tests/test_live.mjs              # live car placement
 node tests/test_telemetry.mjs         # HUD telemetry (g-forces, tyres, ERS, DRS)
 node tests/test_sim.mjs               # race physics
+node tests/test_play.mjs              # sim play loop and setup card
 node tests/test_player.mjs            # player driving and AI racecraft
 node tests/test_eras.mjs              # era profiles and lap times by era
 node tests/test_circuits.mjs          # aero trim, grade, banking
@@ -537,6 +561,25 @@ node tests/test_whatif.mjs            # Strategy lab model
 node tests/test_multiviewer.mjs       # F1 TV overlay timing
 node tests/test_lanes.mjs             # lap-timing replay lanes
 node tests/test_drivers.mjs           # Drivers tab tallies
+node tests/test_globe.mjs             # globe math (Mercator, tile, flight)
+node tests/test_reaction.mjs          # reaction game logic
+node tests/test_season.mjs            # season calendar
+node tests/test_story.mjs             # race story / moments
+node tests/test_moments.mjs           # moments extraction
+node tests/test_highlights.mjs        # highlights
+node tests/test_pace.mjs              # lap pace model
+node tests/test_quali.mjs             # qualifying simulation
+node tests/test_pitdata.mjs           # pit-stop data helpers
+node tests/test_graphics.mjs          # graphics quality governor
+node tests/test_glass.mjs             # glass material
+node tests/test_palette.mjs           # colour palette
+node tests/test_ledgers.mjs           # ledger helpers
+node tests/test_marks.mjs             # scrub marks
+node tests/test_dash.mjs              # dashboard helpers
+node tests/test_tokens.mjs            # auth token helpers
+node tests/test_share.mjs             # share URL helpers
+node tests/test_spoilers.mjs          # spoiler guard
+node tests/test_util.mjs              # general utilities
 ```
 
 ## 🤝 Contributing
