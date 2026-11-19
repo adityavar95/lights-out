@@ -14,7 +14,9 @@ session starts from that handover alone, with no need for the earlier conversati
 - [x] Phase 2: ground and edges (handover: `docs/handover/phase-2.md`)
 - [x] Phase 3: camera look (handover: `docs/handover/phase-3.md`)
 - [x] Phase 4: trackside life (handover: `docs/handover/phase-4.md`)
-- [ ] Phase 5: untested areas (Play, Stream, night, wet)
+- [x] Phase 5: untested areas (handover: `docs/handover/phase-5.md`; Play-driving and Monsoon fps need re-taking, see there)
+- [ ] Phase 6: Play's page cost (`driverdeck.js`, `pitwall.js`, `hud.js`, `tower.js`)
+- [ ] Phase 7: wet ground (`circuit3d.js`, `scene3d.js`)
 
 ## 1. Measured (Phase 0)
 
@@ -75,7 +77,53 @@ helicopter, write the handover. Picture changes must not cost frames and must no
 
 ### Phase 5: untested areas
 12. Measure and screenshot Play (driving), Stream, a night race and a wet race the same way; add what they show as
-    new phases here.
+    new phases here. Done: results in `docs/handover/phase-5.md`, new phases below.
+
+### Phase 6: Play's page cost (`driverdeck.js`, `pitwall.js`, `hud.js`, `tower.js`)
+Play spectating ran at 59-70 fps in every camera where the replay ran at 89-117 fps, with the same GPU time (4-6 ms)
+and draw calls. A trace showed the renderer's main thread 84 % busy. About 7 ms of that is in rAF (what `frameStats`
+measures). Another ~4-5 ms a frame goes to a full layout (370 of 1,097 objects dirty every frame), style, 7 paints and
+re-raster of the panels, none of it in `frameStats`. A MutationObserver counted, per second: 1,235 `aria-pressed`
+writes on the driver deck's assist buttons (`driverdeck.js:82`, every frame whether or not they changed), 260 on the
+pit wall (`pitwall.js:122-154`), 3,000 radar `cx`/`cy` writes (`hud.js`), and the tower's 22 rows rebuilt 8 times a
+second with every attribute (`tower.js`).
+13. Re-take the Play numbers first, with nothing else rendering on the GPU (see the handover's Watch out): Play
+    spectating, Play driving (the player's car; cameras picked from the deck's menu, not keys 1-5 or C), and the
+    Simulation in Monsoon. Done when the table has all three with the five cameras.
+14. Write deck and pit-wall states only when they change (`driverdeck.js:79-82`, `pitwall.js:122-154`), and find
+    which writes dirty layout every frame (Performance panel's layout invalidations). Fix the biggest ones: unchanged
+    writes, or `contain: layout paint` on panels that update in place. Done when Play spectating is within 10 % of the
+    replay's fps in every camera and layout is under 0.5 ms a frame.
+15. Add the page's own frame time to `frameStats` (rAF-to-rAF minus the measured parts), so a DOM cost shows up in
+    the numbers instead of only in a trace. Done when the Section 4 snippet shows it.
+
+### Phase 7: wet ground (`circuit3d.js`, `scene3d.js`)
+In the wet (Brazil 2026's start on inters: wetness 0.35; the Simulation in Monsoon: rain 92 %, track 93-100 %) only
+the track and the `wettable` materials' roughness change (`scene3d.js:728`). The mown verge (phase 2) stays the same
+bright, dry green as in sunshine, and the satellite ground doesn't change at all, so under a grey monsoon sky the
+grass beside the track reads as sunlit.
+16. Darken the verge's and the satellite ground's colour with the same wetness value (wet grass and soil are about
+    20-30 % darker), through a uniform like `wetLine`/`wetOff`; no new draw calls or passes. Done when a Monsoon
+    helicopter screenshot shows darker grass and ground and the dry picture is unchanged pixel for pixel.
+
+### Needs the user (design choices, not done)
+- **Phase 1 item 2, the cars' first frames after the globe closes** (0.2-0.6 s hitches): either the globe waits
+  for the race data before it closes, or the cars are drawn once out of sight first. Both change what the user sees
+  or waits for.
+- **Night brightness of the satellite ground and the crowd.** Under Settings' Night sky the satellite photo keeps
+  its daylight (bare soil reads ~100/255 beside a ~30/255 track), and the instanced crowd (phase 4) is evenly lit and
+  fully saturated across a whole stand, even outside the floodlights. Darkening them is a matter of taste: how dark,
+  and whether stands away from the floodlights should go dark.
+- **Floodlight beams** (pre-existing, `trackside.js:118`, `:255`): at night each beam is a flat see-through wedge
+  that cuts straight through stands and roofs in chase and T-cam. Keep, soften, or remove.
+- **Night backdrop**: the Night HDRI is a rocky desert hillside with stars, which doesn't look like São Paulo.
+  Choosing another HDRI means choosing an asset.
+
+### Found on the way (not graphics)
+- Leaving Play while driving (header Races, or a `#…/replay` link) leaves `.mapwrap.driving` set, so the Races
+  replay has no ▶ until a reload.
+- In Play, C (`onboard.js` `nextCamera`) cycles into Free Orbit, which drops the focus and hands the player's car to
+  the AI. Keys 1-5 also left the player's car with the AI.
 
 ## 4. How to measure
 
