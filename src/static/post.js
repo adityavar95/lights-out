@@ -12,7 +12,9 @@ import {smaa} from 'three/addons/tsl/display/SMAANode.js';
 const EXPOSURE = 1 / 100;  // simulated camera shutter time, s: a broadcast camera's (1/60 smeared fast pans and the ground)
 const SENSOR = 0.024;      // m, full-frame sensor height: with the camera's vertical fov it gives the focal length
 const BLUR_TAPS = 16, DOF_TAPS = 32;
-const MAX_BLUR = 0.035;    // of the screen: the longest streak, so one wild motion vector can't smear half the frame
+// of the screen: the longest streak. 0.035 (~90 px, 16 taps 5 px apart) smeared the chase camera's fences and stands into
+// ghosted bands at speed; at 0.015 the near ground still streaks and the background stays readable.
+const MAX_BLUR = 0.015;
 
 const ign = () => fract(dot(screenCoordinate.xy, vec2(0.06711056, 0.00583715)).mul(52.9829189));  // interleaved gradient noise
 
