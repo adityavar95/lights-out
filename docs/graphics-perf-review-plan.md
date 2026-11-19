@@ -13,7 +13,7 @@ session starts from that handover alone, with no need for the earlier conversati
 - [x] Phase 1: speed (handover: `docs/handover/phase-1.md`; item 2 only partly met, see there)
 - [x] Phase 2: ground and edges (handover: `docs/handover/phase-2.md`)
 - [x] Phase 3: camera look (handover: `docs/handover/phase-3.md`)
-- [ ] Phase 4: trackside life
+- [x] Phase 4: trackside life (handover: `docs/handover/phase-4.md`)
 - [ ] Phase 5: untested areas (Play, Stream, night, wet)
 
 ## 1. Measured (Phase 0)

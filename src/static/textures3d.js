@@ -120,26 +120,25 @@ function dry(g, S, u, shade, kind) {
 }
 
 function lush(g, S, u, shade) {
-  // broadleaf: dark inner clumps so the crown is solid inside, then leaves, darker in the middle and underneath
-  const R = 470 * u, cx = 512 * u, cy = 512 * u;
-  for (let i = 0; i < 40; i++) {
-    const a = rand() * 2 * Math.PI, r = R * 0.55 * Math.sqrt(rand());
-    g.fillStyle = shade(0.32 + 0.1 * rand(), rand());
-    g.beginPath();
-    g.ellipse(cx + Math.cos(a) * r, cy + Math.sin(a) * r, R * (0.15 + 0.1 * rand()), R * (0.12 + 0.08 * rand()), rand() * Math.PI, 0, 2 * Math.PI);
-    g.fill();
-  }
+  // broadleaf: a cluster of seven leafy lobes with gaps between them, each with a dark core and lit on its upper side, so
+  // the crown keeps clumps of light and shade (and holes) when the atlas is a few mips down, not one even green disc
+  const R = 470 * u, cx = 512 * u, cy = 512 * u, lobes = [[0, 0.05, 0.4]];
+  for (let i = 0; i < 6; i++) { const a = (i + 0.35 * rand()) / 6 * 2 * Math.PI; lobes.push([Math.cos(a) * 0.56, Math.sin(a) * 0.52, 0.27 + 0.08 * rand()]); }
   g.strokeStyle = '#4a3a2c';
-  for (let i = 0; i < 26; i++) {  // twigs out of the middle
-    const a = rand() * 2 * Math.PI;
-    g.lineWidth = (2 + 3 * rand()) * u;
-    g.beginPath(); g.moveTo(cx, cy); g.lineTo(cx + Math.cos(a) * R * 0.8, cy + Math.sin(a) * R * 0.8); g.stroke();
+  for (const [lx, ly] of lobes) {  // a twig out to each lobe
+    g.lineWidth = (3 + 3 * rand()) * u;
+    g.beginPath(); g.moveTo(cx, cy + 0.1 * R); g.lineTo(cx + lx * R, cy + ly * R); g.stroke();
   }
   const leaves = [];
-  for (let i = 0; i < 9000; i++) {
-    const a = rand() * 2 * Math.PI, edge = R * (0.82 + 0.1 * Math.sin(5 * a + 1) + 0.08 * Math.sin(11 * a)), r = edge * Math.sqrt(rand());
-    const x = cx + Math.cos(a) * r, y = cy + Math.sin(a) * r, up = 1 - (y - cy + R) / (2 * R);
-    leaves.push([x, y, a, 0.45 + 0.35 * (r / edge) * (0.6 + 0.4 * up) + 0.2 * rand()]);
+  for (const [lx, ly, lr] of lobes) {
+    const ox = cx + lx * R, oy = cy + ly * R, r0 = lr * R;
+    g.fillStyle = shade(0.26 + 0.06 * rand(), rand());
+    g.beginPath(); g.ellipse(ox, oy + 0.1 * r0, r0 * 0.7, r0 * 0.62, rand() * Math.PI, 0, 2 * Math.PI); g.fill();
+    for (let i = 0; i < 1300 * lr / 0.3; i++) {
+      const a = rand() * 2 * Math.PI, edge = r0 * (0.9 + 0.1 * Math.sin(7 * a)), r = edge * Math.sqrt(rand());
+      const x = ox + Math.cos(a) * r, y = oy + Math.sin(a) * r, lit = 0.5 - 0.5 * (y - oy) / r0;  // 1 at the lobe's top
+      leaves.push([x, y, a, 0.3 + 0.45 * lit * (0.5 + 0.5 * r / edge) + 0.15 * (1 - Math.hypot(lx, ly)) + 0.2 * rand()]);
+    }
   }
   leaves.sort((p, q) => p[3] - q[3]);  // lit leaves on top
   for (const [x, y, a, k] of leaves) {

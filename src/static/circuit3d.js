@@ -640,13 +640,18 @@ function basis() {
   return [n, e, new THREE.Vector3().crossVectors(n, e)];
 }
 
-// broadleaf: ~3.8 x 3.2 m ellipsoid crown centred 6 m up, 60 cards of 2.4-3.4 m, most of them in its outer shell
+// broadleaf: ~3.8 x 3.2 m ellipsoid crown centred 6 m up, 20 clumps of three crossed cards (2.4-3.4 m) in its outer shell.
+// A clump reads as a volume from any side, above too, and the gaps between clumps break the crown's outline; 60 cards
+// at random angles made one even ball.
 function broadleaf(m) {
   const C = new THREE.Vector3(0, m(6), 0), R = new THREE.Vector3(m(3.8), m(3.2), m(3.8)), quads = [];
-  for (let i = 0; i < 60; i++) {
-    const [d] = basis(), at = C.clone().add(d.clone().multiply(R).multiplyScalar(0.35 + 0.6 * Math.cbrt(rand())));
-    const s = m(2.4 + rand() * 1), [, e2, f2] = basis();
-    quads.push([at.clone().addScaledVector(e2, -s / 2).addScaledVector(f2, -s / 2), e2.multiplyScalar(s), f2.multiplyScalar(s), [0, 0, 0.5, 1]]);
+  for (let i = 0; i < 20; i++) {
+    const [d] = basis(), at = C.clone().add(d.clone().multiply(R).multiplyScalar(0.45 + 0.45 * Math.cbrt(rand())));
+    const s = m(2.4 + rand() * 1), axes = basis();
+    for (let j = 0; j < 3; j++) {
+      const e = axes[j].clone().multiplyScalar(s), f = axes[(j + 1) % 3].clone().multiplyScalar(s);
+      quads.push([at.clone().addScaledVector(e, -0.5).addScaledVector(f, -0.5), e, f, [0, 0, 0.5, 1]]);
+    }
   }
   const rel = v => v.clone().sub(C).divide(R);
   return cards(quads, v => rel(v).normalize(), v => { const r = rel(v); return Math.min(1, (0.45 + 0.55 * Math.min(1, r.length())) * (0.78 + 0.22 * r.y)); });
