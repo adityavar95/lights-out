@@ -35,7 +35,7 @@ export function buildTower(list, drivers, onSelect) {
     list.append(row);
     rows[d.id] = row;
   }
-  list.style.height = `calc(${drivers.length} * var(--row-h, ${ROW_H}px))`;
+  list.style.setProperty('--list-height', `calc(${drivers.length} * var(--row-h, ${ROW_H}px))`);
   // the whole field without scrolling where the panel allows it: rows give way down to 22 px
   list.fit ??= new ResizeObserver(() => {
     const room = list.parentElement.clientHeight, n = list.children.length;
@@ -135,7 +135,7 @@ export function renderTower(rows, board, cols, column, selected, onTyre) {
   const inside = board.length && rows[board[0].d.id].parentNode.matches(':focus-within');
   board.forEach((b, i) => {
     const row = rows[b.d.id], [pos, , code, gap, tyre, badge] = row.children, c = cols[b.d.id];
-    row.style.transform = `translateY(calc(${i} * var(--row-h, ${ROW_H}px)))`;
+    row.style.setProperty('--row-offset', `calc(${i} * var(--row-h, ${ROW_H}px))`);  row.style.transform = `translateY(var(--row-offset))`;
     row.classList.toggle('out', b.out);
     row.classList.toggle('sel', selected === b.d.id);
     setAttr(row, 'data-i', i);
@@ -153,7 +153,7 @@ export function renderTower(rows, board, cols, column, selected, onTyre) {
     [...code.lastChild.children].forEach((bar, k) => setAttr(bar, 'data-s', c.sectors[k] || ''));
     const ty = TYRES[b.tyre];
     setText(tyre, ty ? ty[0] : '');
-    tyre.style.borderColor = ty ? ty[1] : 'transparent';
+    tyre.style.setProperty('--tyre-color', ty ? ty[1] : 'transparent');
     setAttr(tyre, 'title', b.tyre ? `${b.tyre}${b.age ? `, ${b.age} laps old` : ''}${b.stops ? `, ${b.stops} stop${b.stops > 1 ? 's' : ''}` : ''}` : '');
     onTyre(b.d.id, ty?.[1]);
     setText(badge, b.pit ? 'PIT' : b.stops ? `${b.stops}` : '');

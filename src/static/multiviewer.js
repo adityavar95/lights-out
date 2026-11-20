@@ -719,9 +719,9 @@ function drawTelemetry() {
     t.parts.spd.textContent = r.speed;
     t.parts.gear.textContent = r.gear || 'N';
     t.parts.drs.classList.toggle('on', r.drs >= 10);  // OpenF1: 10/12/14 = flap open, 8 = eligible
-    t.parts.rpm.style.width = `${Math.min(100, r.rpm / 130)}%`;  // full bar at 13,000 rpm
-    t.parts.thr.style.width = `${r.throttle}%`;
-    t.parts.brk.style.width = `${r.brake ? 100 : 0}%`;  // OpenF1's brake is on/off (0 or 100)
+    t.parts.rpm.style.setProperty('--bar-width', `${Math.min(100, r.rpm / 130)}%`);
+    t.parts.thr.style.setProperty('--bar-width', `${r.throttle}%`);
+    t.parts.brk.style.setProperty('--bar-width', `${r.brake ? 100 : 0}%`);
   }
 }
 

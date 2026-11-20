@@ -199,7 +199,7 @@ export function updateDrawer(f, t) {
   D.compound.textContent = ty?.compound ?? '';
   D.tyres.forEach((c, i) => {
     const s = ty?.temps?.[i];
-    c.box.style.background = s === undefined ? 'transparent' : tyreBand(s);
+    c.box.style.setProperty('--box-bg', s === undefined ? 'transparent' : tyreBand(s));
     c.temp.textContent = `${fix(s)}°`;
     c.core.textContent = `core ${ty?.core ? `${fix(ty.core[i])}°` : '–'}`;
     c.life.textContent = `tread ${fix(100 - (ty?.wear?.[i] ?? NaN))}%`;
