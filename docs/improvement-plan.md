@@ -9,7 +9,7 @@
 - [x] Phase 4: F1 TV archive spike, go (handover: `docs/handover/improve-4.md`)
 - [x] Phase 5: archive-backed replays (handover: `docs/handover/improve-5.md`)
 - [x] Phase 6: drop livef1, trim the exe (handover: `docs/handover/improve-6.md`)
-- [ ] Phase 7: dependency refresh and load time
+- [x] Phase 7: dependency refresh and load time (handover: `docs/handover/improve-7.md`)
 - [ ] Phase 8: fan features
 - [ ] Phase 9: code health and tests
 
