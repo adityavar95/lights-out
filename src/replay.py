@@ -22,10 +22,11 @@ from threading import Lock
 import requests
 
 from jolpica import jolpica_fetch, races
+from paths import DATA
 
 OPENF1 = "https://api.openf1.org/v1/"
 STEP = 0.5  # seconds between position frames sent to the browser
-CACHE = Path(__file__).resolve().parent.parent / ".cache" / "replay"
+CACHE = DATA / "replay"
 
 
 class ReplayUnavailable(Exception):

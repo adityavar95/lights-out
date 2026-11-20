@@ -19,6 +19,7 @@ import requests
 from websockets.sync.client import connect
 
 import f1auth
+from paths import DATA
 
 HOST = "livetiming.formula1.com/signalrcore"
 TOPICS = ["Heartbeat", "SessionInfo", "SessionStatus", "DriverList", "TimingData", "TimingAppData", "TrackStatus",
@@ -95,7 +96,7 @@ def _put(topic: str, data):
 # LIGHTSOUT_LIVE_RECORD=1 appends every feed message to .cache/live/<utc date>.jsonl as {"t": unix time, "m": message};
 # LIGHTSOUT_LIVE_PLAY=<that file> plays one back at its own pace in place of F1's socket (LIGHTSOUT_LIVE_SPEED times
 # faster), so live features can be worked on between race weekends. Position/CarData keep their recorded timestamps.
-RECORD_DIR = Path(__file__).resolve().parent.parent / ".cache" / "live"
+RECORD_DIR = DATA / "live"
 
 
 def _record(msg: dict):

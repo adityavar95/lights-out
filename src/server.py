@@ -1,6 +1,6 @@
-"""Lights Out backend: livef1/Jolpica tables, track maps and race replay data."""
+"""Lights Out backend: Jolpica/OpenF1 tables, track maps and race replay data."""
 import os
-# Before numpy loads (via livef1/pandas, on the first old-season table): OpenBLAS commits a buffer per CPU thread, ~740 MB on a 32-thread CPU, and
+# Before numpy loads (radio's transcriber): OpenBLAS commits a buffer per CPU thread, ~740 MB on a 32-thread CPU, and
 # nothing here does matrix maths
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 import gzip
@@ -29,7 +29,7 @@ import f1auth
 import f1tv
 import ledgers
 import radio
-from jolpica import JOLPICA, calendar_ics, driver_career, jolpica_fetch, list_seasons, races
+from jolpica import JOLPICA, calendar_ics, driver_career, jolpica_fetch, list_seasons, races, session_rows
 from replay import CACHE, OpenF1Locked, background, ReplayUnavailable, elevation, find_session, laps_replay, pitlane, replay, save, saved_head, saved_replay, scheduled_session, session_events, season_session_rows, session_telemetry, telemetry
 import live
 from tracks import _geo_track, mv_track, track
@@ -59,28 +59,12 @@ def table(rows: list, columns: list | None = None) -> dict:
     return {"columns": columns, "data": [[r.get(c) for c in columns] for r in flat], "total": len(rows)}
 
 
-def frame_table(df) -> dict:
-    """The same for a livef1 DataFrame (old seasons' session lists, the F1.com schedule)."""
-    out = json.loads(df.head(MAX_ROWS).to_json(orient="split", index=False, date_format="iso", default_handler=str))
-    return {"columns": out["columns"], "data": out["data"], "total": len(df)}
-
-
 def check_season(year: int, round: int | None = None):
     """Years and rounds come from the url: anything else would spend Jolpica's ~500 requests an hour, and fill its caches."""
     if not 1950 <= year <= date.today().year + 1:
         raise HTTPException(404, f"No {year} season")
     if round is not None and not 1 <= round <= 30:
         raise HTTPException(404, f"No round {round} in {year}")
-
-
-@lru_cache(maxsize=None)
-def season(year: int):
-    try:
-        import livef1  # here, not at the top: it brings pandas, a second of every start for a table few open
-        livef1.set_log_level("ERROR")
-        return livef1.get_season(year)
-    except Exception as e:  # e.g. livef1 1.2.11 fails on 2010 with KeyError 'turkey'
-        raise HTTPException(502, f"livef1 could not load the {year} season: {e!r}")
 
 
 @app.get("/")
@@ -134,24 +118,18 @@ def season_sessions(year: int):
             rows = season_session_rows(year)
             return table(rows, ["Round", "Session Name", "StartDate", "EndDate"])
         except OpenF1Locked:
-            pass  # OpenF1 is locked while a session is live and has no saved copy yet: livef1's slower table instead
+            pass  # OpenF1 is locked while a session is live and has no saved copy yet: Jolpica's times instead
         except Exception as e:
             raise HTTPException(502, f"OpenF1 could not load the {year} session list: {e!r}")
-    return frame_table(season(year).season_table.reset_index())
+    try:
+        return table(session_rows(year), ["Round", "Session Name", "StartDate", "EndDate"])
+    except Exception as e:
+        raise HTTPException(502, f"Jolpica could not load the {year} session list: {e!r}")
 
 
 def _session_names(session: str) -> list[str]:
     # OpenF1 called 2023's sprint qualifying "Sprint Shootout"
     return [session, "Sprint Shootout"] if session == "Sprint Qualifying" else [session]
-
-
-@app.get("/api/season/{year}/f1schedule")
-def f1_schedule(year: int):
-    check_season(year)
-    try:
-        return frame_table(season(year).get_schedule())
-    except Exception as e:
-        raise HTTPException(502, f"formula1.com schedule unavailable: {e}")
 
 
 @app.get("/api/jolpica/{year}/{kind}")
@@ -659,6 +637,8 @@ async def revalidate_static(request, call_next):
 mimetypes.add_type("image/vnd.radiance", ".hdr")
 # a 21 MB sky hardly compresses: gzipping it would only slow the local load
 app.add_middleware(GZipMiddleware, minimum_size=1000, compresslevel=1, exclude_content_types=(*DEFAULT_EXCLUDED_CONTENT_TYPES, "image/vnd.radiance"))
+if assets.ASSETS != Path(__file__).parent / "static" / "assets":  # the exe: assets live in paths.DATA
+    app.mount("/static/assets", StaticFiles(directory=assets.ASSETS), name="assets")
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
 # the trailer Stream plays offline (stream.js): docs/media in a checkout, media/ beside static/ in the exe
 MEDIA = next((m for m in (Path(__file__).parent / "media", Path(__file__).parent.parent / "docs" / "media") if m.is_dir()), None)

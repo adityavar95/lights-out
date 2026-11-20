@@ -11,8 +11,11 @@ import webbrowser
 from pathlib import Path
 from urllib.parse import unquote
 
+from paths import DATA
+
 if sys.stdout is None:  # the windowed exe has no console, and uvicorn's log formatter calls isatty on it
-    sys.stdout = sys.stderr = open(Path(sys.executable).with_name("lightsout.log"), "w", buffering=1, encoding="utf-8")
+    DATA.mkdir(parents=True, exist_ok=True)
+    sys.stdout = sys.stderr = open(DATA / "lightsout.log", "w", buffering=1, encoding="utf-8")
 
 import uvicorn
 import webview

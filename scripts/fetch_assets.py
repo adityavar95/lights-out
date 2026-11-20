@@ -1,4 +1,4 @@
-"""Downloads every asset into src/static/assets before a build (build_exe.py runs it), resuming what's already there.
+"""Downloads every asset into src/static/assets, resuming what's already there (build_exe.py fetches only core + skies).
 The app offers the same download itself (downloads.js). Run: .venv/Scripts/python scripts/fetch_assets.py"""
 import sys
 import time

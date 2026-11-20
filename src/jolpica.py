@@ -9,8 +9,10 @@ from pathlib import Path
 from basef1 import BaseF1Client, SQLiteCache
 from basef1.exceptions import JolpicaHTTPError
 
+from paths import DATA
+
 # Answers about finished races don't change, so they are kept on disk: a race's lap times are ~15 Jolpica pages (~9 s).
-SETTLED = BaseF1Client(cache=SQLiteCache(Path(__file__).resolve().parent.parent / ".cache" / "jolpica.sqlite",
+SETTLED = BaseF1Client(cache=SQLiteCache(DATA / "jolpica.sqlite",
                                          ttl_seconds=365 * 86400, clock=time.time))
 
 jolpica_client = BaseF1Client()  # this season: its cache is in memory and lasts 5 minutes
@@ -116,7 +118,7 @@ def _races(year: int) -> tuple:
     return tuple(jolpica_fetch(year, "races"))
 
 
-LAST = Path(__file__).resolve().parent.parent / ".cache" / "jolpica"  # server.last_or_fetch's answers
+LAST = DATA / "jolpica"  # server.last_or_fetch's answers
 _down: dict = {}  # year -> (read at, races) from the saved list, while Jolpica isn't answering
 
 
@@ -142,16 +144,31 @@ ICS_SESSIONS = [("FirstPractice", "Practice 1", 1), ("SecondPractice", "Practice
                 ("Qualifying", "Qualifying", 1), (None, "Race", 2)]  # (Jolpica's key, name, hours on the calendar)
 
 
+def _session_times(race: dict):
+    """(name, UTC start, hours) of each of a race's sessions that Jolpica gives a time for."""
+    for key, name, hours in ICS_SESSIONS:
+        s = race.get(key) if key else race
+        if s and s.get("date") and s.get("time"):
+            yield name, datetime.fromisoformat(f"{s['date']}T{s['time']}".replace("Z", "+00:00")), hours
+
+
+def session_rows(year: int) -> list:
+    """The season's sessions for /api/season (pre-2023, or while OpenF1 is locked), in OpenF1's row shape.
+    Jolpica has session times from 2022 on and race times from 2005: earlier races get one dated Race row."""
+    rows = []
+    for r in races(year):
+        timed = [{"Round": str(r["round"]), "Session Name": name, "StartDate": f"{start:%Y-%m-%dT%H:%M:%SZ}",
+                  "EndDate": f"{start + timedelta(hours=hours):%Y-%m-%dT%H:%M:%SZ}"} for name, start, hours in _session_times(r)]
+        rows += timed or [{"Round": str(r["round"]), "Session Name": "Race", "StartDate": r.get("date"), "EndDate": None}]
+    return rows
+
+
 def calendar_ics(year: int) -> str:
     """The season's sessions as an iCalendar file (/api/calendar/{year}.ics), times in UTC so every calendar app shows
     its own zone. A session Jolpica gives no time for is left out, not guessed."""
     out = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Lights Out//EN", f"X-WR-CALNAME:{year} Grand Prix sessions"]
     for r in races(year):
-        for key, name, hours in ICS_SESSIONS:
-            s = r.get(key) if key else r
-            if not s or not s.get("date") or not s.get("time"):
-                continue
-            start = datetime.fromisoformat(f"{s['date']}T{s['time']}".replace("Z", "+00:00"))
+        for name, start, hours in _session_times(r):
             where = r["Circuit"]
             out += ["BEGIN:VEVENT", f"UID:{year}-{r['round']}-{name.replace(' ', '')}@lightsout",
                     f"DTSTAMP:{start:%Y%m%dT%H%M%SZ}",  # fixed per event: the file is the same until the schedule changes

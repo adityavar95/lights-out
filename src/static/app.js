@@ -439,12 +439,11 @@ async function selectRace(round, sim = A.mode === 'sim', fly = true) {
   else if (A.bounced && active === 'results' && (sim || kind !== 'results')) { A.bounced = false; activate('replay'); }
   else activate(sim ? 'replay' : active);
   if (active !== 'results') A.bounced = false;
-  // Load session choices after showing the race; only 2023+ (OpenF1) sessions can be replayed, and older seasons'
-  // lists come from livef1, which takes ~40 s per season.
+  // Load session choices after showing the race; only 2023+ (OpenF1) sessions can be replayed.
   const year = A.year;
   if (!sim && year >= 2023) get(`/api/season/${year}`).then(t => {
     if (A.year !== year || A.round !== round) return;
-    const rank = s => (ORDER.indexOf(s['Session Name']) + 1) || 99;  // livef1's start dates aren't reliable enough to sort by
+    const rank = s => (ORDER.indexOf(s['Session Name']) + 1) || 99;  // a fixed weekend order, not start dates
     // a session still to come has nothing to replay: not offered, so the default is the latest that has run
     const list = rows(t).filter(s => s.Round === String(round) && sessionStarted(r, s['Session Name'])).sort((a, b) => rank(a) - rank(b));
     if (list.length) setSessions(list.map(s => s['Session Name']));

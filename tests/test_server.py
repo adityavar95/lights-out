@@ -162,6 +162,12 @@ _ics = jolpica.calendar_ics(2026)
 assert _ics.count("BEGIN:VEVENT") == 2 and "Sprint" not in _ics and _ics.endswith("END:VCALENDAR\r\n")
 assert "DTSTART:20261129T160000Z\r\nDTEND:20261129T180000Z\r\nSUMMARY:Race · Qatar Grand Prix" in _ics
 assert "DTSTART:20261128T180000Z\r\nDTEND:20261128T190000Z" in _ics and "UID:2026-22-Qualifying@lightsout" in _ics
+# /api/season without livef1: Jolpica's timed sessions as OpenF1-shaped rows; a race with no time is one dated Race row
+_r = jolpica.session_rows(2026)
+assert _r == [{"Round": "22", "Session Name": "Qualifying", "StartDate": "2026-11-28T18:00:00Z", "EndDate": "2026-11-28T19:00:00Z"},
+              {"Round": "22", "Session Name": "Race", "StartDate": "2026-11-29T16:00:00Z", "EndDate": "2026-11-29T18:00:00Z"}], _r
+jolpica.races = lambda y: ({"round": "3", "date": "1998-04-12"},)
+assert jolpica.session_rows(1998) == [{"Round": "3", "Session Name": "Race", "StartDate": "1998-04-12", "EndDate": None}]
 jolpica.races = _real_races
 # Jolpica down: the calendar server.py last saved, held 5 minutes before Jolpica is tried again; none saved: the error
 import tempfile
@@ -809,8 +815,8 @@ try:
     # S-L2: out of range never reaches Jolpica
     def nope(*a): raise AssertionError("asked Jolpica")
     server.races = nope
-    for url in ["/api/jolpica/1949/races", f"/api/jolpica/{this + 2}/races", "/api/jolpica/2020/results?round=31", "/api/season/99999",
-                "/api/season/1800/f1schedule", "/api/track/1800/1", "/api/elevation/2020/0", "/api/replay/2020/31"]:
+    for url in ["/api/jolpica/1949/races", f"/api/jolpica/{this + 2}/races", "/api/jolpica/2020/results?round=31", "/api/season/99999", "/api/season/1800",
+                "/api/track/1800/1", "/api/elevation/2020/0", "/api/replay/2020/31"]:
         assert client.get(url).status_code == 404, url
     # S-L1: Jolpica down is a 502, an unknown round a 404, also where a broad except used to turn it into a 502
     def timeout(year): raise TimeoutError("read timed out")

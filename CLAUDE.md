@@ -5,14 +5,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-uv sync                                    # install deps (livef1==1.2.11, fastapi, uvicorn, onnx-asr, av, pywebview; dev: pyinstaller)
+uv sync                                    # install deps (fastapi, uvicorn, basef1, onnx-asr, av, pywebview; dev: pyinstaller)
 .venv/Scripts/python src/server.py         # run app at http://127.0.0.1:8086 (LIGHTSOUT_LAN=1 opens http://<computer-ip>:8086 to the network)
 .venv/Scripts/python src/desktop.py        # desktop launcher (pywebview/WebView2); reuses a running server.py; LIGHTSOUT_PORT overrides 8086
-.venv/Scripts/python scripts/build_exe.py  # PyInstaller: dist/LightsOut/LightsOut.exe (folder build, ~1.1 GB)
+.venv/Scripts/python scripts/build_exe.py  # PyInstaller: dist/LightsOut/LightsOut.exe (folder build, ~290 MB: core assets + skies; writes to %LOCALAPPDATA%\LightsOut, src/paths.py)
 .venv/Scripts/python tests/test_server.py  # plain asserts, no pytest
 .venv/Scripts/python scripts/test_all.py        # every suite (JS and tests/test_server.py), first failure stops; CI runs it on Windows
 for f in tests/test_*.mjs; do node "$f"; done   # JS tests, one file per module (what each covers: docs/architecture/testing.md)
-.venv/Scripts/python scripts/fetch_assets.py    # all assets into src/static/assets (gitignored, 610 MB, ~45 min, resumes); build_exe.py runs it first
+.venv/Scripts/python scripts/fetch_assets.py    # all assets into src/static/assets (gitignored, 610 MB, ~45 min, resumes); build_exe.py fetches only core + skies
 .venv/Scripts/python scripts/tile_list.py       # regenerate static/tile_list.json when a circuit joins the calendar (needs node); build_exe.py runs it first
 ```
 
@@ -36,7 +36,7 @@ Read before touching the area:
 - `docs/architecture/3d-and-look.md`: 3D renderer stack, glass and style system
 - `docs/architecture/testing.md`: what each `tests/test_*` file covers
 
-Dead ends (as of Oct 2026): F1's old livetiming endpoints (`/static`, `/signalr`) return 401, so livef1's session/telemetry data is unavailable (the newer `/signalrcore` works, see `live.py`); livef1's f1.com results scrape 404s; `livef1.get_season(2010)` raises inside livef1.
+Dead ends (as of Nov 2026): F1's old livetiming endpoints (`/static`, `/signalr`) return 401 without an F1 TV token (`/static` opens with one, see `archive.py`; the newer `/signalrcore` works, see `live.py`). livef1 was dropped in improvement phase 6: its f1.com scrape 404'd and `get_season(2010)` raised; pre-2023 session rows now come from Jolpica (`jolpica.session_rows`).
 
 ## Agent skills
 

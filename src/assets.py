@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import threading
 import time
 import uuid
@@ -14,8 +15,15 @@ from pathlib import Path
 
 import requests
 
+from paths import DATA, FROZEN
+
 STATIC = Path(__file__).parent / "static"
-ASSETS = STATIC / "assets"
+ASSETS = DATA / "assets" if FROZEN else STATIC / "assets"  # the exe's own folder may not be writable (paths.py)
+if FROZEN and not (ASSETS / ".bundled").exists():
+    # shortcut: the exe's assets (core + skies, ~85 MB) are copied out once so downloads have one folder to add to; served
+    # from both folders instead if the copy ever matters
+    shutil.copytree(STATIC / "assets", ASSETS, dirs_exist_ok=True)
+    (ASSETS / ".bundled").touch()
 THREE = "https://cdn.jsdelivr.net/npm/three@0.187.0/"
 SHAKA = "https://cdn.jsdelivr.net/npm/shaka-player@4.12.6/dist/shaka-player.compiled.js"
 PH = "https://dl.polyhaven.org/file/ph-assets"
