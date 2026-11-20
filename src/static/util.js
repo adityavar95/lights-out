@@ -8,10 +8,22 @@ const TTL = 5 * 60e3;
 // the year is read on each call: a tab open past New Year must not keep the old season as "this season"
 const fresh = url => new RegExp(`^/api/(jolpica|season|f1tv)/${new Date().getFullYear()}\\b`).test(url);
 
+// the race whose replay is downloading ({key, ctl}): opening another race's aborts it, so fast clicks through the calendar
+// don't run several 5 MB downloads side by side. A race's lap replay (&laps=1) and GPS replay share one.
+let replay = null;
+
 export async function get(url) {
   if (!cache.has(url) || (fresh(url) && Date.now() - cache.get(url).at > TTL)) {
-    cache.set(url, Object.assign(fetch(url).then(async res => {
-      const body = await res.json().catch(() => ({}));
+    let signal;
+    if (url.startsWith('/api/replay/')) {
+      const key = url.replace(/&laps=1$/, '');
+      if (replay?.key !== key) { replay?.ctl.abort(); replay = {key, ctl: new AbortController()}; }
+      signal = replay.ctl.signal;
+    }
+    // a replay with the F1 TV token is built from F1's own archive, 2018 on (archive.py)
+    const headers = url.startsWith('/api/replay/') ? tvHeaders() : {};
+    cache.set(url, Object.assign(fetch(url, {signal, headers}).then(async res => {
+      const body = await res.json().catch(e => { if (e.name === 'AbortError') throw e; return {}; });  // an aborted body isn't an empty answer
       // FastAPI's validation errors (422) send detail as a list
       if (!res.ok) throw new Error(typeof body.detail === 'string' ? body.detail : `${res.status} ${res.statusText}`);
       return body;
@@ -173,6 +185,17 @@ export function fmtLap(s) {
   s = Math.round(s * 1000) / 1000;  // else 119.9997 (a simulated lap) prints as 1:60.000
   const m = Math.floor(s / 60);
   return `${m}:${(s - m * 60).toFixed(3).padStart(6, '0')}`;
+}
+
+// a signed number with a typographic minus: +1.2 / −1.2; zero: what 0 is prefixed with. dp undefined: as is
+export const signed = (v, dp, zero = '+') => `${v > 0 ? '+' : v < 0 ? '−' : zero}${dp === undefined ? Math.abs(v) : Math.abs(v).toFixed(dp)}`;
+
+// table cells in sort order (app.js sortTable): signed numbers (either minus, a trailing s or %) by value, else text with
+// its digits as numbers (lap times, names)
+const cellNum = c => { const m = /^([+±−-]?)(\d*\.?\d+)\s*(s|%)?$/.exec(c); return m ? (/[−-]/.test(m[1]) ? -m[2] : +m[2]) : NaN; };
+export function cellOrder(x, y) {
+  const n = x !== '' && y !== '' ? cellNum(x) - cellNum(y) : NaN;
+  return Number.isNaN(n) ? x.localeCompare(y, undefined, {numeric: true}) : n;
 }
 
 export const fmtDate = d => new Date(d + 'T00:00:00').toLocaleDateString(undefined, {day: 'numeric', month: 'short'});

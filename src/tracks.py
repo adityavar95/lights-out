@@ -2,6 +2,7 @@
 coordinates), else GeoJSON."""
 import json
 import math
+import time
 from functools import lru_cache
 
 import requests
@@ -44,18 +45,26 @@ def _get(url: str, **kw):
 
 
 DISK = CACHE.parent / "tracks"
+DOWN_FOR = 300  # s
+_down: dict = {}  # url -> when a request to it last failed (monotonic)
 
 
 def _kept(name: str, url: str, **kw):
     """The url's JSON, saved as it comes; the saved copy when the request fails. Outlines used to live in memory only,
     so a restart without a connection had no circuit to draw under a replay that was itself on disk."""
     path = DISK / f"{name}.json"
+    recent = time.monotonic() - _down.get(url, -math.inf) < DOWN_FOR
     try:
+        if recent:  # failed lately: don't wait out another 30 s timeout
+            raise requests.ConnectionError(f"{url} failed in the last {DOWN_FOR // 60} min")
         data = _get(url, **kw)
     except requests.RequestException:
+        if not recent:
+            _down[url] = time.monotonic()
         if not path.exists():
             raise
         return json.loads(path.read_text())
+    _down.pop(url, None)
     save(path, data)
     return data
 

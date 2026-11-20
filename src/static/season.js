@@ -1,6 +1,7 @@
 // Season analysis, pure (no DOM): teammate head-to-heads, cumulative points, who can still win, qualifying supertimes.
 // Rows are Jolpica's flattened season tables; those carry no round, so callers number them first: `numbered` (drivers.js)
 // for results and sprints, `qualiRounds` below for qualifying.
+import {signed} from './util.js';
 
 const driver = r => r['Driver.driverId'];
 const team = r => r['Constructor.constructorId'];
@@ -77,7 +78,25 @@ export function teammates(results, quali) {
     .sort((a, b) => b.rounds - a.rounds)]));
 }
 
-export const fmtGap = g => `${g > 0 ? '+' : g < 0 ? '−' : ''}${Math.abs(g).toFixed(2)} %`;
+export const fmtGap = g => `${signed(g, 2, '')} %`;
+
+// Any two drivers over the races both started (fan roadmap A5), from their /api/driver results ({season, round, grid,
+// position, positionText}). Grid, not qualifying: Jolpica's qualifying table starts in 1994, and grid penalties count.
+// The race counts only rounds where both were classified. seasons: the years they raced together.
+export function headToHead(a, b) {
+  const key = r => `${r.season}/${r.round}`, theirs = new Map(b.map(r => [key(r), r])), started = r => !['W', 'F'].includes(r.positionText);
+  const h = {races: 0, grid: {wins: 0, losses: 0}, race: {wins: 0, losses: 0}, seasons: new Set()};
+  const score = (mine, other, s) => { if (mine < other) s.wins++; else if (mine > other) s.losses++; };
+  for (const me of a) {
+    const o = theirs.get(key(me));
+    if (!o || !started(me) || !started(o)) continue;
+    h.races++;
+    h.seasons.add(me.season);
+    if (+me.grid > 0 && +o.grid > 0) score(+me.grid, +o.grid, h.grid);  // 0: from the pit lane
+    if (/^\d+$/.test(me.positionText) && /^\d+$/.test(o.positionText)) score(+me.position, +o.position, h.race);
+  }
+  return {...h, seasons: [...h.seasons]};
+}
 
 // the driver card's line: the longest partnership, the others counted (the career dialog lists them)
 export function h2hLine(records, nameOf) {

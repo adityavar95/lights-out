@@ -11,13 +11,16 @@ import webbrowser
 from pathlib import Path
 from urllib.parse import unquote
 
+from paths import DATA
+
 if sys.stdout is None:  # the windowed exe has no console, and uvicorn's log formatter calls isatty on it
-    sys.stdout = sys.stderr = open(Path(sys.executable).with_name("lightsout.log"), "w", buffering=1, encoding="utf-8")
+    DATA.mkdir(parents=True, exist_ok=True)
+    sys.stdout = sys.stderr = open(DATA / "lightsout.log", "w", buffering=1, encoding="utf-8")
 
 import uvicorn
 import webview
 
-from server import app, warm_up
+from server import HOST, app, warm_up
 
 PORT = int(os.environ.get("LIGHTSOUT_PORT", 8086))
 URL = f"http://127.0.0.1:{PORT}/"
@@ -84,7 +87,7 @@ def came_up(server: threading.Thread) -> bool:
 if __name__ == "__main__":
     if not serving():  # else src/server.py is already running: use it
         threading.Thread(target=warm_up, daemon=True).start()
-        server = threading.Thread(target=uvicorn.Server(uvicorn.Config(app, host="0.0.0.0", port=PORT)).run, daemon=True)
+        server = threading.Thread(target=uvicorn.Server(uvicorn.Config(app, host=HOST, port=PORT)).run, daemon=True)
         server.start()
         if not came_up(server):  # the windowed exe has no console to say it on
             webview.create_window("Lights Out", html=f"<body style='font:15px system-ui;padding:24px'>Lights Out couldn't start "

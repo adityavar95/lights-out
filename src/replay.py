@@ -1,8 +1,10 @@
 """Race replay data.
 
-- "gps" mode (2023+): real car positions and timing feeds from OpenF1, resampled to a fixed time grid.
+- "gps" mode: real car positions and timing feeds, resampled to a fixed time grid. From F1's own archive (2018+) when
+  the caller sends an F1 TV token (archive.py), else from OpenF1 (2023+).
 - "laps" mode (1996+ races): Jolpica lap times; the frontend moves cars along the track at each lap's average pace.
 """
+import gzip
 import json
 import math
 import os
@@ -12,16 +14,19 @@ from bisect import bisect_right
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+from functools import lru_cache
 from pathlib import Path
+import threading
 from threading import Lock
 
 import requests
 
 from jolpica import jolpica_fetch, races
+from paths import DATA
 
 OPENF1 = "https://api.openf1.org/v1/"
 STEP = 0.5  # seconds between position frames sent to the browser
-CACHE = Path(__file__).resolve().parent.parent / ".cache" / "replay"
+CACHE = DATA / "replay"
 
 
 class ReplayUnavailable(Exception):
@@ -37,21 +42,31 @@ _sent_lock = Lock()
 _http = requests.Session()  # one kept-alive connection: a new one cost ~450 ms of each of a build's ~30 requests
 
 
+background = threading.local()  # warm_up sets .on: its requests leave the window's last slots to the reader's clicks
+SPARE = 10  # slots of the 60 s window background requests leave free
+
+
 def _throttle():
-    """Waits for a slot in OpenF1's free tier: 30 requests in any 60 s, at most 3 a second. The lock stays held while
-    waiting, so callers queue in turn; a short burst still goes out at full speed."""
-    with _sent_lock:
-        now = time.monotonic()
-        wait = max(_sent[-1] + 1 / 3 - now if _sent else 0, _sent[0] + 60 - now if len(_sent) == _sent.maxlen else 0)
-        if wait > 0:
-            time.sleep(wait)
-        _sent.append(time.monotonic())
+    """Waits for a slot in OpenF1's free tier: 30 requests in any 60 s, at most 3 a second. A caller reserves its send
+    time under the lock and sleeps outside it, so callers still go in turn but one long wait doesn't block the others'
+    reservations (holding the lock while sleeping queued every OpenF1 user, for up to 60 s, behind one build)."""
+    while True:
+        with _sent_lock:
+            now = time.monotonic()
+            busy = sum(t > now - 60 for t in _sent)
+            if not (getattr(background, "on", False) and busy > _sent.maxlen - SPARE):
+                at = max(now, _sent[-1] + 1 / 3 if _sent else now, _sent[0] + 60 if len(_sent) == _sent.maxlen else now)
+                _sent.append(at)
+                break
+        time.sleep(1)  # background, window busy: look again
+    if at > now:
+        time.sleep(at - now)
 
 
 def openf1(path: str) -> list:
     for attempt in range(6):
         _throttle()
-        r = _http.get(OPENF1 + path, timeout=120)
+        r = _http.get(OPENF1 + path, timeout=(5, 30))  # connect, then between bytes: a stalled reply fails in 30 s, not 120
         if r.status_code == 429:  # free tier allows ~3 req/s and 30 req/min
             time.sleep(3 * (attempt + 1))
             continue
@@ -74,7 +89,7 @@ def save(path: Path, data):
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
     try:
-        tmp.write_text(json.dumps(data))
+        tmp.write_bytes(data) if isinstance(data, bytes) else tmp.write_text(json.dumps(data))
         for wait in (0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, None):
             try:
                 os.replace(tmp, path)
@@ -210,14 +225,67 @@ def _finished(session: dict) -> bool:
 REPLAY_LOCKS: dict[int, Lock] = {}  # a second request for a session being built waits for its cache, not ~30 more calls
 RECENT_TTL = 300  # s: how long a session too recent for the disk cache keeps its build (OpenF1 is still filling it in)
 _recent: dict = {}  # session_key -> (built at, replay)
+RECENT_MAX = 3  # builds kept: several MB each
+
+
+def _sweep_recent():
+    """Drops expired builds on every read and write (they used to go only when another was added), then the oldest
+    past RECENT_MAX."""
+    for k, (built, _) in list(_recent.items()):
+        if time.time() - built >= RECENT_TTL:
+            _recent.pop(k, None)
+    for k in sorted(_recent, key=lambda k: _recent[k][0])[:-RECENT_MAX]:
+        _recent.pop(k, None)
+
+
+def _archive_key(year: int, race_date: str, session_name: str) -> str:
+    return f"archive-{year}-{race_date}-{session_name.lower().replace(' ', '-')}"
+
+
+def _built(year: int, race_date: str, session_name: str) -> Path | None:
+    """A session's GPS replay file, when it's built: from F1's archive (any season, asked first, without a request)
+    or from OpenF1 (2023+)."""
+    path = CACHE / f"{_archive_key(year, race_date, session_name)}.json"
+    if path.exists():
+        return path
+    session = find_session(year, race_date, session_name) if year >= 2023 else None
+    path = session and CACHE / f"{session['session_key']}.json"
+    return path if path and path.exists() else None
 
 
 def saved_replay(year: int, race_date: str, session_name: str) -> bytes | None:
-    """A session's GPS replay as it lies on disk, for the route to send as it is: parsing and encoding it again took
-    130 ms of a 150 ms request (5 MB, gzip included). None when it isn't built yet."""
-    session = find_session(year, race_date, session_name) if year >= 2023 else None
-    path = session and CACHE / f"{session['session_key']}.json"
-    return path.read_bytes() if path and path.exists() else None
+    """A session's GPS replay as it lies on disk, gzipped, for the route to send as it is: parsing and encoding it
+    again took 130 ms of a 150 ms request (5 MB, gzip included). The .json.gz beside the file is written once, and
+    again when the file is newer. None when it isn't built yet."""
+    path = _built(year, race_date, session_name)
+    if not path:
+        return None
+    gz = path.with_name(path.name + ".gz")
+    if not gz.exists() or gz.stat().st_mtime_ns < path.stat().st_mtime_ns:
+        save(gz, gzip.compress(path.read_bytes(), 6, mtime=0))
+    return gz.read_bytes()
+
+
+def replay_head(path: Path) -> dict | None:
+    """A built replay without its frames (the MBs of positions), parsed once per version of the file. Shared between
+    callers: read it, never change it. None when it isn't built."""
+    try:
+        return _head(path, path.stat().st_mtime_ns)
+    except (OSError, ValueError):
+        return None
+
+
+@lru_cache(maxsize=8)
+def _head(path: Path, mtime: int) -> dict:
+    data = json.loads(path.read_text())
+    data.pop("frames", None)
+    return data
+
+
+def saved_head(year: int, race_date: str, session_name: str) -> dict | None:
+    """replay_head of a session's replay, when it's built."""
+    path = _built(year, race_date, session_name)
+    return replay_head(path) if path else None
 
 
 def gps_replay(session: dict) -> dict:
@@ -230,8 +298,9 @@ def _gps_replay(session: dict) -> dict:
     cached = CACHE / f"{sk}.json"
     if cached.exists():
         return json.loads(cached.read_text())
+    _sweep_recent()
     hit = _recent.get(sk)
-    if hit and time.time() - hit[0] < RECENT_TTL:
+    if hit:
         return hit[1]
 
     drivers = openf1(f"drivers?session_key={sk}")
@@ -247,7 +316,10 @@ def _gps_replay(session: dict) -> dict:
     window = f"&date>={start.isoformat()[:19]}&date<={end.isoformat()[:19]}"
     rel = lambda d: round((ts(d) - start).total_seconds(), 1)
 
+    bg = getattr(background, "on", False)
+
     def locations(num):
+        background.on = bg  # the pool's threads don't inherit warm_up's thread-local
         return num, openf1(f"location?session_key={sk}&driver_number={num}{window}")
 
     with ThreadPoolExecutor(max_workers=3) as pool:
@@ -288,10 +360,8 @@ def _gps_replay(session: dict) -> dict:
     if _finished(session):
         save(cached, data)
     else:
-        for k, (built, _) in list(_recent.items()):  # these are several MB each
-            if time.time() - built >= RECENT_TTL:
-                _recent.pop(k, None)
         _recent[sk] = (time.time(), data)
+        _sweep_recent()
     return data
 
 
@@ -372,11 +442,8 @@ CAR_FIELDS = ("speed", "rpm", "n_gear", "throttle", "brake", "drs")
 
 def _replay_grid(sk: int, start: datetime, duration: float) -> bool:
     """Whether this window is the cached GPS replay's own."""
-    try:
-        r = json.loads((CACHE / f"{sk}.json").read_text())
-    except (OSError, ValueError):
-        return False
-    return ts(r["start"]) == start and r["duration"] == duration
+    r = replay_head(CACHE / f"{sk}.json")
+    return bool(r) and ts(r["start"]) == start and r["duration"] == duration
 
 
 def telemetry(session: dict, driver_number: int, start: datetime, duration: float, tag: str = "") -> dict:
@@ -473,8 +540,36 @@ def laps_replay(year: int, rnd: int) -> dict:
     }
 
 
-def replay(year: int, race: dict, session_name: str) -> dict:
+def archive_replay(year: int, race: dict, session_name: str, token: str) -> dict:
+    """A GPS replay from F1's archive (archive.py), cached like gps_replay's under its own name."""
+    import archive  # here, not at the top: archive.py builds on this module's helpers
+    key = _archive_key(year, race["date"], session_name)
+    with REPLAY_LOCKS.setdefault(key, Lock()):
+        cached = CACHE / f"{key}.json"
+        if cached.exists():
+            return json.loads(cached.read_text())
+        _sweep_recent()
+        if hit := _recent.get(key):
+            return hit[1]
+        teams = {str(r.get("number")): r["Constructor"]["name"] for r in jolpica_fetch(year, "results", int(race["round"]))}
+        data, end = archive.replay(year, race["date"], session_name, token, teams)
+        if end < datetime.now(timezone.utc) - timedelta(hours=2):
+            save(cached, data)
+        else:
+            _recent[key] = (time.time(), data)
+            _sweep_recent()
+        return data
+
+
+def replay(year: int, race: dict, session_name: str, token: str | None = None) -> dict:
+    """token: the caller's F1 TV token, which opens F1's own archive (2018 on); without one, or when the archive
+    can't serve the session, OpenF1 (2023 on) and then Jolpica lap times as before."""
     gps_error = None
+    if token and year >= 2018:
+        try:
+            return archive_replay(year, race, session_name, token)
+        except Exception as e:  # 401/403 (no entitlement, an archive gap), 404, F1 unreachable: fall back
+            print(f"Archive replay of {year} {race['date']} {session_name} unavailable ({e}); trying OpenF1")
     if year >= 2023:
         try:
             session = find_session(year, race["date"], session_name)

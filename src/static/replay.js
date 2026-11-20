@@ -4,8 +4,9 @@ import {compared, openCompare} from './tracemodal.js';
 import {highlightReel, shotsFor} from './highlights.js';
 import {setupStory} from './storypanel.js';
 import {nextMoment} from './moments.js';
-import {markLayer, gpsMarks, lapMarks, NO_MARKS} from './scrubmarks.js';
-import {get, el, rows, failed, teamColor, fmtClock, fmtLap, lastBefore, trackStatus, led, covered, dropUp, count} from './util.js';
+import {markLayer, gpsMarks, lapMarks, radioMarks, NO_MARKS} from './scrubmarks.js';
+import {favourite} from './favourite.js';
+import {get, el, rows, tvHeaders, failed, teamColor, fmtClock, fmtLap, lastBefore, trackStatus, led, covered, dropUp, count} from './util.js';
 import {init3d, setTrack, setCars, updateCars, setView, setParts, setTyre, setGround, setPitLane, setStartLights, setDaylight, nextSky, nextTier, announce, hasCockpitWheel, setGhost, setTagPositions, timed} from './scene3d.js';
 import {setupOnboard, setCameraUi, setWheelAngle, nextCamera} from './onboard.js';
 import {liveInfo, liveStatus, liveClock} from './live.js';
@@ -23,7 +24,7 @@ import {drsZones} from './telemetry.js';
 import {fetchCircuit, annotate, f1Coords} from './circuits.js';
 import {focusFrame} from './focus.js';
 import {pitTrace} from './strategy.js';
-import {lanes, GRID, apart, headings, retime} from './lanes.js';
+import {lanes, GRID, apart, headings, retime, parked} from './lanes.js';
 import {commentaryUi, syncCommentary} from './commentary.js';
 import {sessionStart} from './multiviewer.js';
 import {until} from './stream.js';
@@ -351,6 +352,8 @@ function reset(extra) {
   clearTimeout(ui.hintTimer);
   stopReel();
   S = {t: 0, playing: false, speed: ui.speed, selected: null, data: null, track: null, token: {}, cam: 'overview', tele: {}, ...extra};
+  ui.stage.classList.remove('driving');  // left Play mid-drive: render, which clears it, waits for the next load's data
+  enableInput(false);
   for (const c of [ui.session, ui.play, ui.speeds, ui.scrub]) c.hidden = !!S.live;  // live has no playback controls
   ui.reelBtn.hidden = !!S.live || S.year < 2023;  // GPS races only
   whyAvailable();
@@ -425,6 +428,7 @@ async function loadData(autoplay) {
     prepare(data);
     if (data.mode === 'gps' && data.intervals?.length) S.t = Math.max(0, lightsOut(data) - 6);  // a race opens on the grid, not a ~90 s formation lap
     if (S.selected && !S.byId[S.selected]) S.selected = null;  // not in this session
+    if (!S.selected && !S.sim) S.selected = favCar();  // a link's focus (useLink) still wins
     setOverlay('');
     if (S.sim && !S.selected && S.cam === 'overview' && S.drivers?.[0]) { S.selected = S.drivers[0].id; setMode('follow'); }  // in the overview the grid is a speck at the frame's edge
     useLink(!!early);
@@ -449,6 +453,9 @@ async function loadData(autoplay) {
   }
 }
 
+// the reader's favourite driver's car (favourite.js), picked out in the tower; lap-timing replays key cars by Jolpica id
+const favCar = () => { const f = favourite(); return f && S.drivers?.find(d => d.id === f.id || (f.code && d.code === f.code))?.id || null; };
+
 // lap timing counts from lights out; a GPS replay starts a minute or two before it, lights out being lap 1's start
 // (laps feed: [start, driver, lap, ...]). 0 when there's no such feed (lap-timing replays)
 const lightsOut = d => { const go = (d.laps ?? []).filter(e => e[2] === 1).map(e => e[0]); return go.length ? Math.min(...go) : 0; };
@@ -468,6 +475,7 @@ function swapToGps(g, token, standIn) {
   prepare(g);
   S.t = Math.min(t, g.duration);
   if (S.selected && !S.byId[S.selected]) S.selected = null;  // Jolpica driver ids there, car numbers here
+  if (!S.selected) S.selected = favCar();
   render(true);
   if (S.cam !== 'overview') setMode(S.cam);  // follows the leader again if the followed car was dropped
   useLink(false);
@@ -532,9 +540,24 @@ function jumpMoment(dir) {
   if (ui.has3d) announce(x.label);
 }
 
+// radio: the followed car's team radio joins the pins (S.radio, every car's), but not , and .
 function showMarks(marks) {
   S.moments = marks.pins;  // , and . step through them
-  ui.marks.set(marks, S.data.duration);
+  S.marks = marks;
+  S.radioFor = S.selected;
+  const radio = (S.selected && S.radio?.filter(m => m.id === S.selected)) || [];
+  ui.marks.set(radio.length ? {...marks, pins: [...marks.pins, ...radio]} : marks, S.data.duration);
+}
+
+// one clip, through the server with the reader's F1 TV token (F1 refuses the audio without one)
+let clipAudio = null;
+async function playClip(url) {
+  clipAudio?.pause();
+  const r = await fetch(`/api/f1tv/radio/audio?${new URLSearchParams({u: url})}`, {headers: tvHeaders()}).catch(() => null);
+  if (!r?.ok) return announce(r?.status === 401 ? 'Connect F1 TV in Stream to hear team radio' : 'That radio message would not play');
+  const src = URL.createObjectURL(await r.blob()), a = clipAudio = new Audio(src);
+  a.onended = a.onpause = () => URL.revokeObjectURL(src);
+  a.play().catch(() => {});
 }
 
 // a pin on the scrubber: that moment, on its car if the camera is following one
@@ -544,6 +567,7 @@ function pickMark(m) {
   S.t = Math.max(0, m.seek ?? m.t);
   if (m.id && S.byId[m.id] && S.cam !== 'overview') S.selected = m.id;
   render(true);
+  if (m.clip) playClip(m.clip);
   if (ui.has3d) announce(m.label);
 }
 
@@ -779,7 +803,11 @@ function prepare(data) {
   S.drsName = S.year >= 2026 ? 'OVERTAKE' : 'DRS';  // 2026 rules replaced DRS with the overtake mode energy boost
   setRadar(S.proj.pts, sectorCuts(), S.zones, S.drivers, S.year >= 2026 ? 'OVERTAKE' : 'DRS');
   ui.scrub.max = Math.floor(data.duration);
+  S.radio = null;
   showMarks(data.mode === 'gps' ? gpsMarks(data, S.lightsOut) : NO_MARKS);
+  // OpenF1 has team radio from 2023; it costs one request, then it's on the server's disk
+  if (data.mode === 'gps' && S.year >= 2023) get(`/api/f1tv/radio/${S.year}/${S.round}?${new URLSearchParams({session: data.session})}`)
+    .then(r => { if (S?.data === data) { S.radio = radioMarks(r.clips, data.start); showMarks(S.marks); } }, () => {});  // the replay's fine without it
   if (data.mode === 'laps') lapMarks(S.year, S.round, data.cum).then(m => { if (S?.data === data) showMarks(m); }, () => {});  // a timeline's still usable without them
   ui.reelBtn.hidden = !(data.mode === 'gps' ? data.intervals?.length : data.mode === 'laps' && S.year >= 2023);
   whyAvailable();
@@ -856,15 +884,6 @@ function spread(cars, t) {
   return cars;
 }
 
-function lapPos(id, t) {
-  const c = S.data.cum[id];
-  let k = 0;
-  while (k < c.length && c[k] <= t) k++;
-  if (k >= c.length) return null;
-  const start = k ? c[k - 1] : 0;
-  return pointAt((t - start) / (c[k] - start));
-}
-
 // Laps mode: every running car's map position at t, in its lane. Lap 1 starts from the car's grid slot behind the line;
 // lanes() fans the grid out into two columns and moves the faster car of a close pair aside to pass.
 function lapCars(t) {
@@ -879,11 +898,15 @@ function lapCars(t) {
     runs.push({id: d.id, s: run - back, v: len / d.pace, rank: k ? undefined : d.rank, run: k ? undefined : run});
   }
   const lat = lanes(runs, len, (S.track?.width ?? 13) / 2), cars = {};
-  for (const r of runs) {
-    const p = pointAt(r.s / len), q = pointAt((r.s + 2) / len), n = Math.hypot(q[0] - p[0], q[1] - p[1]) || 1, m = lat[r.id] / mpu / n;
-    cars[r.id] = [p[0] + (q[1] - p[1]) * m, p[1] - (q[0] - p[0]) * m];  // the left normal of the direction of travel
-  }
+  for (const r of runs) cars[r.id] = lapPlace(r.s, lat[r.id]);
   return cars;
+}
+
+// the map point s m round the lap, lat m to its left
+function lapPlace(s, lat) {
+  const {cum, mpu} = S.proj, len = cum.at(-1) * mpu;
+  const p = pointAt(s / len), q = pointAt((s + 2) / len), n = Math.hypot(q[0] - p[0], q[1] - p[1]) || 1, m = lat / mpu / n;
+  return [p[0] + (q[1] - p[1]) * m, p[1] - (q[0] - p[0]) * m];  // the left normal of the direction of travel
 }
 
 // car positions only (no timing board), for the heading half a second ahead
@@ -939,18 +962,19 @@ function gpsState(t) {
 }
 
 function lapsState(t) {
-  const cars = lapCars(t), board = [];
+  const cars = lapCars(t), board = [], flagged = [];
   for (const d of S.drivers) {
     const c = S.data.cum[d.id];
     let k = 0;
     while (k < c.length && c[k] <= t) k++;
     const done = k >= c.length, finished = done && (d.status === 'Finished' || /^\+\d+ Laps?$/.test(d.status) || d.status === 'Lapped');
     const lapStart = k ? c[k - 1] : 0, frac = done ? 0 : (t - lapStart) / (c[k] - lapStart);
-    if (finished) cars[d.id] = pointAt(0);
+    if (finished) flagged.push([c.at(-1), d.id]);
     const pits = S.data.pits[d.id] || [], lastPit = Math.max(0, ...pits.filter(p => p <= k));
     board.push({d, k, p: k + frac, last: k ? c[k - 1] : 0, out: done && !finished, finished, age: k + 1 - lastPit,
                 pit: !done && pits.includes(k + 1) && frac > 0.9});
   }
+  flagged.sort((a, b) => a[0] - b[0]).forEach(([, id], n) => { const q = parked(n); cars[id] = lapPlace(q.s, q.lat); });
   board.sort((a, b) => (a.out - b.out) || (b.p - a.p) || (a.last - b.last));
   const lead = board[0], cl = S.data.cum[lead.d.id];
   board.forEach((b, i) => {
@@ -974,6 +998,7 @@ function lapsState(t) {
 
 function render(force) {
   if (!S.data || !S.proj) return;
+  if (S.radio && S.radioFor !== S.selected) showMarks(S.marks);  // another car followed: its radio on the scrubber
   ui.stage.classList.toggle('driving', !!S.sim?.player);  // Play: the replay's speed menu goes while you drive
   if (S.live) S.t = (Date.now() - S.liveInfo.origin) / 1000;
   const t = S.t, st = S.live ? liveRender() : S.sim ? simState(S.sim, S.byId) : S.data.mode === 'gps' ? gpsState(t) : lapsState(t);
@@ -1018,7 +1043,7 @@ function render(force) {
     renderFeed(ui, S.data, t);
     ui.scrub.setAttribute('aria-valuetext', `${fmtClock(t)}, ${ui.lap.textContent}`);
   }
-  const f = S.selected ? focusFrame(S, t, st, status, {pos: S.data.mode === 'gps' ? gpsPos : lapPos, nearest}) : null;
+  const f = S.selected ? focusFrame(S, t, st, status, {pos: (id, t) => carsAt(t)[id] ?? null, nearest}) : null;
   renderFocus(f);  // gauges every frame, so they move smoothly
   updateDrawer(f, t);
   updateDecks(S, st, f);
@@ -1031,7 +1056,7 @@ function setMode(m) {
     S.selected = S.board?.[0]?.d.id ?? null;
     if (!S.selected) return;  // nothing loaded yet
   }
-  if (m === 'overview') S.selected = null;
+  if (m === 'overview') S.selected = S.sim?.player ?? null;  // Play: Free Orbit keeps your car yours (the deck drives S.selected's car)
   const changed = m !== S.cam;
   S.cam = m;
   if (ui.has3d && changed) setView(m);

@@ -1,5 +1,7 @@
 """Run: .venv/Scripts/python tests/test_server.py"""
 import sys
+import gzip
+import os
 import hashlib
 import json
 from pathlib import Path
@@ -160,6 +162,12 @@ _ics = jolpica.calendar_ics(2026)
 assert _ics.count("BEGIN:VEVENT") == 2 and "Sprint" not in _ics and _ics.endswith("END:VCALENDAR\r\n")
 assert "DTSTART:20261129T160000Z\r\nDTEND:20261129T180000Z\r\nSUMMARY:Race · Qatar Grand Prix" in _ics
 assert "DTSTART:20261128T180000Z\r\nDTEND:20261128T190000Z" in _ics and "UID:2026-22-Qualifying@lightsout" in _ics
+# /api/season without livef1: Jolpica's timed sessions as OpenF1-shaped rows; a race with no time is one dated Race row
+_r = jolpica.session_rows(2026)
+assert _r == [{"Round": "22", "Session Name": "Qualifying", "StartDate": "2026-11-28T18:00:00Z", "EndDate": "2026-11-28T19:00:00Z"},
+              {"Round": "22", "Session Name": "Race", "StartDate": "2026-11-29T16:00:00Z", "EndDate": "2026-11-29T18:00:00Z"}], _r
+jolpica.races = lambda y: ({"round": "3", "date": "1998-04-12"},)
+assert jolpica.session_rows(1998) == [{"Round": "3", "Session Name": "Race", "StartDate": "1998-04-12", "EndDate": None}]
 jolpica.races = _real_races
 # Jolpica down: the calendar server.py last saved, held 5 minutes before Jolpica is tried again; none saved: the error
 import tempfile
@@ -570,6 +578,25 @@ try:
     assert all(b - a >= 1 / 3 - 1e-9 for a, b in zip(stamps, stamps[1:])), stamps[:5]
     assert all(b - a >= 60 - 1e-9 for a, b in zip(stamps, stamps[30:])), "more than 30 in 60 s"
     assert stamps[29] - stamps[0] < 11  # a burst still goes out fast
+    # nobody sleeps holding the lock: other callers can reserve their slots meanwhile
+    held = []
+    clock.sleep = lambda s: (held.append(rp._sent_lock.locked()), setattr(clock, "t", clock.t + s))
+    for _ in range(40):
+        rp._throttle()
+    assert held and not any(held), held
+    # warm_up's requests wait while fewer than SPARE slots of the window are free, then go
+    rp._sent.clear()
+    for _ in range(25):
+        rp._throttle()
+    rp.background.on = True
+    try:
+        t0 = clock.t
+        rp._throttle()
+        assert clock.t - rp._sent[0] > 0 and clock.t - t0 >= 1, "background request went into a busy window"
+        assert sum(t > clock.t - 60 for t in rp._sent) <= rp._sent.maxlen - rp.SPARE + 1
+    finally:
+        rp.background.on = False
+        del clock.sleep
     class _Ans:
         def __init__(self, code): self.status_code = code
         def raise_for_status(self): pass
@@ -636,7 +663,14 @@ with tempfile.TemporaryDirectory() as tmp:
         real_find, rp.find_session = rp.find_session, lambda y, d, n: {"session_key": 77}
         assert rp.saved_replay(2024, "2024-03-02", "Race") is None
         rp.save(rp.CACHE / "77.json", {"mode": "gps"})
-        assert rp.saved_replay(2024, "2024-03-02", "Race") == b'{"mode": "gps"}' and rp.saved_replay(2022, "2022-03-20", "Race") is None
+        assert gzip.decompress(rp.saved_replay(2024, "2024-03-02", "Race")) == b'{"mode": "gps"}' and rp.saved_replay(2022, "2022-03-20", "Race") is None
+        assert (rp.CACHE / "77.json.gz").exists()  # improve-2: gzipped once, beside the file
+        # a rebuilt file (newer than its .gz) is gzipped again; the head (no frames) follows the file too
+        rp.save(rp.CACHE / "77.json", {"mode": "gps", "start": "x", "frames": {"1": []}})
+        os.utime(rp.CACHE / "77.json.gz", ns=(0, 0))
+        assert json.loads(gzip.decompress(rp.saved_replay(2024, "2024-03-02", "Race")))["start"] == "x"
+        assert rp.saved_head(2024, "2024-03-02", "Race") == {"mode": "gps", "start": "x"} and rp.replay_head(rp.CACHE / "78.json") is None
+        assert rp.saved_head(2022, "2022-03-20", "Race") is None
         rp.find_session = real_find
     finally:
         rp.openf1, rp.CACHE, rp.LISTS = real
@@ -749,6 +783,24 @@ with tempfile.TemporaryDirectory() as tmp:
         raise AssertionError("no saved copy, yet no error")
     except tracks.requests.ConnectionError:
         pass
+    # a url that failed is not asked again for DOWN_FOR: the next request goes straight to the saved copy (or fails fast)
+    calls = []
+    def counted(url, **kw): calls.append(url); raise tracks.requests.ConnectionError("offline")
+    tracks._get = counted
+    tracks._down.clear()
+    for _ in range(3):
+        try:
+            tracks._kept("never2", "https://y/")
+        except tracks.requests.ConnectionError:
+            pass
+    assert calls == ["https://y/"], calls
+    tracks._down["https://y/"] -= tracks.DOWN_FOR
+    try:
+        tracks._kept("never2", "https://y/")
+    except tracks.requests.ConnectionError:
+        pass
+    assert len(calls) == 2, "not asked again after DOWN_FOR"
+    tracks._down.clear()
     tracks.DISK, tracks._get = real_tracks
 
 # the routes, through the app (no upstream call: races and the feed are stubbed)
@@ -763,8 +815,8 @@ try:
     # S-L2: out of range never reaches Jolpica
     def nope(*a): raise AssertionError("asked Jolpica")
     server.races = nope
-    for url in ["/api/jolpica/1949/races", f"/api/jolpica/{this + 2}/races", "/api/jolpica/2020/results?round=31", "/api/season/99999",
-                "/api/season/1800/f1schedule", "/api/track/1800/1", "/api/elevation/2020/0", "/api/replay/2020/31"]:
+    for url in ["/api/jolpica/1949/races", f"/api/jolpica/{this + 2}/races", "/api/jolpica/2020/results?round=31", "/api/season/99999", "/api/season/1800",
+                "/api/track/1800/1", "/api/elevation/2020/0", "/api/replay/2020/31"]:
         assert client.get(url).status_code == 404, url
     # S-L1: Jolpica down is a 502, an unknown round a 404, also where a broad except used to turn it into a 502
     def timeout(year): raise TimeoutError("read timed out")
@@ -787,14 +839,16 @@ try:
     # S-L3: only the page's own origin may count
     assert client.post("/api/count/visit", headers={"Origin": "https://evil.example"}).status_code == 403
     assert client.post("/api/count/nope", headers={"Origin": "http://127.0.0.1:8086"}).status_code == 404  # past the origin check
-    assert client.post("/api/count/nope").status_code == 404  # no Origin: not a page's cross-site request
+    # improve-2: a POST without an Origin is no browser page (curl from another device on the network): refused
+    assert client.post("/api/count/nope").status_code == 403
+    assert client.post("/api/assets/download").status_code == 403 and len(started) == 1
     # a domain pointed at this computer (DNS rebinding) is same-origin with it, so only an address or localhost is served
     started.clear()
     rebound = {"Host": "evil.example:8086", "Origin": "http://evil.example:8086"}
     assert client.get("/api/counts", headers=rebound).status_code == 400
     assert client.post("/api/assets/download", headers=rebound).status_code == 400 and not started
     for host in ["192.168.1.5:8086", "localhost:8086", "app.localhost", "[::1]:8086"]:
-        assert client.post("/api/count/nope", headers={"Host": host}).status_code == 404, host
+        assert client.post("/api/count/nope", headers={"Host": host, "Origin": f"http://{host}"}).status_code == 404, host
     # a season of lap times is ~240 Jolpica requests: a round is required
     real_fetch, server.jolpica_fetch = server.jolpica_fetch, lambda *a: [{"lap": "1"}]
     assert client.get("/api/jolpica/2020/laps").status_code == 400 and client.get("/api/jolpica/2020/pitstops").status_code == 400
@@ -808,7 +862,7 @@ try:
     server.radio.fetch_model = real_fetch_model
     # S-L4: an oversized licence body is refused unread, a chunked one as soon as it's over
     token = _jwt(exp=_time.time() + 3600)
-    assert client.post("/api/f1tv/license?u=https://x/", content=b"x" * 70000, headers={"X-F1-Token": token}).status_code == 413
+    assert client.post("/api/f1tv/license?u=https://x/", content=b"x" * 70000, headers={"X-F1-Token": token, "Origin": "http://127.0.0.1:8086"}).status_code == 413
     pulled = []
     class _Req:
         def __init__(self, length): self.headers = {"content-length": length} if length else {}
@@ -825,6 +879,18 @@ try:
     assert refused(_Req(None)) == 413 and len(pulled) == 3
     # S-L5
     assert client.get("/").headers["cache-control"] == "no-cache"
+    # improve-2: hash-pinned assets are cached for a year; the app's modules, and an asset that isn't there, revalidate
+    probe = Path(server.__file__).parent / "static" / "assets" / "_cache_probe.txt"
+    probe.parent.mkdir(exist_ok=True)
+    probe.write_text("x")
+    try:
+        assert client.get("/static/assets/_cache_probe.txt").headers["cache-control"] == "public, max-age=31536000, immutable"
+    finally:
+        probe.unlink()
+    assert client.get("/static/assets/_cache_probe.txt").headers["cache-control"] == "no-cache"
+    assert client.get("/static/util.js").headers["cache-control"] == "no-cache"
+    # improve-2: no auth, so other devices on the network reach the server only with LIGHTSOUT_LAN=1
+    assert server.HOST == ("0.0.0.0" if os.environ.get("LIGHTSOUT_LAN") == "1" else "127.0.0.1")
     # S-M7: the route answers from the feed when it's up, else the schedule, and never opens the feed
     server.live.snapshot = nope
     server.scheduled_session = lambda now: "US GP · Race"
@@ -852,20 +918,32 @@ try:
     assert not server._is_live({"date": today}, "Race")
     server.live.snapshot = nope
     assert not server._is_live({"date": "2020-03-08"}, "Race")
+    # nothing on the schedule now: the feed isn't opened (that waits up to 5 s) on a race weekend's 404
+    real_sched, server.scheduled_session = server.scheduled_session, lambda now: None
+    assert not server._is_live({"date": today}, "Race")
+    server.scheduled_session = lambda now: "US GP · Race"
+    server.live.snapshot = lambda: topics("Started")
+    assert server._is_live({"date": today}, "Race")
+    server.scheduled_session = real_sched
+    server.live.snapshot = nope
     # the documented flow: OpenF1 locked with the session running -> 409 LIVE_NOW
     def refuse(*a): raise server.ReplayUnavailable("locked")
     server.replay = refuse
     # a replay on disk goes out as stored (no parse, no re-encoding); the lap replay never takes that path
-    real_saved, server.saved_replay = server.saved_replay, lambda y, d, s: b'{"mode": "gps"}'
+    real_saved, server.saved_replay = server.saved_replay, lambda y, d, s: gzip.compress(b'{"mode": "gps"}')
+    real_head = server.saved_head
     real_laps, server.laps_replay = server.laps_replay, lambda y, r: {"mode": "laps"}
-    assert client.get("/api/replay/2024/1").json() == {"mode": "gps"}
+    r = client.get("/api/replay/2024/1")
+    assert r.json() == {"mode": "gps"} and r.headers["content-encoding"] == "gzip", r.headers  # the stored .gz, as it is
+    r = client.get("/api/replay/2024/1", headers={"Accept-Encoding": "identity"})
+    assert r.content == b'{"mode": "gps"}' and "content-encoding" not in r.headers
     assert client.get("/api/replay/2024/1?laps=1").json() == {"mode": "laps"}
     # the session's laps out of that file, without its positions; never a build unless asked
-    server.saved_replay = lambda y, d, s: b'{"session": "Qualifying", "laps": [[1, "4", 1, 80.0]], "frames": [1, 2], "drivers": []}'
+    server.saved_head = lambda y, d, s: {"session": "Qualifying", "laps": [[1, "4", 1, 80.0]], "drivers": []}
     r = client.get("/api/sessionlaps/2024/1").json()
     assert r == {"session": "Qualifying", "drivers": [], "laps": [[1, "4", 1, 80.0]], "stints": None, "race_control": None}, r
     assert client.get("/api/sessionlaps/2022/1").status_code == 404
-    server.saved_replay = lambda y, d, s: None
+    server.saved_head = lambda y, d, s: None
     r = client.get("/api/sessionlaps/2024/1")
     assert r.status_code == 404 and r.json()["detail"] == server.NOT_BUILT, r.text
     r = client.get("/api/sessionlaps/2024/1?build=1")  # asked: replay() is tried, and its refusal comes back as it is
@@ -879,7 +957,7 @@ try:
     assert client.get(f"/api/replay/{this}/1").status_code == 404
 finally:
     server.races, server.scheduled_session, server._elevation_at, server.live.snapshot, server.replay = real
-    server.saved_replay = real_saved
+    server.saved_replay, server.saved_head = real_saved, real_head
     live._state.clear()
 
 # scheduled_session: inside its times + 30 min
@@ -1047,3 +1125,151 @@ assert server.table([{"a": 1, "b": 2}], ["b"]) == {"columns": ["b"], "data": [[2
 r = client.get("/media/lights-out-trailer.mp4", headers={"Range": "bytes=0-99"})
 assert r.status_code == 206 and r.headers["content-type"] == "video/mp4" and len(r.content) == 100, (r.status_code, r.headers)
 assert client.get("/media/../server.py").status_code == 404
+
+# Improvement phase 1 item 3: a driver number outside 1-99 is refused before it costs an OpenF1 request or a cache file
+for url in ["/api/telemetry/2025/1?driver=0&start=2025-03-16T04:00:00&duration=60", "/api/telemetry/2025/1?driver=1000&start=x&duration=1",
+            "/api/f1tv/telemetry/2025/1/100", "/api/f1tv/radio/2025/1?driver=-4"]:
+    assert client.get(url).status_code == 422, url
+print("driver bounds ok")
+
+# Improvement phase 1 item 4: one 429 or 5xx on a Jolpica page is asked again once; a 4xx or a second failure raises
+from basef1.exceptions import JolpicaHTTPError
+class _Res:
+    def __init__(self, rows): self.data, self.pagination = type("D", (), {"to_dict": lambda s: rows})(), type("P", (), {"total": 150})()
+class _Q:
+    def __init__(self, fails): self.fails, self.asked = list(fails), 0
+    def laps(self, limit, offset):
+        self.asked += 1
+        if self.fails:
+            raise JolpicaHTTPError("busy", status_code=self.fails.pop(0))
+        return _Res([offset])
+real_wait, jolpica.RETRY_WAIT = jolpica.RETRY_WAIT, 0
+try:
+    q = _Q([429]); assert jolpica._pages(q, "laps", lambda d: d) == [0, 100] and q.asked == 3
+    q = _Q([503]); assert jolpica._pages(q, "laps", lambda d: d) == [0, 100]
+    for fails in ([400], [429, 429]):
+        try:
+            jolpica._pages(_Q(fails), "laps", lambda d: d)
+            raise AssertionError(f"{fails} should raise")
+        except JolpicaHTTPError:
+            pass
+finally:
+    jolpica.RETRY_WAIT = real_wait
+print("jolpica retry ok")
+
+# Improvement phase 1 item 6: recent (unfinished) builds expire on read too, and at most RECENT_MAX are kept
+rp._recent.clear()
+rp._recent.update({k: (time.time() - k, {"k": k}) for k in range(5)})
+rp._recent[99] = (time.time() - rp.RECENT_TTL - 1, {})
+rp._sweep_recent()
+assert sorted(rp._recent) == [0, 1, 2], sorted(rp._recent)
+rp._recent.clear()
+print("recent builds ok")
+
+# Improvement phase 1 item 7: pollers share one copy of the live state until a feed message changes it
+real_thread = live._thread
+live._thread = type("T", (), {"is_alive": lambda s: True})()
+try:
+    with live._lock:
+        live._state.clear(); live._put("SessionInfo", {"Name": "Race"})
+    a, b = live.snapshot()["topics"], live.snapshot()["topics"]
+    assert a is b and a == {"SessionInfo": {"Name": "Race"}} and a is not live._state
+    with live._lock:
+        live._put("SessionStatus", {"Status": "Started"})
+    c = live.snapshot()["topics"]
+    assert c is not a and c["SessionStatus"] == {"Status": "Started"} and "SessionStatus" not in a
+finally:
+    live._thread = real_thread
+    with live._lock:
+        live._state.clear(); live._changed()
+print("live shared copy ok")
+
+# Improvement phase 5: GPS replays from F1's archive with the F1 TV token (archive.py), on a trimmed recording of
+# 2021 Bahrain's race (cars 33, 44, 11; the archive's first ~6 minutes from the start: tests/fixtures/archive)
+import archive
+FIX = Path(__file__).resolve().parent / "fixtures" / "archive"
+fx = {n: (FIX / n).read_text(encoding="utf-8-sig") if (FIX / n).exists() else None for n in archive.NEEDED + archive.EXTRA}
+idx = json.loads((FIX / "Index.json").read_text())
+entry = archive.find(idx, "2021-03-28", "Race")
+assert entry and entry["Path"].endswith("2021-03-28_Race/"), entry
+assert archive.find(idx, "2021-03-29", "race") is entry and archive.find(idx, "2021-04-02", "Race") is None
+assert archive.find(idx, "2021-03-28", "Sprint") is None
+assert archive.local_utc("2021-03-28T18:00:00", "03:00:00").isoformat() == "2021-03-28T15:00:00+00:00"
+assert archive.local_utc("2024-11-23T22:00:00", "-08:00:00").isoformat() == "2024-11-24T06:00:00+00:00"
+assert [archive._gap(v) for v in ("+1.234", "1 L", "2L", "LAP 5", "")] == [1.234, "+1 LAP", "+2 LAPS", None, None]
+d = archive.build(fx, entry, {"11": "Red Bull"})
+assert d["mode"] == "gps" and d["step"] == rp.STEP and d["session"] == "Race"
+# 2021's DriverList names no teams in its first line: they come from Jolpica's results (teams)
+assert {x["id"]: (x["code"], x["team"]) for x in d["drivers"]} == {"33": ("VER", None), "44": ("HAM", None), "11": ("PER", "Red Bull")}, d["drivers"]
+assert [x["num"] for x in d["drivers"]] == [33, 44, 11] and d["drivers"][0]["name"] == "Max VERSTAPPEN"  # DriverList's order
+n = int(d["duration"] / rp.STEP) + 1
+assert set(d["frames"]) == {"33", "44", "11"} and all(len(f["x"]) == n and len(f["y"]) == n for f in d["frames"].values())
+assert d["frames"]["33"]["x"][int(80 / rp.STEP)] == -278  # on the grid before lights out
+ver = [l for l in d["laps"] if l[1] == "33"]
+# lap 1 starts at SessionStatus "Started" (lights out), 90 s into the replay; lap 2 at lap 1's line crossing
+assert ver[0][:3] == [90.0, "33", 1] and ver[1][1:4] == ["33", 2, 142.406] and ver[1][0] == ver[0][0] + 118.5, ver
+assert ver[1][4:] == [45.874, 61.922, 34.61], ver[1]  # the last sector comes in the message that completes the lap
+assert d["total_laps"] == 2 and [p[1:] for p in d["pits"]] == [["11", 2, 23.9]], d["pits"]
+assert all(isinstance(g, float) or g.endswith(("LAP", "LAPS")) for _, _, g in d["intervals"]) and d["intervals"]
+assert d["positions"][0][1:] in (["33", 1], ["44", 2], ["11", 11]) and d["weather"][0][1:] == [20.5, 28.1, 0, 1.3], d["weather"][0]
+assert any(m[2] == "GREEN" for m in d["race_control"]) and d["stints"] and all(len(s) == 5 for s in d["stints"])
+for feed in ("positions", "laps", "intervals", "race_control", "pits", "weather"):
+    assert [e[0] for e in d[feed]] == sorted(e[0] for e in d[feed]), feed
+try:
+    archive.build({**fx, "Position.z.jsonStream": ""}, entry)
+    raise AssertionError("no positions should raise")
+except archive.Missing:
+    pass
+
+# the token travels only in the Authorization header; 401/403/404 raise Missing, whose message doesn't carry it
+real_get = archive.requests.get
+seen = []
+archive.requests.get = lambda url, headers=None, timeout=None: seen.append((url, headers)) or type("R", (), {"status_code": 403})()
+try:
+    archive.fetch("2022/Index.json", "tok.en.x")
+    raise AssertionError("403 should raise")
+except archive.Missing as e:
+    assert "tok.en.x" not in str(e) and "403" in str(e)
+assert seen == [(archive.BASE + "2022/Index.json", {"Authorization": "Bearer tok.en.x", "User-Agent": "Mozilla/5.0"})], seen
+archive.requests.get = real_get
+
+# replay(): with a token the archive is asked first; its 401 falls back to lap times (pre-2023) or OpenF1 (2023+)
+real = (archive.replay, rp.laps_replay, rp.find_session, rp.gps_replay, rp.jolpica_fetch, rp.CACHE)
+import tempfile
+rp.CACHE = Path(tempfile.mkdtemp())
+rp.jolpica_fetch = lambda y, kind, rnd=None: [{"number": "11", "Constructor": {"name": "Red Bull"}}]
+asked = []
+def locked(year, date_, name, token, teams): asked.append((year, token, teams)); raise archive.Missing("F1's archive answered 401")
+archive.replay = locked
+rp.laps_replay = lambda y, r: {"mode": "laps"}
+rp.find_session = lambda y, dt, name: {"session_key": 9999}
+rp.gps_replay = lambda s: {"mode": "gps", "from": "openf1"}
+try:
+    assert rp.replay(2021, {"date": "2021-03-28", "round": "1"}, "Race", "tok") == {"mode": "laps"}
+    assert asked == [(2021, "tok", {"11": "Red Bull"})], asked
+    assert rp.replay(2024, {"date": "2024-03-02", "round": "1"}, "Race", "tok") == {"mode": "gps", "from": "openf1"}
+    asked.clear()
+    assert rp.replay(2021, {"date": "2021-03-28", "round": "1"}, "Race") == {"mode": "laps"} and not asked  # no token, no ask
+    # a finished session's archive build lands on disk, where saved_replay finds it without asking OpenF1
+    archive.replay = lambda *a: (d, datetime(2021, 3, 28, 17, tzinfo=timezone.utc))
+    assert rp.replay(2021, {"date": "2021-03-28", "round": "1"}, "Race", "tok") is d
+    rp.find_session = lambda *a: (_ for _ in ()).throw(AssertionError("asked OpenF1"))
+    assert json.loads(gzip.decompress(rp.saved_replay(2021, "2021-03-28", "Race")))["laps"] == d["laps"]
+finally:
+    archive.replay, rp.laps_replay, rp.find_session, rp.gps_replay, rp.jolpica_fetch, rp.CACHE = real
+print("archive replay ok")
+
+# the replay route hands replay() the caller's token when it's valid, and None when it has expired
+real = (server.race_info, server.saved_replay, server.replay)
+got = []
+server.race_info = lambda y, r: {"round": "1", "date": "2021-03-28"}
+server.saved_replay = lambda *a: None
+server.replay = lambda y, race, s, token=None: got.append(token) or {"mode": "gps"}
+try:
+    assert client.get("/api/replay/2021/1", headers={"X-F1-Token": good}).json() == {"mode": "gps"}
+    client.get("/api/replay/2021/1", headers={"X-F1-Token": _jwt(exp=_time.time() - 10)})
+    client.get("/api/replay/2021/1")
+    assert got == [good, None, None], got
+finally:
+    server.race_info, server.saved_replay, server.replay = real
+print("replay route token ok")

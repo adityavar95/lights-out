@@ -8,7 +8,7 @@ import {raceModel} from './whatif.js';
 import {raceStory, AT_LAP_END} from './story.js';
 
 export const NO_MARKS = {pins: [], bands: []};
-const COLOR = {sc: '#ffc800', vsc: '#ffe680', slow: '#ffc800', red: '#ff2d38', out: '#ff8a3d', pit: '#9aa0a6', pass: '#7cc4ff'};  // else white
+const COLOR = {sc: '#ffc800', vsc: '#ffe680', slow: '#ffc800', red: '#ff2d38', out: '#ff8a3d', pit: '#9aa0a6', pass: '#7cc4ff', radio: '#c69cff'};  // else white
 const byTime = list => list.sort((a, b) => a.t - b.t);
 const named = b => ({t: b.t, kind: b.kind, label: KIND_NAME[b.kind]});
 const chequered = rc => rc.filter(r => r[2] === 'CHEQUERED').map(r => ({t: r[0], kind: 'finish', label: 'Chequered flag'}));
@@ -44,6 +44,14 @@ export async function lapMarks(year, round, cum) {
   const [laps, results, pits] = await Promise.all([table('laps'), table('results'), table('pitstops')]);
   if (!laps.length || !results.length) return NO_MARKS;
   return storyMarks(raceStory(raceModel(laps, pits), results, {limit: 30}).beats, cum);
+}
+
+// Team radio on a GPS replay (fan roadmap A4): /api/f1tv/radio's clips (t: unix s) as pins at their moment, the replay's
+// clock counting from start (ISO). A transcribed clip with no words (a click, engine noise) isn't a message.
+export function radioMarks(clips, start) {
+  const t0 = Date.parse(start) / 1000;
+  return clips.filter(c => c.text !== '').map(c => ({t: c.t - t0, seek: Math.max(0, c.t - t0 - 2), kind: 'radio', id: String(c.driver), clip: c.url,
+    label: `Team radio · ${c.text ?? 'no words yet'}`}));
 }
 
 // F1 TV: /api/events' session, its times in seconds from `start`

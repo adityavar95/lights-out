@@ -1,6 +1,6 @@
 // get()'s cache (current-season TTL, past seasons kept, failures dropped, live URLs not piling up) and plain error words
 import assert from 'node:assert/strict';
-import {get, plain} from '../src/static/util.js';
+import {get, plain, signed, cellOrder} from '../src/static/util.js';
 
 const year = new Date().getFullYear(), calls = {};
 let answer = () => ({ok: true, json: async () => ({rows: 1})});
@@ -46,6 +46,25 @@ assert.equal(calls[nextYear], 2);
 globalThis.Date = RealDate;
 Date.now = realNow;
 
+// a new race's replay aborts the one still downloading; the same race's lap and GPS replays don't abort each other
+const pending = {}, aborted = new Set();
+globalThis.fetch = (url, {signal} = {}) => new Promise((ok, no) => {
+  pending[url] = () => ok({ok: true, json: async () => ({url})});
+  signal?.addEventListener('abort', () => { aborted.add(url); no(new DOMException('Aborted', 'AbortError')); });
+});
+const rA = '/api/replay/2024/1?session=Race', rB = '/api/replay/2024/2?session=Race';
+const a = get(rA), aLaps = get(`${rA}&laps=1`);
+assert.equal(aborted.size, 0);
+const b = get(rB), bLaps = get(`${rB}&laps=1`);
+await assert.rejects(a, {name: 'AbortError'});
+await assert.rejects(aLaps, {name: 'AbortError'});
+pending[rB](); pending[`${rB}&laps=1`]();
+assert.deepEqual([(await b).url, (await bLaps).url], [rB, `${rB}&laps=1`]);
+assert.deepEqual([...aborted], [rA, `${rA}&laps=1`]);
+const tele = get('/api/telemetry/x');  // other URLs aren't touched
+get('/api/replay/2024/3?session=Race');
+assert.ok(!aborted.has('/api/telemetry/x')); pending['/api/telemetry/x'](); await tele;
+
 // plain words for the browser's network errors and bare statuses; a server's own message stands
 assert.match(plain(new TypeError('Failed to fetch')), /Can't reach the server/);
 assert.match(plain('NetworkError when attempting to fetch resource.'), /Can't reach the server/);
@@ -71,3 +90,13 @@ assert.equal(inkOn('#27F4D2'), '#000', 'Mercedes teal');
 assert.equal(inkOn('#FF8000'), '#000', 'McLaren orange');
 assert.equal(inkOn('#3671C6'), '#fff', 'Red Bull blue');
 assert.equal(inkOn('#15151e'), '#fff');
+
+// signed: a typographic minus, and sortTable's order reads it (and the ASCII one) as a number
+assert.equal(signed(-1.25, 1), '−1.3');
+assert.equal(signed(0, 2, ''), '0.00');
+assert.equal(signed(0.5, 3), '+0.500');
+assert.equal(signed(4), '+4');
+const sorted = l => [...l].sort(cellOrder);
+assert.deepEqual(sorted(['+0.5 s', '−1.2 s', '+12.0 s', '-3 s', '±0.0 s']), ['-3 s', '−1.2 s', '±0.0 s', '+0.5 s', '+12.0 s']);
+assert.deepEqual(sorted(['1:31.002', '1:29.990', '1:30.5']), ['1:29.990', '1:30.5', '1:31.002']);
+assert.deepEqual(sorted(['10', '9', '−2.5 %']), ['−2.5 %', '9', '10']);

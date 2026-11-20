@@ -1,7 +1,7 @@
 // Data explorer: every raw dataset as a filterable table.
 import {get, el, th, skeleton, cellText, csvButton} from './util.js';
 
-const SEASON = [['Sessions', y => `/api/season/${y}`], ['F1.com schedule', y => `/api/season/${y}/f1schedule`],
+const SEASON = [['Sessions', y => `/api/season/${y}`],
   ['Calendar', y => `/api/jolpica/${y}/races`], ['Drivers', y => `/api/jolpica/${y}/drivers`],
   ['Constructors', y => `/api/jolpica/${y}/constructors`], ['Circuits', y => `/api/jolpica/${y}/circuits`],
   ['Driver standings', y => `/api/jolpica/${y}/driverstandings`], ['Constructor standings', y => `/api/jolpica/${y}/constructorstandings`]];

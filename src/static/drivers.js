@@ -1,7 +1,9 @@
 // Drivers tab: everyone who raced in the header's season (1950 on), with Wikipedia's portrait and the season's numbers
 // worked out from its race results; a click opens the driver's whole career, season by season (/api/driver).
 import {get, rows, el, teamColor, th, skeleton} from './util.js';
-import {teammates, qualiRounds, h2hLine, fmtGap} from './season.js';
+import {modal} from './palette.js';
+import {teammates, qualiRounds, h2hLine, fmtGap, headToHead} from './season.js';
+import {favourite, setFavourite} from './favourite.js';
 
 const id = r => r['Driver.driverId'] ?? r.Driver?.driverId;  // season tables come flattened, /api/driver rows nested
 const team = r => [r['Constructor.constructorId'] ?? r.Constructor?.constructorId, r['Constructor.name'] ?? r.Constructor?.name];
@@ -80,8 +82,9 @@ export function faces(results) {
 const stat = (label, v, title) => el('div', {title}, el('b', {}, v ?? '–'), el('small', {}, label));
 const chip = ([tid, name]) => el('span', {class: 'chip', style: `background:${teamColor(tid, name)}`});
 
-// quali: a promise of the season's qualifying table, which the cards' teammate lines fill in from when it lands
-export function renderDrivers(root, year, standings, results, drivers, over, quali = Promise.resolve([])) {
+// quali: a promise of the season's qualifying table, which the cards' teammate lines fill in from when it lands;
+// open: a driverId whose career opens at once (a link, share.js career)
+export function renderDrivers(root, year, standings, results, drivers, over, quali = Promise.resolve([]), open = null) {
   const info = new Map(drivers.map(r => [r.driverId, {id: r.driverId, given: r.givenName ?? '', family: r.familyName ?? '', dob: r.dateOfBirth,
     nat: r.nationality, num: r.permanentNumber, code: r.code, url: r.url}]));
   const raced = numbered(results), byDriver = group(raced, id), place = new Map(standings.map(s => [s['Driver.driverId'], s]));
@@ -96,7 +99,7 @@ export function renderDrivers(root, year, standings, results, drivers, over, qua
     if (!teams.length && s?.Constructors?.length) teams.push(...s.Constructors.map(c => [c.constructorId, c.name]));
     const age = d.dob ? year - +d.dob.slice(0, 4) : null, pts = s ? +s.points : t.points, pic = photo(d), line = el('div', {class: 'dh2h'});
     h2h.then(m => { line.title = h2hLine(m.get(x), family); line.replaceChildren(...line.title.split(' · ').flatMap((part, i) => [i ? ' · ' : '', el('span', {}, part)])); });  // wraps between facts, never inside '11-8'
-    const card = el('button', {class: 'dcard', onclick: () => career(d, h2h, year, family)},
+    const card = el('button', {class: 'dcard', onclick: () => career(d, h2h, year, family, others)},
       pic, s?.position && el('span', {class: `dpos ${over && s.position === '1' ? 'champ' : ''}`}, `P${s.position}`),
       el('div', {class: 'dname'}, el('small', {}, d.given), el('b', {}, d.family)),
       el('div', {class: 'dmeta'}, [d.num && `#${d.num}`, d.code, d.nat, age && `age ${age}`].filter(Boolean).join(' · ')),
@@ -104,18 +107,19 @@ export function renderDrivers(root, year, standings, results, drivers, over, qua
       el('div', {class: 'dstats'}, stat('PTS', pts), stat('WINS', t.wins), stat('PODIUMS', t.podiums), stat('POLES', t.poles, 'Started from P1'),
         stat('FASTEST', year >= 2004 ? t.fastest : null, 'Fastest laps (Jolpica has them from 2004)'), stat('DNF', t.dnfs, 'Retired')), line);
     const text = `${d.given} ${d.family} ${d.code ?? ''} ${d.nat ?? ''} ${teams.map(x => x[1]).join(' ')}`.toLowerCase();
-    return {card, pic, text, reserve: !t.starts && !pts, k: {champ: +s?.position || 999, wins: -t.wins, podiums: -t.podiums, poles: -t.poles, points: -pts, starts: -t.starts,
+    return {id: x, card, pic, text, reserve: !t.starts && !pts, k: {champ: +s?.position || 999, wins: -t.wins, podiums: -t.podiums, poles: -t.poles, points: -pts, starts: -t.starts,
       age: age ?? 999, name: d.family}};
   });
+  const others = ids.map(x => info.get(x));  // the career dialog's head-to-head picks from the season's field
   const grid = el('div', {class: 'dgrid'});
   let showAll = false;
   const search = el('input', {type: 'search', placeholder: 'Find a driver, team or nationality', 'aria-label': 'Find a driver'});
   const sort = el('select', {'aria-label': 'Sort drivers'}, [['champ', 'Championship'], ['points', 'Points'], ['wins', 'Wins'], ['podiums', 'Podiums'],
     ['poles', 'Poles'], ['starts', 'Starts'], ['age', 'Youngest'], ['name', 'Name']].map(([v, l]) => new Option(l, v)));
   const show = () => {
-    const q = search.value.trim().toLowerCase(), k = sort.value;
+    const q = search.value.trim().toLowerCase(), k = sort.value, fav = favourite()?.id;
     const found = cards.filter(c => (q ? c.text.includes(q) : !c.reserve || showAll))
-      .sort((a, b) => (k === 'name' ? a.k.name.localeCompare(b.k.name) : a.k[k] - b.k[k]) || a.k.champ - b.k.champ).map(c => c.card);
+      .sort((a, b) => (b.id === fav) - (a.id === fav) || (k === 'name' ? a.k.name.localeCompare(b.k.name) : a.k[k] - b.k[k]) || a.k.champ - b.k.champ).map(c => c.card);
     grid.replaceChildren(...(found.length ? found : [el('p', {class: 'empty'}, `No drivers match “${search.value.trim()}”.`)]));
   };
   search.oninput = sort.onchange = show;
@@ -129,6 +133,31 @@ export function renderDrivers(root, year, standings, results, drivers, over, qua
     el('h2', {}, `${year} · ${ran || ids.length} drivers`, champ && el('span', {class: 'muted'}, ` · ${over ? 'Champion' : 'Leader'}: ${info.get(champ).given} ${info.get(champ).family}`)),
     search, sort), grid, more);
   portraits([...info.values()]).then(() => cards.forEach(c => c.pic.put()));
+  if (info.has(open)) career(info.get(open), h2h, year, family, others);
+}
+
+// any two drivers, career and the header season (fan roadmap A5): one more /api/driver request for the other one
+function compare(d, mine, others, year) {
+  const pick = el('select', {'aria-label': 'Compare with'}, new Option('Pick a driver', ''),
+    ...others.filter(o => o.id !== d.id).map(o => new Option(`${o.given} ${o.family}`, o.id)));
+  const out = el('div', {});
+  pick.onchange = async () => {
+    const o = others.find(x => x.id === pick.value);
+    if (!o) return out.replaceChildren();
+    out.replaceChildren(skeleton(2));
+    let theirs;
+    try { theirs = (await get(`/api/driver/${o.id}`)).results; } catch (e) { return out.replaceChildren(el('p', {class: 'empty err'}, e.message)); }
+    if (pick.value !== o.id) return;
+    const rec = (label, h) => el('tr', {}, el('td', {}, label), el('td', {class: 'num'}, h.races),
+      el('td', {class: 'num'}, `${h.grid.wins}–${h.grid.losses}`), el('td', {class: 'num'}, `${h.race.wins}–${h.race.losses}`));
+    const inYear = rs => rs.filter(r => r.season === String(year)), all = headToHead(mine, theirs), season = headToHead(inYear(mine), inYear(theirs));
+    out.replaceChildren(all.races ? el('div', {class: 'tablewrap'}, el('table', {class: 'data'},
+      el('thead', {}, el('tr', {}, ['Races together', 'Races', 'Ahead on the grid', 'Ahead at the flag'].map(th))),
+      el('tbody', {}, rec(`Career (${all.seasons[0]}${all.seasons.length > 1 ? `–${all.seasons.at(-1)}` : ''})`, all), season.races ? rec(String(year), season) : ''))) : '',
+      el('p', {class: 'muted small'}, all.races ? `${d.family} first. Grid order counts penalties; the flag counts only races both finished classified.`
+        : `${d.family} and ${o.family} never started a race together.`));
+  };
+  return [el('h3', {}, 'Head to head'), el('div', {class: 'controls'}, pick), out];
 }
 
 // the header season's teammates. Only that season: /api/driver holds this driver's rows, not their teammates', so a whole
@@ -145,14 +174,17 @@ function h2hTable(records, year, family) {
     el('p', {class: 'muted small'}, `${year} only: a whole career would take a request per season. Qualifying compares the last session both reached, negative gap = quicker; the race counts only rounds where both were classified.`)];
 }
 
-// a driver's whole career in a dialog: totals, teams, then every season
-async function career(d, h2h, year, family) {
+// a driver's whole career in a dialog: totals, teams, then every season. Open, it's in the address (share.js career).
+async function career(d, h2h, year, family, others = []) {
   const body = el('div', {}, skeleton());
-  const dlg = el('dialog', {class: 'dcareer', 'aria-labelledby': 'dcareer-name', 'aria-label': `${d.given} ${d.family}`, onclose: () => dlg.remove(), onclick: e => e.target === dlg && dlg.close()},
-    el('button', {class: 'dclose', 'aria-label': 'Close', onclick: () => dlg.close()}, '✕'), body);
-  document.body.append(dlg);
-  dlg.showModal();
+  const dlg = modal('', `${d.given} ${d.family}`, null, el('button', {class: 'dclose', 'aria-label': 'Close', onclick: () => dlg.close()}, '✕'), body);
   dispatchEvent(new CustomEvent('f1:panel', {detail: dlg}));  // the circuits / cars / trace panels close
+  dispatchEvent(new CustomEvent('f1:address', {detail: {career: d.id}}));
+  dlg.addEventListener('close', () => dispatchEvent(new CustomEvent('f1:address', {detail: {}})));
+  const isFav = () => favourite()?.id === d.id;
+  const star = el('button', {class: 'pill', 'aria-pressed': String(isFav()), title: 'Your favourite: picked out in replays, first in tables',
+    onclick: () => { setFavourite(isFav() ? null : {id: d.id, code: d.code, name: `${d.given} ${d.family}`}); star.setAttribute('aria-pressed', String(isFav())); star.textContent = isFav() ? '★ Favourite' : '☆ Favourite'; }},
+    isFav() ? '★ Favourite' : '☆ Favourite');
   const bio = fetch(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(wikiTitle(d.url).replace(/ /g, '_'))}`)
     .then(r => (r.ok ? r.json() : {})).catch(() => ({}));
   let c;
@@ -181,7 +213,7 @@ async function career(d, h2h, year, family) {
         seasons.length && `${seasons.length} season${seasons.length === 1 ? '' : 's'} · ${seasons[0].y}–${seasons.at(-1).y}`].filter(Boolean).join(' · ')),
       champs.length > 0 && el('p', {class: 'ctitles'}, `World Champion ${champs.join(', ')}`),
       w.extract && el('p', {class: 'cbio'}, w.extract),
-      d.url && el('a', {href: d.url, target: '_blank', rel: 'noopener'}, 'Wikipedia ↗'))),
+      el('p', {}, star, ' ', d.url && el('a', {href: d.url, target: '_blank', rel: 'noopener'}, 'Wikipedia ↗')))),
     el('div', {class: 'dstats big'}, stat('TITLES', champs.length), stat('BEST CHAMP.', bestChamp < 999 ? `P${bestChamp}` : null), stat('STARTS', t.starts),
       stat('WINS', t.wins), stat('PODIUMS', t.podiums), stat('POLES', t.poles, 'Started from P1'), stat('FASTEST', t.fastest, 'Fastest laps (from 2004)'),
       stat('POINTS', +standings.reduce((s, x) => s + +x.points, 0).toFixed(1)), stat('DNF', t.dnfs, 'Retired'), stat('LAPS', t.laps),
@@ -191,6 +223,7 @@ async function career(d, h2h, year, family) {
         .flatMap(([k, v]) => v ? [el('dt', {}, k), el('dd', {}, v)] : []),
       el('dt', {}, 'Teams'), el('dd', {}, stints.map(s => el('span', {class: 'cteam'}, chip([s.tid, s.name]), `${s.name} ${s.from === s.to ? s.from : `${s.from}–${s.to}`}`)))),
     mates,
+    ...(others.length > 1 ? compare(d, results, others, year) : []),
     el('div', {class: 'tablewrap'}, el('table', {class: 'data'},
       el('thead', {}, el('tr', {}, ['Season', 'Team', 'Champ.', 'Points', 'Starts', 'Wins', 'Podiums', 'Poles', 'Fastest', 'DNF', 'Best'].map(th))),
       el('tbody', {}, seasons.map(({y, res, s, t: st}) => el('tr', {class: s?.position === '1' && final(s) ? 'champ' : ''},

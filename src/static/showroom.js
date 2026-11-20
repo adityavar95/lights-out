@@ -8,7 +8,7 @@ import {SkyMesh} from 'three/addons/objects/SkyMesh.js';
 import {RoomEnvironment} from 'three/addons/environments/RoomEnvironment.js';
 import {mergeGeometries} from 'three/addons/utils/BufferGeometryUtils.js';
 import {attribute, float, fract, mix, smoothstep, time, vec3} from 'three/tsl';
-import {el} from './util.js';
+import {el, failed} from './util.js';
 import {ready, setDeck, shared} from './scene3d.js';
 import {buildCar} from './cars3d.js';
 
@@ -164,9 +164,8 @@ function placePins() {
   const {camera, ui: {pins}} = S, w = pins.clientWidth, h = pins.clientHeight;
   for (const {at, btn} of S.pins) {
     v.copy(at).project(camera);
-    btn.style.setProperty('--btn-x', `${((v.x + 1) / 2 * w).toFixed(1)}px`);
-    btn.style.setProperty('--btn-y', `${((1 - v.y) / 2 * h).toFixed(1)}px`);
-    btn.style.setProperty('--btn-opacity', v.z < 1 ? 1 : 0);
+    btn.style.translate = `${((v.x + 1) / 2 * w).toFixed(1)}px ${((1 - v.y) / 2 * h).toFixed(1)}px`;
+    btn.style.opacity = v.z < 1 ? 1 : 0;
   }
 }
 
@@ -261,13 +260,22 @@ export async function showCar(color, year, team, load) {
     S.car.dispose();
     S.flow?.geometry.dispose();
     S.scene.remove(S.flow);
+    S.car = S.flow = null;
   }
-  S.car = buildCar(color, null, year, S.blob, Infinity, team);
-  S.year = year;
-  S.scene.add(S.car.group);
-  S.flow = new THREE.Mesh(flowGeometry(S.car), flowMaterial());
-  S.flow.visible = S.flowOn;
-  S.flow.frustumCulled = false;
-  S.scene.add(S.flow);
-  buildPins();
+  S.ui.note.hidden = true;
+  try {
+    S.car = buildCar(color, null, year, S.blob, Infinity, team);
+    S.year = year;
+    S.scene.add(S.car.group);
+    S.flow = new THREE.Mesh(flowGeometry(S.car), flowMaterial());
+    S.flow.visible = S.flowOn;
+    S.flow.frustumCulled = false;
+    S.scene.add(S.flow);
+    buildPins();
+  } catch (e) {  // else the panel just stops on an empty floor
+    console.error(e);
+    buildPins();  // the old car's are gone with it
+    S.ui.note.replaceChildren(failed(`The car couldn't be built: ${e.message}`, () => showCar(color, year, team, load)));
+    S.ui.note.hidden = false;
+  }
 }

@@ -1,0 +1,17 @@
+﻿00:00:04.260{"Lines":{"33":{"RacingNumber":"33","Line":1,"GridPos":"1"},"44":{"RacingNumber":"44","Line":2,"GridPos":"2"},"11":{"RacingNumber":"11","Line":11,"GridPos":"11"}}}
+00:37:26.223{"Lines":{"11":{"Stints":{"1":{"LapFlags":0,"Compound":"MEDIUM","New":"false","TyresNotChanged":"1","TotalLaps":3,"StartLaps":3}}}}}
+00:37:45.826{"Lines":{"11":{"Line":13}}}
+00:37:46.284{"Lines":{"11":{"Line":14}}}
+00:37:46.653{"Lines":{"11":{"Line":16}}}
+00:37:46.905{"Lines":{"11":{"Line":17}}}
+00:37:47.046{"Lines":{"11":{"Line":18}}}
+00:37:47.418{"Lines":{"11":{"Line":19}}}
+00:39:11.226{"Lines":{"33":{"Stints":{"0":{"TotalLaps":4}}},"44":{"Stints":{"0":{"TotalLaps":4}}}}}
+00:39:41.266{"Lines":{"11":{"Stints":{"0":{"TotalLaps":4},"1":{"TotalLaps":4}}}}}
+00:41:31.239{"Lines":{"33":{"Stints":{"0":{"TotalLaps":5}}}}}
+00:41:31.240{"Lines":{"33":{"Stints":{"0":{"LapTime":"2:22.406","LapNumber":2,"LapFlags":3}}}}}
+00:41:36.237{"Lines":{"44":{"Stints":{"0":{"TotalLaps":5}}}}}
+00:41:36.588{"Lines":{"33":{"Stints":{"0":{"LapFlags":1}}},"44":{"Stints":{"0":{"LapTime":"2:22.712","LapNumber":2,"LapFlags":1}}}}}
+00:42:01.238{"Lines":{"11":{"Stints":{"0":{"TotalLaps":5},"1":{"TotalLaps":5}}}}}
+00:42:01.582{"Lines":{"11":{"Stints":{"1":{"LapTime":"2:20.666","LapNumber":2}}}}}
+00:42:26.259{"Lines":{"11":{"Stints":{"2":{"LapFlags":0,"Compound":"MEDIUM","New":"false","TyresNotChanged":"1","TotalLaps":5,"StartLaps":5}}}}}

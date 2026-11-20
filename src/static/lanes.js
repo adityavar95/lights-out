@@ -9,6 +9,9 @@ const wrap = (x, len) => ((x % len) + 1.5 * len) % len - len / 2;  // signed dis
 export const GRID = {row: 8, front: 6, col: 1.6, fade: 250};
 // a passing car sits PASS m off the line from REACH m behind the car it passes until it is AFTER m past it
 const PASS = 3.2, REACH = 35, AFTER = 25;
+// the n-th car to take the flag (0 = winner) parks past the line in two columns like the grid's, PASS m either side of the line, so finished
+// cars don't stack on one spot and a car still on its last lap drives between them
+export const parked = n => ({s: GRID.front + GRID.row * n, lat: n % 2 ? -PASS : PASS});
 const sideOf = key => ([...key].reduce((h, ch) => (h * 31 + ch.charCodeAt(0)) | 0, 7) & 1 ? 1 : -1);  // + = left
 
 // cars: [{id, s, v, rank, run}]: s metres round the lap (negative before the line), v m/s, rank the grid slot (0 = pole) and

@@ -1,6 +1,6 @@
 // Season analysis: teammate head-to-heads, cumulative points, who can still win, supertimes
 import assert from 'node:assert/strict';
-import {secs, median, qualiRounds, teammates, h2hLine, fmtGap, raceMax, sprintMax, cumulative, maxRemaining, alive, reconcile, supertimes} from '../src/static/season.js';
+import {secs, median, qualiRounds, teammates, headToHead, h2hLine, fmtGap, raceMax, sprintMax, cumulative, maxRemaining, alive, reconcile, supertimes} from '../src/static/season.js';
 import {numbered} from '../src/static/drivers.js';
 
 const row = (round, id, tid, number, position, extra = {}) => ({round, 'Driver.driverId': id, 'Constructor.constructorId': tid, 'Constructor.name': tid, number,
@@ -144,6 +144,24 @@ assert.equal(wet.rounds[0].round, 2);
 assert.equal(wet.rounds[0].median, 101);
 assert.equal(wet.rounds[0].wet, true);
 assert.equal(supertimes([s(3, 'a', 'x', '1:30.000'), s(3, 'b', 'y', '1:40.000'), s(3, 'c', 'y', '1:40.000')]).rounds[0].wet, false);
+
+// any two drivers: only races both started; grid 0 (pit lane) and an unclassified finish drop out of their count
+{
+  const r = (season, round, grid, position, positionText = String(position)) => ({season, round, grid: String(grid), position: String(position), positionText});
+  const a = [r('2020', '1', 1, 1), r('2020', '2', 3, 5), r('2021', '1', 0, 2), r('2021', '2', 2, 9, 'R'), r('2021', '3', 1, 1), r('2022', '1', 4, 4, 'W')];
+  const b = [r('2020', '1', 2, 2), r('2020', '2', 2, 3), r('2021', '1', 5, 6), r('2021', '2', 1, 1), r('2022', '1', 1, 1)];
+  const h = headToHead(a, b);
+  assert.equal(h.races, 4);  // 2021/3 b didn't race, 2022/1 a withdrew
+  assert.deepEqual(h.grid, {wins: 1, losses: 2});  // 2021/1 from the pit lane
+  assert.deepEqual(h.race, {wins: 2, losses: 1});  // 2021/2 a retired
+  assert.deepEqual(h.seasons, ['2020', '2021']);
+  assert.deepEqual(headToHead(b, a).race, {wins: 1, losses: 2});
+  assert.equal(headToHead(a, []).races, 0);
+}
+const {firstOf} = await import('../src/static/favourite.js');
+assert.deepEqual(firstOf([1, 2, 3, 4], x => x === 3), [3, 1, 2, 4]);
+assert.deepEqual(firstOf([1, 2], x => x === 1), [1, 2]);
+assert.deepEqual(firstOf([1, 2], x => x === 9), [1, 2]);
 
 console.log('season ok');
 

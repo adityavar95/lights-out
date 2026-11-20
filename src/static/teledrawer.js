@@ -1,7 +1,7 @@
 // The telemetry drawer (T): the focused car's last 30 s of race time as strip charts on one shared time axis, with the
 // shift lights and gear, active aero and ERS state, a GG diagram and the four tyres. A canvas per chart rather than DOM:
 // it redraws at the display's rate while open, and costs one array push per frame while closed.
-import {el} from './util.js';
+import {el, signed} from './util.js';
 import {GG, RPM_SCALE, LEDS, ggCentre, ggSemi, litLeds, sampleAt, strip, tyreBand} from './pitdata.js';
 
 const CORNERS = ['FL', 'FR', 'RL', 'RR'];
@@ -86,7 +86,7 @@ function drawChart(now) {
     g.fillText(s.name, 0, top + 7);
     g.fillStyle = INK;
     const first = here[s.series[0][0]];
-    const text = s.legend ? null : first === null || first === undefined ? '–' : s.zero ? `${first < 0 ? '−' : '+'}${Math.abs(first).toFixed(3)}` : Math.round(first).toLocaleString('en');
+    const text = s.legend ? null : first === null || first === undefined ? '–' : s.zero ? signed(first, 3) : Math.round(first).toLocaleString('en');
     if (text) g.fillText(`${text} ${s.unit}`, 0, top + 21);
     if (s.legend) s.legend.forEach(([name, col], i) => {  // pedals share one axis: a key rather than colour alone
       g.fillStyle = col;
@@ -199,7 +199,7 @@ export function updateDrawer(f, t) {
   D.compound.textContent = ty?.compound ?? '';
   D.tyres.forEach((c, i) => {
     const s = ty?.temps?.[i];
-    c.box.style.setProperty('--box-bg', s === undefined ? 'transparent' : tyreBand(s));
+    c.box.style.background = s === undefined ? 'transparent' : tyreBand(s);
     c.temp.textContent = `${fix(s)}°`;
     c.core.textContent = `core ${ty?.core ? `${fix(ty.core[i])}°` : '–'}`;
     c.life.textContent = `tread ${fix(100 - (ty?.wear?.[i] ?? NaN))}%`;

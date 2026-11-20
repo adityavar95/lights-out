@@ -1,6 +1,6 @@
 // The Results tab's sections, each fetched when it is opened: the pit-stop league table, the overtake ledger, and from a
 // session's own laps (quali.js) qualifying's evolution and practice's long runs.
-import {el, failed, get, skeleton, teamColor, th, trackStatus, lastBefore, csvButton, fmtLap, fmtClock} from './util.js';
+import {el, failed, get, skeleton, teamColor, th, trackStatus, lastBefore, csvButton, fmtLap, fmtClock, signed as sign} from './util.js';
 import {qualiEvolution, longRuns, idealLaps, MIN_RUN, SPREAD, LIMIT} from './quali.js';
 
 export const PIT_WINDOW = 30;  // s either side of a stop: OpenF1's stop date is near the car leaving the lane
@@ -235,7 +235,7 @@ const payloadLabel = drivers => {
   const by = Object.fromEntries((drivers ?? []).map(d => [String(d.id), d]));
   return num => ({code: by[num]?.code ?? `#${num}`, color: by[num]?.color ?? 'var(--muted)'});
 };
-const signed = (x, d = 3) => `${x < 0 ? '-' : '+'}${Math.abs(x).toFixed(d)}`;  // an ASCII minus: app.js sortTable reads it as a number
+const signed = (x, d = 3) => sign(x, d);
 
 function qualiParts(year, round, d) {
   const {split, rows, falls, bests} = qualiEvolution(d), label = payloadLabel(d.drivers), names = split ? ['Q1', 'Q2', 'Q3'] : ['Best'];

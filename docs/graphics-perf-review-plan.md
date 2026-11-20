@@ -17,6 +17,7 @@ session starts from that handover alone, with no need for the earlier conversati
 - [x] Phase 5: untested areas (handover: `docs/handover/phase-5.md`; Play-driving and Monsoon fps need re-taking, see there)
 - [x] Phase 6: Play's page cost (handover: `docs/handover/phase-6.md`; Free Orbit and Helicopter within noise of the 10 % goal, see there)
 - [x] Phase 7: wet ground (handover: `docs/handover/phase-7.md`; darker on screen only by 3-8 % in Monsoon's fog, see there)
+- [x] Phase 8: globe and style refinements, mirror cost measured (handover: `docs/handover/phase-8.md`, written afterwards)
 
 ## 1. Measured (Phase 0)
 

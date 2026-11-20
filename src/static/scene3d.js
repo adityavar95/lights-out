@@ -576,7 +576,7 @@ export function setCars(drivers, onSelect, year) {
     const car = ownLods(buildCar(d.color, d.num, year, tex.blob, map ? m(high ? 60 : 40) : Infinity, d.team));  // the detailed car is 57 draws: past 60 m it is under ~50 px wide (Settings' car detail doubles the range)
     const num = document.createElement('b');
     num.textContent = d.num ?? '';
-    num.style.setProperty('--label-bg', d.color);
+    num.style.background = d.color;
     const code = document.createElement('span');
     code.textContent = d.code;
     const tag = label('carlabel3d', num, code);

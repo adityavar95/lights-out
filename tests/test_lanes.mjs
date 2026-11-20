@@ -1,6 +1,6 @@
 // Run: node tests/test_lanes.mjs  — lap-timing replay lanes: grid columns and passing without driving through the car.
 import assert from 'node:assert/strict';
-import {lanes, GRID, apart, headings, retime} from '../src/static/lanes.js';
+import {lanes, GRID, apart, headings, retime, parked} from '../src/static/lanes.js';
 import {CAR_L, CAR_W} from '../src/static/racecraft.js';
 
 const LEN = 5000, HALF = 6.5;
@@ -72,5 +72,9 @@ for (let i = 0; i < 40; i++) if (rx[i] !== null) assert.ok(offPath(rx[i], ry[i])
 near(rx[0], sx[0]); near(rx[19], sx[19]); near(ry[39], sy[39]);  // run ends stay put
 const flat = [0, 20, 40, 60, 80];
 retime(flat, flat.map(() => 0))[0].forEach((v, i) => near(v, flat[i]));  // a steady pace is unchanged
+// finished cars: each its own spot past the line, clear of each other and of a car still running on the centre line
+const spots = Array.from({length: 20}, (_, n) => parked(n));
+spots.forEach((a, i) => spots.slice(i + 1).forEach(b => assert.ok(Math.abs(a.s - b.s) >= CAR_L || Math.abs(a.lat - b.lat) >= CAR_W)));
+assert.ok(spots.every(p => p.s > 0 && Math.abs(p.lat) >= CAR_W));
 function near(a, b) { assert.ok(Math.abs(a - b) < 1e-6, `${a} != ${b}`); }
 console.log('ok');

@@ -198,8 +198,8 @@ export function renderFocus(f) {
     setAttr(h.lapD, 'data-s', dt < 0 ? '-' : '+');
     setText(h.lapB, f.lap.best ? `BEST ${lapT(f.lap.best)}` : '');
   }
-  h.thr.style.setProperty('--bar-height', `${f.throttle ?? 0}%`);
-  h.brk.style.setProperty('--bar-height', `${f.brake ?? 0}%`);
+  h.thr.style.height = `${f.throttle ?? 0}%`;
+  h.brk.style.height = `${f.brake ?? 0}%`;
   // shift lights: the lit count follows rpm between RPM_LOW and RPM_HIGH; at the limiter every LED flashes blue
   const frac = f.rpm ? Math.min(1, Math.max(0, (f.rpm - RPM_LOW) / (RPM_HIGH - RPM_LOW))) : 0, lit = Math.round(frac * LEDS);
   h.leds.forEach((led, i) => led.classList.toggle('on', i < lit));
@@ -207,7 +207,7 @@ export function renderFocus(f) {
   setText(h.drs, f.drsName);
   setAttr(h.drs, 'data-state', f.drs ?? 'off');
   setAttr(h.drs, 'title', {open: 'Active', detected: 'Detected: within 1 s at the detection point', off: 'Unavailable'}[f.drs ?? 'off']);
-  h.ers.style.setProperty('--bar-width', `${Math.round(f.ers.soc * 100)}%`);
+  h.ers.style.width = `${Math.round(f.ers.soc * 100)}%`;
   setText(h.ersPct, `${Math.round(f.ers.soc * 100)}%`);
   setText(h.ersMode, f.ers.mode);
   setAttr(h.ersMode, 'data-mode', f.ers.mode);
@@ -230,7 +230,7 @@ export function renderFocus(f) {
   setText(h.compound, ty.compound ? `${TYRE_LETTER[ty.compound] ?? ''} ${ty.compound}` : 'compound unknown');
   setAttr(h.compound, 'data-c', ty.compound || '');
   h.tyres.forEach((t, i) => {
-    t.swatch.style.setProperty('--swatch-bg', tyreColor(ty.temps[i], ty.compound));
+    t.swatch.style.background = tyreColor(ty.temps[i], ty.compound);
     setText(t.temp, `${Math.round(ty.temps[i])}°`);
     setText(t.wear, `${Math.round(ty.wear[i])}% worn`);
   });

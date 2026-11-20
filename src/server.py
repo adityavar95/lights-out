@@ -1,8 +1,9 @@
-"""Lights Out backend: livef1/Jolpica tables, track maps and race replay data."""
+"""Lights Out backend: Jolpica/OpenF1 tables, track maps and race replay data."""
 import os
-# Before numpy loads (via livef1/pandas, on the first old-season table): OpenBLAS commits a buffer per CPU thread, ~740 MB on a 32-thread CPU, and
+# Before numpy loads (radio's transcriber): OpenBLAS commits a buffer per CPU thread, ~740 MB on a 32-thread CPU, and
 # nothing here does matrix maths
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+import gzip
 import ipaddress
 import json
 import mimetypes
@@ -13,10 +14,11 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timezone
 from functools import lru_cache
 from pathlib import Path
+from typing import Annotated
 from urllib.parse import urlsplit
 
 import uvicorn
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException, Path as PathParam, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from starlette.middleware.gzip import DEFAULT_EXCLUDED_CONTENT_TYPES, GZipMiddleware
 from fastapi.responses import FileResponse, Response
@@ -27,8 +29,8 @@ import f1auth
 import f1tv
 import ledgers
 import radio
-from jolpica import JOLPICA, calendar_ics, driver_career, jolpica_fetch, list_seasons, races
-from replay import CACHE, OpenF1Locked, ReplayUnavailable, elevation, find_session, laps_replay, pitlane, replay, save, saved_replay, scheduled_session, session_events, season_session_rows, session_telemetry, telemetry
+from jolpica import JOLPICA, calendar_ics, driver_career, jolpica_fetch, list_seasons, races, session_rows
+from replay import CACHE, OpenF1Locked, background, ReplayUnavailable, elevation, find_session, laps_replay, pitlane, replay, save, saved_head, saved_replay, scheduled_session, session_events, season_session_rows, session_telemetry, telemetry
 import live
 from tracks import _geo_track, mv_track, track
 
@@ -57,28 +59,12 @@ def table(rows: list, columns: list | None = None) -> dict:
     return {"columns": columns, "data": [[r.get(c) for c in columns] for r in flat], "total": len(rows)}
 
 
-def frame_table(df) -> dict:
-    """The same for a livef1 DataFrame (old seasons' session lists, the F1.com schedule)."""
-    out = json.loads(df.head(MAX_ROWS).to_json(orient="split", index=False, date_format="iso", default_handler=str))
-    return {"columns": out["columns"], "data": out["data"], "total": len(df)}
-
-
 def check_season(year: int, round: int | None = None):
     """Years and rounds come from the url: anything else would spend Jolpica's ~500 requests an hour, and fill its caches."""
     if not 1950 <= year <= date.today().year + 1:
         raise HTTPException(404, f"No {year} season")
     if round is not None and not 1 <= round <= 30:
         raise HTTPException(404, f"No round {round} in {year}")
-
-
-@lru_cache(maxsize=None)
-def season(year: int):
-    try:
-        import livef1  # here, not at the top: it brings pandas, a second of every start for a table few open
-        livef1.set_log_level("ERROR")
-        return livef1.get_season(year)
-    except Exception as e:  # e.g. livef1 1.2.11 fails on 2010 with KeyError 'turkey'
-        raise HTTPException(502, f"livef1 could not load the {year} season: {e!r}")
 
 
 @app.get("/")
@@ -132,24 +118,18 @@ def season_sessions(year: int):
             rows = season_session_rows(year)
             return table(rows, ["Round", "Session Name", "StartDate", "EndDate"])
         except OpenF1Locked:
-            pass  # OpenF1 is locked while a session is live and has no saved copy yet: livef1's slower table instead
+            pass  # OpenF1 is locked while a session is live and has no saved copy yet: Jolpica's times instead
         except Exception as e:
             raise HTTPException(502, f"OpenF1 could not load the {year} session list: {e!r}")
-    return frame_table(season(year).season_table.reset_index())
+    try:
+        return table(session_rows(year), ["Round", "Session Name", "StartDate", "EndDate"])
+    except Exception as e:
+        raise HTTPException(502, f"Jolpica could not load the {year} session list: {e!r}")
 
 
 def _session_names(session: str) -> list[str]:
     # OpenF1 called 2023's sprint qualifying "Sprint Shootout"
     return [session, "Sprint Shootout"] if session == "Sprint Qualifying" else [session]
-
-
-@app.get("/api/season/{year}/f1schedule")
-def f1_schedule(year: int):
-    check_season(year)
-    try:
-        return frame_table(season(year).get_schedule())
-    except Exception as e:
-        raise HTTPException(502, f"formula1.com schedule unavailable: {e}")
 
 
 @app.get("/api/jolpica/{year}/{kind}")
@@ -315,6 +295,11 @@ def _is_live(race: dict, session: str) -> bool:
     # session: so it's opened, but only for a race weekend happening now.
     if abs((date.today() - date.fromisoformat(race["date"])).days) > 3:
         return False
+    try:  # the schedule says first: opening the feed waits up to 5 s, on every "no data yet" 404 of a race weekend
+        if scheduled_session(datetime.now(timezone.utc)) is None:
+            return False
+    except Exception:
+        pass  # schedule unknown: ask the feed as before
     topics = live.snapshot()["topics"]
     info = topics.get("SessionInfo") or {}
     start = (info.get("StartDate") or "")[:10]
@@ -324,14 +309,20 @@ def _is_live(race: dict, session: str) -> bool:
 
 
 @app.get("/api/replay/{year}/{round}")
-def race_replay(year: int, round: int, session: str = "Race", laps: bool = False):
-    """laps: the lap-timing replay even for a 2023+ race, which the page plays while the GPS one builds."""
+def race_replay(request: Request, year: int, round: int, session: str = "Race", laps: bool = False,
+                x_f1_token: str | None = Header(None)):
+    """laps: the lap-timing replay even for a 2023+ race, which the page plays while the GPS one builds.
+    X-F1-Token: builds the GPS replay from F1's archive, 2018 on (archive.py)."""
     race = race_info(year, round)
     try:
         if laps and session == "Race":
             return raw_json(laps_replay(year, round))
         stored = saved_replay(year, race["date"], session)
-        return Response(stored, media_type="application/json") if stored else raw_json(replay(year, race, session))
+        if not stored:
+            return raw_json(replay(year, race, session, f1auth.valid(x_f1_token)))
+        if "gzip" not in request.headers.get("accept-encoding", ""):
+            return Response(gzip.decompress(stored), media_type="application/json")
+        return Response(stored, media_type="application/json", headers={"Content-Encoding": "gzip", "Vary": "Accept-Encoding"})
     except ReplayUnavailable as e:
         raise HTTPException(409, LIVE_NOW) if _is_live(race, session) else HTTPException(404, str(e))
     except Exception as e:
@@ -349,10 +340,10 @@ def session_laps(year: int, round: int, session: str = "Qualifying", build: bool
         raise HTTPException(404, f"No session timing for {year}: OpenF1's records start in 2023")
     race = race_info(year, round)
     try:
-        stored = saved_replay(year, race["date"], session)
-        if not stored and not build:
+        data = saved_head(year, race["date"], session)
+        if not data and not build:
             raise HTTPException(404, NOT_BUILT)
-        data = json.loads(stored) if stored else replay(year, race, session)
+        data = data or replay(year, race, session)
     except ReplayUnavailable as e:
         raise HTTPException(409, LIVE_NOW) if _is_live(race, session) else HTTPException(404, str(e))
     except HTTPException:
@@ -471,7 +462,7 @@ def event_marks(year: int, round: int, session: str = "Race"):
 
 
 @app.get("/api/f1tv/telemetry/{year}/{round}/{driver}")
-def f1tv_telemetry(year: int, round: int, driver: int, session: str = "Race"):
+def f1tv_telemetry(year: int, round: int, driver: Annotated[int, PathParam(ge=1, le=99)], session: str = "Race"):
     """One car's telemetry over a whole session, for the multiviewer's overlay on an F1 TV stream."""
     race = race_info(year, round)
     try:
@@ -488,7 +479,7 @@ def f1tv_telemetry(year: int, round: int, driver: int, session: str = "Race"):
 
 
 @app.get("/api/f1tv/radio/{year}/{round}")
-def f1tv_radio(year: int, round: int, session: str = "Race", driver: int | None = None, x_f1_token: str | None = Header(None)):
+def f1tv_radio(year: int, round: int, session: str = "Race", driver: Annotated[int | None, Query(ge=1, le=99)] = None, x_f1_token: str | None = Header(None)):
     """Team radio as text (radio.py) for the multiviewer's radio panel: every driver's clips so far (or one driver's),
     each with its words once transcribed, and the drivers' codes, team colours and headshots. The caller's F1 TV token
     fetches the audio, which F1 refuses without one."""
@@ -506,9 +497,6 @@ def f1tv_radio(year: int, round: int, session: str = "Race", driver: int | None 
 @app.post("/api/f1tv/radio/model", status_code=202)
 def f1tv_radio_model(request: Request):
     """Starts the speech model's download (radio.fetch_model): the radio panel's button, after the reader agrees to 2.5 GB."""
-    origin = request.headers.get("origin")
-    if origin and urlsplit(origin).netloc != request.headers.get("host"):  # another site's page can't start a 2.5 GB download
-        raise HTTPException(403, "Cross-origin download")
     radio.fetch_model()
     return Response(status_code=202)
 
@@ -583,7 +571,7 @@ def live_table(topic: str):
 
 
 @app.get("/api/telemetry/{year}/{round}")
-def car_telemetry(year: int, round: int, driver: int, start: str, duration: float, session: str = "Race"):
+def car_telemetry(year: int, round: int, driver: Annotated[int, Query(ge=1, le=99)], start: str, duration: float, session: str = "Race"):
     """start / duration: the GPS replay's, so its time grid is matched without rebuilding the replay."""
     race = race_info(year, round)
     try:
@@ -624,10 +612,17 @@ IMPORTMAP_HASH = "'sha256-" + base64.b64encode(hashlib.sha256(re.search(r'<scrip
 async def revalidate_static(request, call_next):
     if not by_address(request.url.hostname):
         return Response("Open Lights Out by its address (http://127.0.0.1:8086), not a name.", status_code=400)
+    # a POST starts downloads (600 MB, 2.5 GB) or writes: only the page's own origin, never another site or a bare client
+    origin = request.headers.get("origin")
+    if request.method == "POST" and (not origin or urlsplit(origin).netloc != request.headers.get("host")):
+        return Response("Cross-origin request", status_code=403)
     # Without it browsers cache old modules heuristically and mix them with new ones after an edit, and one missing
     # export blanks the whole app. no-cache still serves 304s for unchanged files.
     response = await call_next(request)
-    if request.url.path == "/" or request.url.path.startswith("/static/"):
+    if request.url.path.startswith("/static/assets/") and response.status_code == 200:
+        # hash-pinned (asset_hashes.json): a file there never changes under the same name
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    elif request.url.path == "/" or request.url.path.startswith("/static/"):
         response.headers["Cache-Control"] = "no-cache"
     if request.url.path == "/" or request.url.path.endswith(".html"):
         # report-only while the page's inline scripts and handlers are moved out: violations show in the console
@@ -642,6 +637,8 @@ async def revalidate_static(request, call_next):
 mimetypes.add_type("image/vnd.radiance", ".hdr")
 # a 21 MB sky hardly compresses: gzipping it would only slow the local load
 app.add_middleware(GZipMiddleware, minimum_size=1000, compresslevel=1, exclude_content_types=(*DEFAULT_EXCLUDED_CONTENT_TYPES, "image/vnd.radiance"))
+if assets.ASSETS != Path(__file__).parent / "static" / "assets":  # the exe: assets live in paths.DATA
+    app.mount("/static/assets", StaticFiles(directory=assets.ASSETS), name="assets")
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
 # the trailer Stream plays offline (stream.js): docs/media in a checkout, media/ beside static/ in the exe
 MEDIA = next((m for m in (Path(__file__).parent / "media", Path(__file__).parent.parent / "docs" / "media") if m.is_dir()), None)
@@ -668,9 +665,6 @@ def count_event(event: str, day: str, path: Path = COUNTS) -> dict:
 
 @app.post("/api/count/{event}", status_code=204)
 def count(event: str, request: Request):
-    origin = request.headers.get("origin")
-    if origin and urlsplit(origin).netloc != request.headers.get("host"):  # another site's page can't add to the counts
-        raise HTTPException(403, "Cross-origin count")
     if event not in EVENTS:  # a fixed list, so the file can't be filled with whatever a caller sends
         raise HTTPException(404, "Unknown event")
     count_event(event, date.today().isoformat())
@@ -685,9 +679,6 @@ def assets_status():
 
 @app.post("/api/assets/download", status_code=202)
 def assets_download(request: Request):
-    origin = request.headers.get("origin")
-    if origin and urlsplit(origin).netloc != request.headers.get("host"):  # another site's page can't start a 600 MB download
-        raise HTTPException(403, "Cross-origin download")
     assets.start()
     return Response(status_code=202)
 
@@ -716,7 +707,11 @@ def warm_up():
         jobs += [lambda: race_track(year, rnd), lambda: race_geo(year, rnd), lambda: race_elevation(year, rnd),
                  lambda: jolpica(year, "results", rnd)]
         if year >= 2023:  # newest first and one at a time: OpenF1 allows ~30 requests a minute, and each is ~30
-            jobs.append(lambda: [quietly(lambda: replay(year, r, "Race")) for r in reversed(last[-3:])])
+            def replays():
+                background.on = True  # replay.py _throttle: these leave the window's last slots to the reader's clicks
+                for r in reversed(last[-3:]):
+                    quietly(lambda: replay(year, r, "Race"))
+            jobs.append(replays)
 
     def quietly(job):
         try:
@@ -726,6 +721,11 @@ def warm_up():
 
     with ThreadPoolExecutor(len(jobs)) as pool:
         pool.map(quietly, jobs)
+
+
+# no auth: other devices on the network reach the server only when asked for
+LAN = os.environ.get("LIGHTSOUT_LAN") == "1"
+HOST = "0.0.0.0" if LAN else "127.0.0.1"
 
 
 def lan_ip() -> str | None:
@@ -742,6 +742,7 @@ def lan_ip() -> str | None:
 if __name__ == "__main__":
     threading.Thread(target=warm_up, daemon=True).start()
     # 0.0.0.0 listens on every address but isn't one a browser can open (ERR_ADDRESS_INVALID): say which ones work
-    ip = lan_ip()
-    print("Lights Out: open http://127.0.0.1:8086" + (f"  (other devices on this network: http://{ip}:8086)" if ip else ""), flush=True)
-    uvicorn.run(app, host="0.0.0.0", port=8086)
+    ip = lan_ip() if LAN else None
+    print("Lights Out: open http://127.0.0.1:8086" + (f"  (other devices on this network: http://{ip}:8086)" if ip else
+          "  (LIGHTSOUT_LAN=1 opens it to other devices on this network)"), flush=True)
+    uvicorn.run(app, host=HOST, port=8086)
