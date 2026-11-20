@@ -12,8 +12,8 @@ export function tip(e, ...content) {
   tipEl.replaceChildren(...content);
   tipEl.hidden = false;
   const x = Math.min(e.clientX + 14, innerWidth - tipEl.offsetWidth - 8);
-  tipEl.style.left = `${x}px`;
-  tipEl.style.top = `${e.clientY + 14}px`;
+  tipEl.style.setProperty('--tip-x', `${x}px`);
+  tipEl.style.setProperty('--tip-y', `${e.clientY + 14}px`);
 }
 
 export const name = r => `${r['Driver.givenName']} ${r['Driver.familyName']}`;

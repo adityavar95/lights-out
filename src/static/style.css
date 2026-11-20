@@ -23,7 +23,9 @@
   --edge-fade: light-dark(rgb(0 0 0 / .06), rgb(255 255 255 / .03));
   --hairline: light-dark(rgb(0 0 0 / .08), var(--dp-color-hairline));
   --shadow: light-dark(0 10px 30px rgb(20 20 40 / .12), 0 14px 36px rgb(0 0 0 / .45));
-  /* three radii (chips/inputs, panels/cards, pills) plus 50% for avatars; tests/test_tokens.mjs fails on a raw px radius */
+  .hidden { display: none !important; }
+.no-focus-ring { outline: none !important; }
+/* three radii (chips/inputs, panels/cards, pills) plus 50% for avatars; tests/test_tokens.mjs fails on a raw px radius */
   --r-sm: 6px; --r-md: 12px; --r-pill: 999px;
   --radius-xs: var(--r-sm); --radius-sm: var(--r-sm); --radius: var(--r-sm); --radius-lg: var(--r-sm); --radius-full: var(--r-pill);
   --text-1: 12px; --text-2: 12px; --text-3: 13px; --text-4: 15px; --text-5: 18px; --text-6: 24px; --text-7: 40px;  /* --text-1 is the floor for real text */
@@ -51,7 +53,7 @@ button, select, input { font: inherit; color: var(--ink); }
 .labbtn, .labplan, .labx, .pill, .legenditem, .xstatus input, .controls select, .tablewrap.tall, .overlay.hint p, .carlabel3d {
   background: var(--glass); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur);
   border: 1px solid var(--hairline); box-shadow: inset 0 1px 0 var(--edge-fade), var(--shadow); }
-.card, .hero, .tooltip { position: relative; }
+.card, .hero, .tooltip { position: relative; contain: layout; }
 .tooltip::before { content: ''; position: absolute; inset: 0; padding: 1px; border-radius: inherit; pointer-events: none;
   background: linear-gradient(135deg, var(--edge), transparent 40%, transparent 70%, var(--edge-fade));
   -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor;
@@ -775,12 +777,13 @@ summary.mvibtn::-webkit-details-marker { display: none; }
 .tvkind { justify-self: start; font-size: 12px; font-weight: 500; font-family: var(--face); text-transform: uppercase; letter-spacing: .04em; padding: 2px 8px; border-radius: var(--r-sm);
   background: var(--panel-2); color: var(--muted); white-space: nowrap; }
 .tvkind:is(.k-race, .k-sprint, .k-qualifying, .k-practice) { background: var(--panel-2); color: var(--ink); }
-.k-race { background: var(--accent) !important; color: var(--accent-ink) !important; }
+.tvkind.k-race { background: var(--accent); color: var(--accent-ink); }
 .k-highlights { background: rgb(195 92 255 / .16); color: var(--purple); }
 .tvkind:is(.k-interview, .k-analysis) { background: rgb(255 212 0 / .14); color: #b8960a; }
 
 /* tabs: a row of pills like Stream's session chips, the chosen one solid (ink on page colour) */
 .tabs { display: flex; gap: 4px; padding: 12px 16px 4px; overflow-x: auto; scrollbar-width: none; }
+.tabs.hidden { display: none; }
 /* more tabs past an edge (phones): that edge fades out, following the scroll; a bar that fits has no scroll timeline,
    so no fade. Unsupported (Firefox): no hint, as before */
 @property --tabs-l { syntax: '<length>'; inherits: false; initial-value: 0px; }
@@ -1263,7 +1266,7 @@ option { background-color: var(--panel); color: var(--ink); }
 }
 
 /* tables: hairline rows, a frosted sticky header; any header sorts its column (app.js), the arrow shows the direction */
-.tablewrap { overflow: auto; border-radius: var(--radius-sm); }
+.tablewrap { contain: layout;  overflow: auto; border-radius: var(--radius-sm); }
 .tablewrap.tall { max-height: 62vh; }
 table.data { border-collapse: separate; border-spacing: 0; width: 100%; white-space: nowrap; font-size: 13px; }
 table.data th { position: sticky; top: 0; z-index: 1; background: var(--glass-strong); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur);

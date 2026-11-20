@@ -331,7 +331,7 @@ function noRace(title, message) {
   document.title = 'Lights Out';
   $('hero').replaceChildren(el('div', {class: 'herotext'}, el('h1', {}, title)));
   $('racebtn').replaceChildren('Races ▾');
-  document.querySelector('.tabs').style.display = 'none';  // .tabs sets display, so hidden wouldn't hide it
+  document.querySelector('.tabs').classList.add('hidden');
   for (const b of document.querySelectorAll('[role=tab]')) $(`tab-${b.dataset.tab}`).hidden = true;
   document.querySelector('main').append(el('div', {id: 'norace'}, message()));
   noStream(A.year, message());
@@ -389,7 +389,7 @@ const markRace = round => {
 async function selectRace(round, sim = A.mode === 'sim', fly = true) {
   clearInterval(timer);
   $('norace')?.remove();
-  document.querySelector('.tabs').style.display = '';
+  document.querySelector('.tabs').classList.remove('hidden');
   A.round = round;
   syncTitle();
   drawn = {};

@@ -115,7 +115,9 @@ export function init3d(el) {
   // frag depth from every fragment, which disabled early-z across the whole scene.
   renderer = new THREE.WebGPURenderer({antialias: true, powerPreference: 'high-performance', forceWebGL: false, reversedDepthBuffer: true, trackTimestamp: true});
   const canvas = document.createElement('canvas');
-  canvas.style.cssText = 'display:block;width:100%;height:100%';
+  canvas.style.display = 'block';
+  canvas.style.width = '100%';
+  canvas.style.height = '100%';
   mainSurface = new THREE.CanvasTarget(canvas);
   mainSurface.setPixelRatio(pixelRatio());
   renderer.setCanvasTarget(mainSurface);
@@ -574,7 +576,7 @@ export function setCars(drivers, onSelect, year) {
     const car = ownLods(buildCar(d.color, d.num, year, tex.blob, map ? m(high ? 60 : 40) : Infinity, d.team));  // the detailed car is 57 draws: past 60 m it is under ~50 px wide (Settings' car detail doubles the range)
     const num = document.createElement('b');
     num.textContent = d.num ?? '';
-    num.style.background = d.color;
+    num.style.setProperty('--label-bg', d.color);
     const code = document.createElement('span');
     code.textContent = d.code;
     const tag = label('carlabel3d', num, code);

@@ -307,9 +307,9 @@ function redraw() {
   drawTrace(M.base.getContext('2d'), w, h, M.view);
   drawCursor(M.over.getContext('2d'), w, h, M.view, M.hover);
   M.head[1].textContent = M.view.nameA;
-  M.head[1].style.color = colA;
+  M.head[1].style.setProperty('--head-color', colA);
   M.head[2].textContent = M.view.nameB;
-  M.head[2].style.color = colB;
+  M.head[2].style.setProperty('--head-color', colB);
   readout();
   // callouts: worth recomputing only when a lap changed, i.e. at most every redraw (O(N) passes, well under 1 ms)
   const notes = A && B ? insights(A, B, {len, a: M.view.nameA, b: M.view.nameB, corner, cuts: check?.cuts}) : [];
@@ -379,7 +379,7 @@ function hover(i) {
   const pa = i !== null && M.view.A && worldPos(M.view.A, i), pb = i !== null && M.view.B && worldPos(M.view.B, i);
   for (const [dot, p] of [[M.dotA, pa], [M.dotB, pb]]) {
     if (!dot) continue;
-    dot.style.display = p ? '' : 'none';
+    p ? dot.classList.remove('hidden') : dot.classList.add('hidden');
     if (p) { dot.setAttribute('cx', p[0]); dot.setAttribute('cy', p[1]); }
   }
   setCursor(pa || pb || null);  // the HUD's circuit radar shows the same spot
@@ -424,7 +424,8 @@ function drawMap(S) {
   M.map.append(svg('polyline', {points: [...pts, pts[0]].map(p => p.join(',')).join(' '), class: 'trline'}));
   M.dotA = svg('circle', {r: span * 0.022, class: 'trdot a'});
   M.dotB = svg('circle', {r: span * 0.022, class: 'trdot b'});
-  M.dotA.style.display = M.dotB.style.display = 'none';
+  M.dotA.classList.add('hidden');
+  M.dotB.classList.add('hidden');
   M.map.append(M.dom, M.dotB, M.dotA);
 }
 

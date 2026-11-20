@@ -29,7 +29,7 @@ export function panelFocus(panel, btn, close) {
     }
   };
   panel.tabIndex = -1;
-  panel.style.outline = 'none';  // the panel itself is no control: the global focus ring would box all of it
+  panel.classList.add('no-focus-ring');
   return {
     opened() {
       if (back) return;

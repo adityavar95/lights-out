@@ -164,8 +164,9 @@ function placePins() {
   const {camera, ui: {pins}} = S, w = pins.clientWidth, h = pins.clientHeight;
   for (const {at, btn} of S.pins) {
     v.copy(at).project(camera);
-    btn.style.translate = `${((v.x + 1) / 2 * w).toFixed(1)}px ${((1 - v.y) / 2 * h).toFixed(1)}px`;
-    btn.style.opacity = v.z < 1 ? 1 : 0;
+    btn.style.setProperty('--btn-x', `${((v.x + 1) / 2 * w).toFixed(1)}px`);
+    btn.style.setProperty('--btn-y', `${((1 - v.y) / 2 * h).toFixed(1)}px`);
+    btn.style.setProperty('--btn-opacity', v.z < 1 ? 1 : 0);
   }
 }
 

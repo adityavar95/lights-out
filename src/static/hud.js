@@ -131,7 +131,7 @@ export function setRadar(pts, sectors, zones, drivers, zoneName = 'DRS') {
     const m = h.radarSvg.getScreenCTM();
     if (!m) return;
     const p = new DOMPoint(e.clientX, e.clientY).matrixTransform(m.inverse()), i = nearestPoint(pts, [p.x, p.y]), q = pts[i], s = radar.seen[i];
-    radar.probe.style.display = '';
+    radar.probe.classList.remove('hidden');
     radar.probe.setAttribute('cx', q[0]);
     radar.probe.setAttribute('cy', q[1]);
     h.radarInfo.textContent = s ? `${s.code}: ${Math.round(s.kmh)} km/h, gear ${s.gear === 0 ? 'N' : s.gear}, brake ${Math.round(s.brake ?? 0)}%` : 'Follow a driver past this point to read it';
@@ -150,11 +150,11 @@ export function renderRadar(cars, selected) {
   }
   for (const [id, dot] of Object.entries(radar.dots)) {
     const p = cars[id];
-    dot.style.display = p ? '' : 'none';
+    p ? dot.classList.remove('hidden') : dot.classList.add('hidden');
     if (p) { setAttr(dot, 'cx', p[0]); setAttr(dot, 'cy', p[1]); }
   }
   const p = selected && cars[selected];
-  radar.ring.style.display = p ? '' : 'none';
+  p ? radar.ring.classList.remove('hidden') : radar.ring.classList.add('hidden');
   if (p) { setAttr(radar.ring, 'cx', p[0]); setAttr(radar.ring, 'cy', p[1]); }
 }
 
@@ -198,8 +198,8 @@ export function renderFocus(f) {
     setAttr(h.lapD, 'data-s', dt < 0 ? '-' : '+');
     setText(h.lapB, f.lap.best ? `BEST ${lapT(f.lap.best)}` : '');
   }
-  h.thr.style.height = `${f.throttle ?? 0}%`;
-  h.brk.style.height = `${f.brake ?? 0}%`;
+  h.thr.style.setProperty('--bar-height', `${f.throttle ?? 0}%`);
+  h.brk.style.setProperty('--bar-height', `${f.brake ?? 0}%`);
   // shift lights: the lit count follows rpm between RPM_LOW and RPM_HIGH; at the limiter every LED flashes blue
   const frac = f.rpm ? Math.min(1, Math.max(0, (f.rpm - RPM_LOW) / (RPM_HIGH - RPM_LOW))) : 0, lit = Math.round(frac * LEDS);
   h.leds.forEach((led, i) => led.classList.toggle('on', i < lit));
@@ -207,7 +207,7 @@ export function renderFocus(f) {
   setText(h.drs, f.drsName);
   setAttr(h.drs, 'data-state', f.drs ?? 'off');
   setAttr(h.drs, 'title', {open: 'Active', detected: 'Detected: within 1 s at the detection point', off: 'Unavailable'}[f.drs ?? 'off']);
-  h.ers.style.width = `${Math.round(f.ers.soc * 100)}%`;
+  h.ers.style.setProperty('--bar-width', `${Math.round(f.ers.soc * 100)}%`);
   setText(h.ersPct, `${Math.round(f.ers.soc * 100)}%`);
   setText(h.ersMode, f.ers.mode);
   setAttr(h.ersMode, 'data-mode', f.ers.mode);
@@ -230,7 +230,7 @@ export function renderFocus(f) {
   setText(h.compound, ty.compound ? `${TYRE_LETTER[ty.compound] ?? ''} ${ty.compound}` : 'compound unknown');
   setAttr(h.compound, 'data-c', ty.compound || '');
   h.tyres.forEach((t, i) => {
-    t.swatch.style.background = tyreColor(ty.temps[i], ty.compound);
+    t.swatch.style.setProperty('--swatch-bg', tyreColor(ty.temps[i], ty.compound));
     setText(t.temp, `${Math.round(ty.temps[i])}°`);
     setText(t.wear, `${Math.round(ty.wear[i])}% worn`);
   });
@@ -251,13 +251,13 @@ export function renderFeed(ui, data, t) {
 // telemetry trace crosshair on the radar (tracemodal.js): where on the lap the cursor is
 export function setCursor(p) {
   if (!radar) return;
-  radar.cursor.style.display = p ? '' : 'none';
+  p ? radar.cursor.classList.remove('hidden') : radar.cursor.classList.add('hidden');
   if (p) { radar.cursor.setAttribute('cx', p[0]); radar.cursor.setAttribute('cy', p[1]); }
 }
 
 // predicted pit rejoin on the radar: a translucent ghost of the selected car where it would come out if it boxed this lap
 export function setGhost(p) {
   if (!radar) return;
-  radar.ghost.style.display = p ? '' : 'none';
+  p ? radar.ghost.classList.remove('hidden') : radar.ghost.classList.add('hidden');
   if (p) { radar.ghost.setAttribute('cx', p[0]); radar.ghost.setAttribute('cy', p[1]); }
 }

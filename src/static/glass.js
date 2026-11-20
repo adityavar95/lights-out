@@ -164,7 +164,8 @@ function fit(el, refracts) {
 export function setupGlass() {
   const refracts = /Chrom(?:e|ium)\//.test(navigator.userAgent);
   const host = svg('svg', {width: 0, height: 0, 'aria-hidden': 'true'});
-  host.style.cssText = 'position:absolute;pointer-events:none';
+  host.style.position = 'absolute';
+  host.style.pointerEvents = 'none';
   defs = svg('defs', {},
     // the rippled, soft refraction of a liquid-glass button: noise bending the backdrop, then a blur
     svg('filter', {id: 'lg-liquid', x: '0%', y: '0%', width: '100%', height: '100%', 'color-interpolation-filters': 'sRGB'},
