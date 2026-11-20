@@ -1,3 +1,4 @@
+// @ts-check
 // Shared helpers: fetching, team colours, flags, formatting.
 
 const cache = new Map(), MAX = 200;
@@ -76,7 +77,7 @@ export function el(tag, attrs = {}, ...children) {
 // One anonymous usage count on our own server (/api/count, server.py EVENTS): the event's name and nothing else. None
 // when the browser asks not to be tracked (Do Not Track, Global Privacy Control).
 export function count(event) {
-  if (navigator.doNotTrack === '1' || navigator.globalPrivacyControl) return;
+  if (navigator.doNotTrack === '1' || /** @type {any} */ (navigator).globalPrivacyControl) return;
   try { navigator.sendBeacon(`/api/count/${event}`); } catch (e) { /* counts are best effort */ }
 }
 

@@ -1,0 +1,72 @@
+# Modernization handoff (cumulative)
+
+Read this and `docs/modernize-plan.md` at the start of every session. Each phase appends its section at the end and
+updates "Current state". This is the one handoff file for the whole plan.
+
+## Current state
+
+- Branch: `modernize` (from `improve-phase-8`, HEAD `fff158f`, 21 Nov 2026).
+- Done: phase 1 (21 Nov 2026).
+- Next: **Phase 2** (device tiers). Start a new session and type: *"Do phase 2 of docs/modernize-plan.md."*
+- Rule: after each phase, stop and wait for the user's go.
+
+## Before phase 1: watch out
+
+- The branch was created with **uncommitted changes from `improve-phase-8` already in the working tree**: `docs/architecture/3d-and-look.md`,
+  `docs/architecture/frontend.md`, `src/static/{app,charts,ledgers,pace,palette,replay,scrubmarks,stream,tower,util}.js`,
+  `src/static/index.html`, `src/static/style.css`, `tests/test_{live,marks,multiviewer,pace}.mjs`. They are not part of this
+  plan. Ask the user whether to commit them first (on `improve-phase-8` or as the first commit here) before committing
+  anything; never sweep them into a phase commit with `git add -A`.
+- `docs/modernize-plan.md` and this file are not committed yet; phase 1 commits them with its own work.
+- The memory `desktop-only-for-now` was narrowed on 21 Nov: a mobile *light tier* (phase 2) is now in scope; other mobile
+  layout work still waits for the user.
+
+## Decisions taken in the planning session (21 Nov 2026)
+
+- The user asked to build every change the audit recommended, one phase per session, stopping after each.
+- Device textures: "desktop with great resources gets everything best; mobile gets a light version" (the user said
+  "slow"; read as light/low, confirm in phase 2 if unclear). Desktop high tier = Ultra, all 4k sets, 4k sky.
+- KTX2 stays out on desktop (lossy). Mobile uses smaller JPEGs instead, so no new encoder toolchain.
+- Electron, a Rust backend and a bundler stay rejected (see the plan's "Audit verdict").
+
+## Template for each phase's section
+
+```
+## Phase N: <name> (date)
+Commits: <hash> <subject>
+Done: <what changed, with file:function>
+Measured: <before -> after>
+Tests: <suites run, new tests>
+Not done or not verified, and why:
+Watch out: <traps the next session needs>
+Next: Phase N+1
+```
+
+## Phase 1: quick wins and baseline (21 Nov 2026)
+Commits: see git log (phase 1 commit on `modernize`)
+Done:
+- `.python-version` = 3.14.
+- `pyproject.toml`: direct `huggingface-hub` dropped; `uv.lock` still holds it through `onnx-asr[hub]`. Radio checked: a SAPI
+  WAV ("Box box, box this lap for hard tyres.") through `radio.transcribe` came back word for word.
+- `jsconfig.json` (`checkJs: false`, `noEmit`, `strict: false`, `files` = the five modules) + `// @ts-check` on `util.js`,
+  `sim.js`, `vehicle.js`, `share.js`, `palette.js`. Fixes, all JSDoc or casts, no behaviour change: `palette.js` SHORTCUTS
+  type and the search input cast; `share.js` `clean` param type and `String()` for the `t` param; `sim.js` thermal window as a
+  `[number, number]` tuple; `util.js` `globalPrivacyControl` through `any`.
+- CI (`.github/workflows/test.yml`) and `scripts/test_all.py` run `npx -y -p typescript@7.0.2 tsc -p jsconfig.json`;
+  test_all skips with a notice when `npx` is missing.
+- `docs/improvement-plan.md` phase 9 notes the overlap.
+Measured (RTX 4080 laptop, user's dev server on 8086, agent-browser headed 2040x1000):
+| Measure | Value |
+|---|---|
+| `#2026/1/results` cold (8 s after open) | 173 requests, 23.1 MB transferred, 26.6 MB decoded (5.5 MB JS), load event 1724 ms; 184 requests by 25 s |
+| `#2026/1/results` warm (reload) | 173 requests, 0.06 MB transferred, load event 413 ms |
+| `#2026/1/replay` Ultra (default preset), 40 s after open | 239 fps (rAF, likely the 240 Hz panel cap), 228 resources / 159 MB decoded, GPU memory 3951 -> 5272 MiB system-wide (+1.3 GB; the results page was already open), no window errors |
+| Requests per minute per idle tab | 1 (`/api/live/status`, `app.js` `checkLive` every 60 s). During a live session `replaylive.js` polls `/api/live` 1 s after each answer: up to 60/min (from the code; no live session to measure) |
+Tests: `scripts/test_all.py` all green, tsc included.
+Not done or not verified, and why: the live-session request count is read from the code, not measured (no session live).
+Watch out:
+- Resource Timing's buffer (250) fills on the replay page: call `performance.setResourceTimingBufferSize(10000)` before counting.
+- A long `agent-browser eval` (60 s promise) times out the daemon at ~30 s: set a marker, sleep in the script, read again.
+- `checkJs` stays false: only files with `// @ts-check` are checked; imported modules are typed from their JSDoc but not
+  reported. Modules importing `three` stay unchecked (no types for the import map).
+Next: Phase 2

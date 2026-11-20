@@ -1,7 +1,9 @@
+// @ts-check
 // Keyboard layer: ? the shortcut sheet, / the Drivers search (else the palette), Ctrl/Cmd+K the command palette, plus the
 // usage counts view. app.js registers the commands; the sheet lists the keys other modules really handle.
 import {el, count, failed, fmtDate, th, skeleton, toast} from './util.js';
 
+/** @type {[string, [string, string][]][]} */
 const SHORTCUTS = [
   ['Anywhere', [['?', 'This sheet'], ['/', 'Find a driver on the Drivers tab, else the command palette'], ['Ctrl K', 'Command palette (⌘ K on a Mac)'],
     ['Esc', 'Close a dialog or panel']]],
@@ -155,7 +157,7 @@ export function setupPalette({commands, driving}) {
     const what = action(e, {isTyping: typing(e.target), driving: driving(), modal});
     if (!what) return;
     e.preventDefault();  // Ctrl+K's address bar, Firefox's quick find on /
-    const search = document.querySelector('#tab-drivers input[type=search]');
+    const search = /** @type {HTMLInputElement | null} */ (document.querySelector('#tab-drivers input[type=search]'));
     if (what === 'sheet') openSheet();
     else if (what === 'slash' && search?.offsetParent) search.select();
     else openPalette(commands());
