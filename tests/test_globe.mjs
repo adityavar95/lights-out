@@ -1,6 +1,6 @@
 // The launch globe's maths: where a place sits on the sphere, which tiles cover it, and the flight to a circuit
 import assert from 'node:assert/strict';
-import {llToVec, vecToLL, tileLL, tilesRound, flight, over} from '../src/static/globemath.js';
+import {llToVec, vecToLL, tileLL, tilesRound, flight, over, namesFit} from '../src/static/globemath.js';
 
 const near = (a, b, eps = 1e-9) => assert.ok(Math.abs(a - b) < eps, `${a} != ${b}`);
 
@@ -48,4 +48,10 @@ assert.equal(over(ats, llToVec(50.44, 5.97), 0.0009), 1);
 assert.equal(over(ats, llToVec(45.9, 9.28), 0.004), -1);   // 30 km north of it: out of the window
 assert.equal(over(ats, llToVec(48, 7.6), 0.3), 0);         // between the two from high up: the nearer
 assert.equal(over([], llToVec(0, 0), 0.004), -1);
+// names: the higher rank keeps its name where two would overlap, a far one keeps its own, a name never covers a higher pin's dot
+const [hi, lo, far] = [{x: 100, y: 100, w: 40, rank: 4}, {x: 110, y: 104, w: 40, rank: 0}, {x: 400, y: 300, w: 40, rank: 0}];
+assert.deepEqual([...namesFit([lo, hi, far])].map(p => p.rank), [4, 0]);
+assert.ok(namesFit([lo, hi, far]).has(far) && namesFit([lo, hi]).has(hi) && !namesFit([lo, hi]).has(lo));
+assert.equal(namesFit([{x: 100, y: 100, w: 40, rank: 0}, {x: 120, y: 100, w: 40, rank: 9}]).size, 1);  // 2nd's dot sits under the 1st's name
+assert.equal(namesFit([]).size, 0);
 console.log('globe ok');

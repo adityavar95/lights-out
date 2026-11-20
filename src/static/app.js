@@ -610,10 +610,10 @@ async function init() {
   document.addEventListener('click', e => { const th = e.target.closest('table.data th'); if (th) sortTable(th); });
   takeToken();
   if (location.hash === '#stream') setSection('stream');
-  A.intro = location.hash === '#intro' || (!location.hash && !stored('f1seen'));
+  A.intro = location.hash === '#intro';  // the intro replay is by link only: home is the globe
   A.firstSeason = true;  // the first season loaded checks for a race new since the last visit
-  // a bare address opens on the globe, over the latest race (a first visit gets the intro instead)
-  if (!location.hash && !A.intro) showGlobe();
+  // a bare address opens on the globe, over the latest race
+  if (!location.hash) showGlobe();
   $('globebtn').onclick = showGlobe;
   // shortcut: polled, since the replay's time moves in a dozen places; replay.js could say so itself if a second reader appears
   setInterval(() => {
@@ -648,6 +648,7 @@ async function init() {
     setView('analytics');
     scrollTo({top: 0});
     if (A.round && replayKind(A.year, race(A.round).date) !== 'results') activate('replay');
+    showGlobe();  // the logo is home, and home is the globe
   };
   $('palbtn').onclick = () => openPalette(commands());
   setupPalette({commands, driving: () => capturing() && $('tab-replay').offsetParent});

@@ -17,6 +17,8 @@
   --glass-strong: light-dark(rgb(255 255 255 / .78), rgb(30 30 32 / .82));
   --lg-glass: light-dark(rgb(255 255 255 / .6), rgb(28 28 30 / .55));  /* iOS's tint, as glisse measured it: thin enough for the lens to show */
   --glass-blur: blur(22px) saturate(180%);
+  /* light caught on a pane of liquid glass: bright along the top-left edge, its reflection bottom-right, a faint glow just inside (after Stream's bevel) */
+  --lg-spec: inset 1px 1px 1px -.5px rgb(255 255 255 / .6), inset -1px -1px 1px -.5px rgb(255 255 255 / .42), inset 0 0 10px 3px rgb(255 255 255 / .08);
   --edge: light-dark(rgb(255 255 255 / .9), rgb(255 255 255 / .1));
   --edge-fade: light-dark(rgb(0 0 0 / .06), rgb(255 255 255 / .03));
   --hairline: light-dark(rgb(0 0 0 / .08), var(--dp-color-hairline));
@@ -64,34 +66,62 @@ button, select, input { font: inherit; color: var(--ink); }
 .spinner { width: 22px; height: 22px; border: 3px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* the launch globe (globe.js): under the top bar, over everything else; space is dark in either theme */
-.globe { position: fixed; inset: 0; z-index: 4; overflow: hidden; background: radial-gradient(circle at 50% 55%, #0b1422, #020308 70%); color: #f2f2f2; transition: opacity .9s ease-in; }
-.globe.out { opacity: 0; pointer-events: none; }
+/* the launch globe (globe.js): under the top bar, over everything else; space is dark in either theme. Home: it is the page a
+   bare address opens, so html.home's poster (index.html) stands in for it until its first frame, then it fades in over it */
+.globe { position: fixed; inset: 0; z-index: 4; overflow: hidden; color: #f2f2f2; opacity: 0; transition: opacity .7s ease-out;
+  background: var(--stars, none), radial-gradient(circle at 50% 50%, #13294a 0, #070e1b 36%, #020308 80%); }
+.globe.ready { opacity: 1; }
+.globe.out { opacity: 0; pointer-events: none; transition: opacity .9s ease-in; }
+.gposter { display: none; }
+html.home .gposter { display: block; position: fixed; inset: 0; z-index: 3; pointer-events: none;
+  background: radial-gradient(circle 46vh at 50% 50%, transparent 88%, rgb(111 178 255 / .45) 91%, transparent 100%),
+    radial-gradient(circle 41.4vh at 38% 34%, #3a7ca3 0, #1d5278 50%, #0d2d4a 100%),
+    radial-gradient(circle at 50% 50%, #13294a 0, #070e1b 36%, #020308 80%); }
 .globe canvas { display: block; width: 100%; height: 100%; touch-action: none; cursor: grab; }
 .globe canvas:active { cursor: grabbing; }
+/* glass over the globe: the lens (glass.js) bends the Earth through a pane with a faint cool tint, light caught on its edges (--lg-spec) */
+.ghint, .gplay, .gclose { background: rgb(10 14 26 / .5); box-shadow: var(--lg-spec), 0 18px 48px rgb(0 0 0 / .45); --lg-rim-shine: .45; --lg-blur: 10px; }
 .gpin { position: absolute; left: 0; top: 0; width: 12px; height: 12px; margin: -6px 0 0 -6px; padding: 0; border: 2px solid #fff; border-radius: 50%; background: var(--flag-red); box-shadow: 0 0 0 1px rgb(0 0 0 / .55), 0 0 10px rgb(225 6 0 / .7); cursor: pointer; }
 .gpin::before { content: ''; position: absolute; inset: -7px; }  /* a 26 px target */
 .gpin:is(:hover, :focus-visible) { z-index: 1; scale: 1.35; }
-.gpin span { display: none; position: absolute; left: 50%; bottom: 14px; translate: -50%; padding: 4px 8px; border-radius: var(--dp-radius-panel); background: rgb(8 8 8 / .88); color: #f2f2f2; font-size: 12px; line-height: 1.35; white-space: nowrap; pointer-events: none; }
+.gpin span { display: none; position: absolute; left: 50%; bottom: 16px; translate: -50%; padding: 6px 12px; border-radius: var(--r-md); background: rgb(10 12 18 / .78); border: 1px solid rgb(255 255 255 / .2);
+  box-shadow: var(--lg-spec); color: #f2f2f2; font-size: 12px; line-height: 1.35; white-space: nowrap; pointer-events: none; }
 .gpin:is(:hover, :focus-visible) span { display: grid; justify-items: center; }
 .gpin small { color: #a6a9ad; font-size: 12px; }
-/* every pin names its country; the race on screen is a filled white dot, the next race an outlined one */
-.gname { position: absolute; left: 12px; top: 50%; translate: 0 -50%; font: 500 12px/1 var(--face); font-style: normal; color: #ececec; white-space: nowrap; text-shadow: 0 1px 3px #000, 0 0 6px #000; pointer-events: none; }
+/* every pin names its country, in a chip, where there is room for it (globe.js labels); the race on screen is a filled white dot, the next race an outlined one */
+.gname { position: absolute; left: 14px; top: 50%; translate: 0 -50%; padding: 3px 8px; border-radius: var(--r-pill); background: rgb(8 10 16 / .6); border: 1px solid rgb(255 255 255 / .16);
+  font: 500 12px/1 var(--face); font-style: normal; color: #f2f2f2; white-space: nowrap; pointer-events: none; transition: opacity .2s; }
+.gname.off { opacity: 0; }
 .gpin:is(:hover, :focus-visible) .gname { display: none; }
 .gpin[data-state=shown] { background: #fff; }
 .gpin[data-state=next] { background: transparent; }
-.ghint { position: absolute; left: 50%; bottom: 28px; translate: -50%; margin: 0; padding: 0 16px; width: max-content; max-width: 100%; text-align: center; font-size: 13px; color: #c9ccd0; text-shadow: 0 1px 6px #000; pointer-events: none; }
-.gplay { position: absolute; left: 50%; bottom: 64px; translate: -50%; display: grid; justify-items: center; gap: 12px; width: max-content; max-width: 100%; padding: 0 16px; text-align: center; text-shadow: 0 1px 6px #000; opacity: 0; visibility: hidden; transition: opacity .35s, visibility .35s; }
-.gplay.on { opacity: 1; visibility: visible; }
-.gplay span { display: grid; }
-.gplay b { font-size: 18px; font-weight: 500; }
+.ghint { position: absolute; left: 50%; bottom: 32px; translate: -50%; margin: 0; padding: 12px 24px; width: max-content; max-width: calc(100% - 24px); border-radius: var(--r-pill); text-align: center; font-size: 13px; color: #c9ccd0; pointer-events: none; }
+.ghint b { color: #fff; }
+/* the circuit's panel, from the moment a pin is chosen: where it is, what is known of it, and every way in */
+.gplay { position: absolute; left: 24px; top: 50%; translate: -16px -50%; display: grid; gap: 16px; width: 320px; max-width: calc(100% - 24px); padding: 24px; border-radius: var(--r-md); text-align: left;
+  opacity: 0; visibility: hidden; transition: opacity .35s, translate .35s var(--spring), visibility .35s; }
+.gplay.on { opacity: 1; visibility: visible; translate: 0 -50%; }
+.gplay span { display: grid; gap: 2px; }
+.gplay b { font-size: 24px; font-weight: 500; letter-spacing: -.02em; line-height: 1.1; }
 .gplay small { font-size: 13px; color: #c9ccd0; }
-.gplay button { padding: 10px 32px; border: 0; border-radius: var(--r-pill); background: #f2f2f2; color: #111; font-size: 15px; font-weight: 500; text-shadow: none; cursor: pointer; transition: scale .15s; }
-.gplay button:is(:hover, :focus-visible) { scale: 1.06; }
-.gplay button:disabled { opacity: .75; scale: 1; cursor: progress; }
+.gplay .geyebrow { margin-bottom: 8px; font: 500 12px/1 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: #8fb4e8; }
+.gplay .gfact { font-variant-numeric: tabular-nums; }
+.gplay .gfact:first-of-type { margin-top: 8px; }
+.gplay button { padding: 8px 12px; border-radius: var(--r-pill); font-size: 13px; font-weight: 500; cursor: pointer; transition: scale .15s, background .15s; }
+.gplay .gprimary { padding: 12px 24px; border: 0; background: #f2f2f2; color: #111; font-size: 15px; box-shadow: 0 6px 20px rgb(0 0 0 / .35); }
+.gplay .gprimary:is(:hover, :focus-visible) { scale: 1.03; }
+.gplay .gprimary:disabled { opacity: .75; scale: 1; cursor: progress; }
+.gacts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.gacts:empty { display: none; }
+.gplay .gacts button { background: rgb(255 255 255 / .09); color: #f2f2f2; border: 1px solid rgb(255 255 255 / .22); }
+.gplay .gacts button:is(:hover, :focus-visible) { background: rgb(255 255 255 / .2); }
+.gplay .gacts button:disabled { opacity: .5; cursor: progress; }
+.gplay .gback { justify-self: start; padding: 4px 0; border: 0; background: none; color: #c9ccd0; }
+.gplay .gback:is(:hover, :focus-visible) { color: #fff; }
 .gcredit { position: absolute; right: 12px; bottom: 8px; font-size: 12px; color: #8a8d91; pointer-events: none; }
-.gclose { position: absolute; right: 16px; top: 76px; color: #f2f2f2; }  /* top right, under the globe button that opened it; clear of the top bar */
-@media (max-width: 1140px) { .gclose { top: 120px; } }  /* the bar wraps to two rows */
+.globe .gclose { position: absolute; right: 16px; top: 76px; width: auto; height: 36px; padding: 0 16px; border-radius: var(--r-pill); color: #f2f2f2; font-size: 13px; font-weight: 500; white-space: nowrap; }  /* top right, clear of the top bar */
+@media (max-width: 1140px) { .globe .gclose { top: 120px; } }  /* the bar wraps to two rows */
+@media (max-width: 900px) { .gplay { left: 50%; top: auto; bottom: 64px; translate: -50% 16px; } .gplay.on { translate: -50% 0; } }
 @media (max-width: 700px) { .gcredit { right: 0; left: 0; text-align: center; } .ghint { bottom: 34px; } }
 
 /* top bar + calendar */
@@ -1533,7 +1563,7 @@ html.lg-moving .topbar::before { -webkit-backdrop-filter: blur(var(--lg-blur, 5p
 @media (prefers-reduced-transparency: reduce) { .topbar::before { -webkit-backdrop-filter: none; backdrop-filter: none; } }
 /* the bar floats off the page's edge as a glass pill; on Stream it is clear until the page scrolls */
 .topbar { top: 8px; margin: 8px 12px 0; padding: 8px 16px; border-bottom: 0; border-radius: var(--dp-radius-pill); }
-.topbar::before { border-radius: inherit; }
+.topbar::before { border-radius: inherit; box-shadow: var(--lg-spec); }
 body[data-section=stream] .topbar { top: 8px; left: 12px; right: 12px; margin: 0; }
 body[data-section=stream] .topbar::before { box-shadow: inset 0 0 0 1px rgb(255 255 255 / .12); }
 @media (max-width: 900px) { .topbar { border-radius: var(--r-md); } }
@@ -1623,11 +1653,5 @@ kbd { padding: 1px 8px; border: 1px solid var(--hairline); border-radius: var(--
 .strailer { width: min(1280px, calc(100vw - 48px)); padding: 0; overflow: hidden; background: #000; }
 .strailer video { display: block; width: 100%; aspect-ratio: 16 / 9; }
 .strailer .dclose { z-index: 1; }
-/* the globe card's dossier (globe.js card, app.js dossier): facts under the name, the other ways in under Play */
-.gplay .gfact { font-variant-numeric: tabular-nums; }
-.gacts { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
-.gacts:empty { display: none; }
-.gplay .gacts button { padding: 6px 16px; font-size: 13px; background: rgb(242 242 242 / .14); color: #f2f2f2; border: 1px solid rgb(242 242 242 / .35); }
-.gplay .gacts button:is(:hover, :focus-visible) { background: rgb(242 242 242 / .26); }
 /* the team colours button (app.js setTeam): a swatch of the accent it sets */
 .teambtn i { display: block; width: 12px; height: 12px; margin: auto; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 1px var(--hairline); }
