@@ -11,7 +11,7 @@ version**. One phase per session; the handoff doc carries state between sessions
 - [x] Phase 3: load the 3D stage and Stream on demand
 - [x] Phase 4: live feed as a push stream (SSE)
 - [x] Phase 5: TRAA trial (ships only if the picture doesn't get worse)
-- [ ] Phase 6: wrap-up: docs, exe build, full check
+- [x] Phase 6: wrap-up: docs, exe build, full check
 
 Handoff (single, cumulative): `docs/handover/modernize.md`.
 

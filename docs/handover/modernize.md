@@ -6,8 +6,8 @@ updates "Current state". This is the one handoff file for the whole plan.
 ## Current state
 
 - Branch: `modernize` (from `improve-phase-8`, HEAD `fff158f`, 21 Nov 2026).
-- Done: phase 1, phase 2, phase 3, phase 4 (21 Nov 2026).
-- Next: **Phase 5** (TRAA trial). Start a new session and type: *"Do phase 5 of docs/modernize-plan.md."*
+- Done: phases 1-6 (21 Nov 2026). The plan is complete.
+- Next: the user decides on a PR / merge of `modernize` into `master` (not opened: ask first).
 - Rule: after each phase, stop and wait for the user's go.
 
 ## Before phase 1: watch out
@@ -194,3 +194,33 @@ Not done or not verified, and why:
 - Only the overview at rest was compared. Fences, kerbs, car edges, smoke and sky at speed weren't shot, because it already failed at rest.
 - Still frames redraw at 4 fps (`scene3d.js` still check), so TRAA converges slowly on a paused view.
 Next: Phase 6
+
+## Phase 6: wrap-up (21 Nov 2026)
+Commits: see git log (phase 6 commit on `modernize`)
+Done:
+- Docs: `frontend.md` (`app.js` `loadStage`/`R`/`onStage`/`shown`, `live.js` `streamLive` + `replaylive.js` fallback, device tiers
+  where the photo sets are described), `backend.md` (`/api/live/stream`, `/api/live/ticket`, graceful shutdown), `3d-and-look.md`
+  (TRAA opt-in), `testing.md` (`test_app.mjs`, tsc line, live fixture), `CLAUDE.md` (tsc command; stage, tier and live rules).
+- Exe: `scripts/build_exe.py` built `dist/LightsOut/` (298 MB). Smoke test with `LIGHTSOUT_PORT=8091` (so it didn't reuse the dev
+  server): launcher served, `#2026/1/replay` stage up with the "Press ▶" hint, `#stream` 264 cards, Download assets started
+  (`/api/assets` running, 6 of 24686 done in 20 s), window error listener empty throughout. Exe stopped after.
+Measured (agent-browser headed 2040x1000, dev server on 8086, fresh session):
+| Measure | Phase 1 | Phase 6 |
+|---|---|---|
+| `#2026/1/results` cold, 8 s | 173 req, 23.1 MB xfer, 26.6 MB decoded (5.5 MB JS), load 1724 ms | 98 req, 0.60 MB xfer, 0.89 MB decoded (0.41 MB JS), load 204 ms |
+| `#2026/1/results` warm (reload) | 173 req, 0.06 MB xfer, load 413 ms | 95 req, 0.03 MB xfer, load 115 ms |
+| `#2026/1/replay` Ultra, 40 s | 239 fps rAF, 228 res / 159 MB decoded, GPU +1.3 GB (5272 MiB total) | 208-212 fps rAF, 211 res / 159 MB decoded, GPU 2764 -> 4530 MiB (+1.77 GB) |
+| Live requests per minute per tab | up to 60 (1 s poll) | 1 stream + 1 first `/api/live` (phase 4) |
+Reading the replay row: phase 1's GPU delta started with the results page already holding the stage (it loaded it then), phase 6's
+from a page with no stage, so the deltas don't compare; the system-wide total after is 740 MiB lower. The rAF rate is the
+compositor's at an idle overview (the stage redraws only when something moves), not GPU-bound; one run overlapped the exe build (199).
+Tests: `scripts/test_all.py` all green, tsc included; `trail check` no conflicts (20 "worth a look", all keyword hits on frontend.md's one long line).
+Not done or not verified, and why:
+- The first exe run exited (code 0) mid-test, as Download assets was clicked: the log shows the interpreter shutting down, which in
+  `desktop.py` only happens when every window closes (the launcher). Nothing in the app closes it; most likely the launcher window
+  was closed from outside. A second run kept going and downloaded. Not reproduced.
+- The replay row wasn't measured at the same hash/camera as phase 1 with the same page history, so fps/GPU before/after is indicative.
+- The exe's Download assets left a partial download in `%LOCALAPPDATA%\LightsOut` (it resumes).
+Watch out:
+- A failed asset download is remembered by the page: the button reads "Retry download" on the next start.
+Next: none (plan complete). Ask the user before any PR or merge into `master`.

@@ -1,10 +1,10 @@
 # Tests
 
-Run all JS tests: `for f in tests/test_*.mjs; do node "$f"; done`
+Run all JS tests: `for f in tests/test_*.mjs; do node "$f"; done`. `scripts/test_all.py` runs everything, tsc included. `tests/test_server.py` also covers `/api/live/stream` by playing `tests/fixtures/live.jsonl` through `LIGHTSOUT_LIVE_PLAY`.
 
 ```bash
 .venv/Scripts/python tests/test_server.py  # tests (plain asserts, no pytest)
-node tests/test_live.mjs                   # live car-placement logic
+node tests/test_live.mjs                   # live car-placement logic; streamLive parsing, ticket, failover
 node tests/test_telemetry.mjs              # derived HUD telemetry (g-forces, tyres, ERS, DRS zones)
 node tests/test_sim.mjs                    # race simulation physics (aero, DRS, tyres, full race)
 node tests/test_player.mjs                 # player driving (steering, TC/ABS, gearbox) and AI racecraft
@@ -32,6 +32,8 @@ node tests/test_marks.mjs                  # scrubber pins: GPS, lap-timing and 
 node tests/test_story.mjs                  # the Why: lead changes through pit cycles, pit-call verdicts, red flags, slow stops
 node tests/test_pitdata.mjs                # telemetry drawer maths: tyre bands, traction ellipse, shift lights, strip buffer
 node tests/test_dash.mjs                    # cockpit wheel screen: shift lights
-node tests/test_graphics.mjs                # stage settings: presets, validation of what localStorage holds
+node tests/test_graphics.mjs                # stage settings: presets, validation of what localStorage holds; device tier rule, TRAA off in presets
 node tests/test_play.mjs                    # Play: lap choices, stored setup and time-trial bests, the time trial's one-car race
+node tests/test_app.mjs                     # app.js's static import graph reaches no three.js module; replayKind
+npx -y -p typescript@7.0.2 tsc -p jsconfig.json  # type check of the // @ts-check modules (jsconfig.json files)
 ```
