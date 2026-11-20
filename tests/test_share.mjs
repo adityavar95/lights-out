@@ -71,4 +71,18 @@ assert(!held(s, {t: 1234.5}));  // another session (the race)
 assert(held(parseHash('#2026/1/replay?t=50'), {t: 50.4}));  // no session = the race
 assert(held(parseHash('#2026/1/replay?focus=VER'), {t: 900}));  // no time in the link: nothing to move off
 
+// phase 8 deep links: a career, a Strategy lab plan, a showroom car
+assert.equal(parseHash('#2025/24/drivers?career=max_verstappen').career, 'max_verstappen');
+assert.equal(formatHash({year: 2025, round: 24, tab: 'drivers', career: 'max_verstappen'}), '#2025/24/drivers?career=max_verstappen');
+for (const v of ['Max', 'a b', '../x', 'x'.repeat(41)]) assert.equal(parseHash(`#2025/1/drivers?career=${encodeURIComponent(v)}`).career, undefined, v);
+assert.deepEqual(parseHash('#2025/24/strategy?focus=norris&stops=18,40').stops, [18, 40]);
+assert.deepEqual(parseHash('#2025/24/strategy?focus=norris&stops=').stops, []);  // a no-stop plan
+assert.equal(parseHash('#2025/24/strategy').stops, undefined);
+for (const v of ['x', '0', '201', '1.5', '1,,2', '1,2,3,4,5,6']) assert.equal(parseHash(`#2025/1/strategy?stops=${v}`).stops, undefined, v);
+assert.equal(formatHash({year: 2025, round: 24, tab: 'strategy', focus: 'norris', stops: [18, 40]}), '#2025/24/strategy?focus=norris&stops=18,40');
+assert.equal(formatHash({year: 2025, round: 24, tab: 'strategy', focus: 'norris', stops: []}), '#2025/24/strategy?focus=norris&stops=');
+assert.equal(parseHash('#2026/18/replay?car=2009').car, 2009);
+for (const v of ['1995', '2027', 'x', '20090']) assert.equal(parseHash(`#2026/18/replay?car=${v}`).car, undefined, v);
+assert.equal(formatHash(parseHash('#2026/18/sim?car=2009')), '#2026/18/sim?car=2009');
+
 console.log('test_share: ok');

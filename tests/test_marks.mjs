@@ -1,6 +1,6 @@
 // Run: node tests/test_marks.mjs  — the scrubbers' important events (scrubmarks.js): GPS, lap-timing and F1 TV sources.
 import assert from 'node:assert/strict';
-import {gpsMarks, storyMarks, sessionMarks} from '../src/static/scrubmarks.js';
+import {gpsMarks, storyMarks, sessionMarks, radioMarks} from '../src/static/scrubmarks.js';
 
 const rc = [[1000, 'SafetyCar', null, 'SAFETY CAR DEPLOYED'], [1200, 'Flag', 'GREEN', 'TRACK CLEAR'], [3000, 'Flag', 'CHEQUERED', 'CHEQUERED FLAG']];
 const positions = [[0, '1', 1], [0, '2', 2], [2000, '2', 1], [2000, '1', 2]];
@@ -51,5 +51,14 @@ const quali = [[1000, 'Flag', 'CHEQUERED', 'CHEQUERED FLAG'], [2000, 'Flag', 'CH
 assert.equal(gpsMarks({duration: 3000, race_control: quali, intervals: []}).pins.length, 2);
 assert.equal(sessionMarks({duration: 3000, race_control: quali, positions: [], drivers: []}).pins.length, 2);
 assert.equal(sessionMarks({duration: 3000, race_control: quali, positions: [], drivers: [], first_lap: 10}).pins.filter(p => p.kind === 'finish').length, 1, 'a race has one flag');
+
+// team radio: at its moment on the replay's clock, landing 2 s before; a clip with no words dropped
+{
+  const r = radioMarks([{t: 1700000100, url: 'a.mp3', driver: 1, text: 'Box box'}, {t: 1700000001, url: 'b.mp3', driver: 44, text: null},
+    {t: 1700000200, url: 'c.mp3', driver: 1, text: ''}], '2023-11-14T22:13:20+00:00');
+  assert.deepEqual(r.map(p => [p.t, p.seek, p.id, p.clip]), [[100, 98, '1', 'a.mp3'], [1, 0, '44', 'b.mp3']]);
+  assert.match(r[0].label, /Box box/);
+  assert.equal(r[0].kind, 'radio');
+}
 
 console.log('ok - marks');

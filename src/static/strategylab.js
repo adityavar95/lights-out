@@ -12,8 +12,9 @@ const slope = s => `${s < 0 ? '−' : '+'}${Math.abs(s).toFixed(3)}`;
 const lapTime = s => `${Math.floor(s / 60)}:${(s % 60).toFixed(3).padStart(6, '0')}`;
 const NO_STOPS = year => (year < 2011 ? 'Jolpica has no pit stops before 2011' : 'Jolpica has no pit stops for this race yet');
 
-// why: what to say when the race has no laps (it hasn't run, or it's before 1996)
-export function renderStrategyLab(root, laps, results, pits, year, why, round) {
+// why: what to say when the race has no laps (it hasn't run, or it's before 1996); link: {id, stops}, a shared plan (share.js)
+// that the tab opens on instead of the best one. A plan the reader makes goes in the address (f1:address, app.js).
+export function renderStrategyLab(root, laps, results, pits, year, why, round, link = null) {
   if (!laps.length || !results.length) return root.replaceChildren(el('p', {class: 'empty'}, why));
   const M = raceModel(laps, pits);
   const info = Object.fromEntries(results.map(r => [r['Driver.driverId'], r]));
@@ -22,7 +23,9 @@ export function renderStrategyLab(root, laps, results, pits, year, why, round) {
   const raceLaps = Math.max(...ids.map(id => M.times[id].length));
   const label = id => (info[id] ? code(info[id]) : id);
   const color = id => (info[id] ? teamColor(info[id]['Constructor.constructorId'], info[id]['Constructor.name']) : 'var(--muted)');
-  const S = {id: ids[1] ?? ids[0], plan: [], pass: 'normal'};
+  const S = {id: ids.includes(link?.id) ? link.id : ids[1] ?? ids[0], plan: [], pass: 'normal'};
+  const note = () => dispatchEvent(new CustomEvent('f1:address', {detail: {focus: S.id, stops: S.plan}}));
+  const change = () => { draw(); note(); };  // the reader's own change: the address keeps the plan
 
   const driver = el('select', {'aria-label': 'Driver'}, ids.map(id => new Option(`${label(id)} · ${info[id].positionText}`, id)));
   const pass = el('select', {'aria-label': 'How hard it is to pass on track'},
@@ -33,14 +36,14 @@ export function renderStrategyLab(root, laps, results, pits, year, why, round) {
   const add = el('button', {class: 'labbtn', onclick: () => {
     const last = S.plan.at(-1) ?? 0, n = M.times[S.id].length;
     S.plan.push(Math.min(n - 2, Math.max(last + 5, Math.round((last + n) / 2))));
-    draw();
+    change();
   }}, '+ Stop');
-  const resetBtn = el('button', {class: 'labbtn', onclick: () => { S.plan = [...M.stops[S.id]]; draw(); }}, 'Real strategy');
+  const resetBtn = el('button', {class: 'labbtn', onclick: () => { S.plan = [...M.stops[S.id]]; change(); }}, 'Real strategy');
   const search = el('button', {class: 'labbtn primary', onclick: () => findBest()}, 'Find best strategy');
 
   driver.value = S.id;
   pass.value = S.pass;
-  const load = id => { S.id = id; driver.value = id; S.plan = [...M.stops[id]]; best.replaceChildren(); draw(); };
+  const load = id => { S.id = id; driver.value = id; S.plan = [...M.stops[id]]; best.replaceChildren(); change(); };
   driver.onchange = () => load(driver.value);
   pass.onchange = () => { S.pass = pass.value; best.replaceChildren(); draw(); };
   S.plan = [...M.stops[S.id]];
@@ -59,7 +62,7 @@ export function renderStrategyLab(root, laps, results, pits, year, why, round) {
     if (id !== S.id) return;
     const plans = ranked(parts.flat()), real = simulate(M, id, M.stops[id], {pass: PASS[S.pass]});
     best.replaceChildren(el('h3', {}, 'Best plans found'), ...plans.map(p => el('button', {
-      class: 'labplan', onclick: () => { S.plan = [...p.plan]; draw(); }},
+      class: 'labplan', onclick: () => { S.plan = [...p.plan]; change(); }},
       el('b', {}, `P${p.finish}`), ` ${p.plan.length ? `stop${p.plan.length > 1 ? 's' : ''} on lap ${p.plan.join(', ')}` : 'no stop'}`,
       el('span', {class: p.time < real.time ? 'up' : 'down'}, ` ${signed(p.time - real.time)}`))));
     if (apply && plans[0]) { S.plan = [...plans[0].plan]; draw(); }
@@ -73,9 +76,9 @@ export function renderStrategyLab(root, laps, results, pits, year, why, round) {
       const out = el('output', {}, `lap ${lap}`);
       const range = el('input', {type: 'range', min: 1, max: n - 1, value: lap, 'aria-label': `Stop ${k + 1} lap`});
       range.oninput = () => { S.plan[k] = +range.value; out.textContent = `lap ${range.value}`; update(); };
-      range.onchange = draw;  // re-sort and redraw the sliders once the drag ends
+      range.onchange = change;  // re-sort and redraw the sliders once the drag ends
       return el('div', {class: 'lab-stop'}, el('span', {class: 'muted small'}, `Stop ${k + 1}`), range, out,
-        el('button', {class: 'labx', 'aria-label': `Remove stop ${k + 1}`, onclick: () => { S.plan.splice(k, 1); draw(); }}, '×'));
+        el('button', {class: 'labx', 'aria-label': `Remove stop ${k + 1}`, onclick: () => { S.plan.splice(k, 1); change(); }}, '×'));
     }), add);
     update();
 
@@ -220,5 +223,6 @@ export function renderStrategyLab(root, laps, results, pits, year, why, round) {
         notes),
       el('div', {}, best, el('h3', {}, 'What-if finishing order'), order))),
     pace, ledgerCard());
-  findBest(true);
+  if (link && S.id === link.id) { S.plan = [...link.stops]; draw(); }
+  findBest(!(link && S.id === link.id));
 }

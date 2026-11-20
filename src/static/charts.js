@@ -3,6 +3,7 @@ import {el, svg, teamColor, th, signed} from './util.js';
 import {raceModel} from './whatif.js';
 import {raceTrace, roadVsClassified} from './pace.js';
 import {faces} from './drivers.js';
+import {favourite, favTeam, firstOf} from './favourite.js';
 
 const tipEl = el('div', {class: 'tooltip', role: 'tooltip', hidden: true});
 document.body.append(tipEl);
@@ -23,6 +24,8 @@ const empty = text => el('p', {class: 'empty'}, text);
 const NO_STOPS = 'Jolpica has no pit stops for this race (its records start in 2011).';
 const FOLLOW = 'Hover a line or a name to follow one driver; tap to pin it, tap again to let go.';
 
+// the reader's favourite driver (favourite.js): first in the tables, marked
+const isFav = r => (r['Driver.driverId'] ?? null) === favourite()?.id;
 function driverCell(r) {
   return el('td', {class: 'drv'}, chip(teamColor(r['Constructor.constructorId'], r['Constructor.name'])),
     el('b', {}, code(r)), ' ', el('span', {class: 'muted'}, name(r)));
@@ -58,9 +61,9 @@ function classification(rows, title) {
     el('div', {class: 'tablewrap'}, el('table', {class: 'data'},
       el('thead', {}, el('tr', {}, ['Pos', 'Driver', 'Team', 'Grid', 'Laps', 'Time / status', 'Pts', 'Fastest lap']
         .map(th))),
-      el('tbody', {}, rows.map(r => {
+      el('tbody', {}, firstOf(rows, isFav).map(r => {
         const out = ['W', 'F'].includes(r.positionText), grid = out ? 0 : +r.grid, pos = +r.position, delta = grid ? grid - pos : null;  // W / F: never started
-        return el('tr', {},
+        return el('tr', {class: isFav(r) ? 'fav' : ''},
           el('td', {class: 'num'}, r.positionText),
           driverCell(r),
           el('td', {class: 'muted'}, r['Constructor.name']),
@@ -281,22 +284,23 @@ export function renderLapChart(root, laps, results, pitstops, why) {
 // note: what these standings are, when they aren't the race's own
 export function renderStandings(root, drivers, constructors, note) {
   if (!drivers.length) return root.replaceChildren(empty('No standings yet.'));
-  const bars = (title, rows, label, teamOf) => {
+  const team = favTeam();
+  const bars = (title, rows, label, teamOf, mine) => {
     const max = Math.max(...rows.map(r => +r.points), 1);
-    return el('div', {class: 'card'}, el('h2', {}, title), el('ol', {class: 'bars'}, rows.map((r, i) => {
+    return el('div', {class: 'card'}, el('h2', {}, title), el('ol', {class: 'bars'}, firstOf(rows, mine).map(r => {
       const [tid, tname] = teamOf(r);
-      return el('li', {onmousemove: e => tip(e, el('b', {}, label(r)), el('br'), `${r.points} pts · ${r.wins} win${r.wins === '1' ? '' : 's'}`),
+      return el('li', {class: mine(r) ? 'fav' : '', onmousemove: e => tip(e, el('b', {}, label(r)), el('br'), `${r.points} pts · ${r.wins} win${r.wins === '1' ? '' : 's'}`),
                        onmouseleave: () => tip(null)},
         el('span', {class: 'num pos'}, r.position),
         el('span', {class: 'who'}, chip(teamColor(tid, tname)), label(r)),
         el('span', {class: 'track'}, el('span', {class: 'fill', style: `width:${+r.points / max * 100}%`})),
         el('span', {class: 'num pts'}, r.points),
-        el('span', {class: 'num gap', title: 'Points behind the leader'}, i ? `−${+(max - +r.points).toFixed(1)}` : ''));
+        el('span', {class: 'num gap', title: 'Points behind the leader'}, +r.points < max ? `−${+(max - +r.points).toFixed(1)}` : ''));
     })));
   };
   root.replaceChildren(...(note ? [el('p', {class: 'muted small'}, note)] : []), el('div', {class: 'twocol'},
     bars('Drivers', drivers, r => `${r['Driver.givenName']} ${r['Driver.familyName']}`,
-         r => [r.Constructors?.at(-1)?.constructorId, r.Constructors?.at(-1)?.name]),
+         r => [r.Constructors?.at(-1)?.constructorId, r.Constructors?.at(-1)?.name], isFav),
     constructors.length ? bars('Constructors', constructors, r => r['Constructor.name'],
-                               r => [r['Constructor.constructorId'], r['Constructor.name']]) : null));
+                               r => [r['Constructor.constructorId'], r['Constructor.name']], r => !!team && r['Constructor.constructorId'] === team) : null));
 }

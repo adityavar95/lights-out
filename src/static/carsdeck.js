@@ -61,19 +61,26 @@ let opening = null;  // the showroom's device and scene, ready to show a car
 
 // C opens and closes it from anywhere on the stage
 export const toggleCars = () => toggle();
+// a link's car (share.js car): the deck open on that season's champion
+export function openCar(year) {
+  if (!CARS[year] || !D) return;
+  if (D.panel.hidden) { D.year = year; toggle(true); }
+  era(ERAS.find(e => year >= e[1] && year <= e[2])[1], year);
+}
+const address = car => dispatchEvent(new CustomEvent('f1:address', {detail: car ? {car} : {}}));  // the open car is in the address
 
 function toggle(open = D.panel.hidden, restore = true) {
   D.panel.hidden = !open;
   if (open) dispatchEvent(new CustomEvent('f1:panel', {detail: D.panel}));
   D.btn.setAttribute('aria-expanded', open);
-  if (!open) { closeShowroom(); D.focus.closed(restore); return; }
+  if (!open) { closeShowroom(); D.focus.closed(restore); address(null); return; }
   D.focus.opened();
   opening = openShowroom(D.canvas);
   if (D.year === null) era(2026);
 }
 
-// one card per season of the era starting `from`
-function era(from) {
+// one card per season of the era starting `from`; year: the one to show, else the era's last
+function era(from, year) {
   const [, , to] = ERAS.find(e => e[1] === from);
   [...D.chips.children].forEach((b, i) => b.setAttribute('aria-pressed', ERAS[i][1] === from));
   const cards = [];
@@ -84,11 +91,12 @@ function era(from) {
       el('div', {class: 'cdname'}, `${y} · ${e.name}`)));
   }
   D.grid.replaceChildren(...cards);
-  pick(from === 2026 ? 2026 : to);
+  pick(year ?? to);
 }
 
 async function pick(year) {
   D.year = year;
+  address(year);
   for (const c of D.grid.children) c.setAttribute('aria-current', c.dataset.year === String(year));
   const [team, chassis, supplier, note] = CARS[year], e = engine(year), s = spec(year);
   const hp = Math.round((e.pIce + e.pK) / 745.7 / 10) * 10;

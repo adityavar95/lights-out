@@ -4,8 +4,9 @@ import {compared, openCompare} from './tracemodal.js';
 import {highlightReel, shotsFor} from './highlights.js';
 import {setupStory} from './storypanel.js';
 import {nextMoment} from './moments.js';
-import {markLayer, gpsMarks, lapMarks, NO_MARKS} from './scrubmarks.js';
-import {get, el, rows, failed, teamColor, fmtClock, fmtLap, lastBefore, trackStatus, led, covered, dropUp, count} from './util.js';
+import {markLayer, gpsMarks, lapMarks, radioMarks, NO_MARKS} from './scrubmarks.js';
+import {favourite} from './favourite.js';
+import {get, el, rows, tvHeaders, failed, teamColor, fmtClock, fmtLap, lastBefore, trackStatus, led, covered, dropUp, count} from './util.js';
 import {init3d, setTrack, setCars, updateCars, setView, setParts, setTyre, setGround, setPitLane, setStartLights, setDaylight, nextSky, nextTier, announce, hasCockpitWheel, setGhost, setTagPositions, timed} from './scene3d.js';
 import {setupOnboard, setCameraUi, setWheelAngle, nextCamera} from './onboard.js';
 import {liveInfo, liveStatus, liveClock} from './live.js';
@@ -427,6 +428,7 @@ async function loadData(autoplay) {
     prepare(data);
     if (data.mode === 'gps' && data.intervals?.length) S.t = Math.max(0, lightsOut(data) - 6);  // a race opens on the grid, not a ~90 s formation lap
     if (S.selected && !S.byId[S.selected]) S.selected = null;  // not in this session
+    if (!S.selected && !S.sim) S.selected = favCar();  // a link's focus (useLink) still wins
     setOverlay('');
     if (S.sim && !S.selected && S.cam === 'overview' && S.drivers?.[0]) { S.selected = S.drivers[0].id; setMode('follow'); }  // in the overview the grid is a speck at the frame's edge
     useLink(!!early);
@@ -451,6 +453,9 @@ async function loadData(autoplay) {
   }
 }
 
+// the reader's favourite driver's car (favourite.js), picked out in the tower; lap-timing replays key cars by Jolpica id
+const favCar = () => { const f = favourite(); return f && S.drivers?.find(d => d.id === f.id || (f.code && d.code === f.code))?.id || null; };
+
 // lap timing counts from lights out; a GPS replay starts a minute or two before it, lights out being lap 1's start
 // (laps feed: [start, driver, lap, ...]). 0 when there's no such feed (lap-timing replays)
 const lightsOut = d => { const go = (d.laps ?? []).filter(e => e[2] === 1).map(e => e[0]); return go.length ? Math.min(...go) : 0; };
@@ -470,6 +475,7 @@ function swapToGps(g, token, standIn) {
   prepare(g);
   S.t = Math.min(t, g.duration);
   if (S.selected && !S.byId[S.selected]) S.selected = null;  // Jolpica driver ids there, car numbers here
+  if (!S.selected) S.selected = favCar();
   render(true);
   if (S.cam !== 'overview') setMode(S.cam);  // follows the leader again if the followed car was dropped
   useLink(false);
@@ -534,9 +540,24 @@ function jumpMoment(dir) {
   if (ui.has3d) announce(x.label);
 }
 
+// radio: the followed car's team radio joins the pins (S.radio, every car's), but not , and .
 function showMarks(marks) {
   S.moments = marks.pins;  // , and . step through them
-  ui.marks.set(marks, S.data.duration);
+  S.marks = marks;
+  S.radioFor = S.selected;
+  const radio = (S.selected && S.radio?.filter(m => m.id === S.selected)) || [];
+  ui.marks.set(radio.length ? {...marks, pins: [...marks.pins, ...radio]} : marks, S.data.duration);
+}
+
+// one clip, through the server with the reader's F1 TV token (F1 refuses the audio without one)
+let clipAudio = null;
+async function playClip(url) {
+  clipAudio?.pause();
+  const r = await fetch(`/api/f1tv/radio/audio?${new URLSearchParams({u: url})}`, {headers: tvHeaders()}).catch(() => null);
+  if (!r?.ok) return announce(r?.status === 401 ? 'Connect F1 TV in Stream to hear team radio' : 'That radio message would not play');
+  const src = URL.createObjectURL(await r.blob()), a = clipAudio = new Audio(src);
+  a.onended = a.onpause = () => URL.revokeObjectURL(src);
+  a.play().catch(() => {});
 }
 
 // a pin on the scrubber: that moment, on its car if the camera is following one
@@ -546,6 +567,7 @@ function pickMark(m) {
   S.t = Math.max(0, m.seek ?? m.t);
   if (m.id && S.byId[m.id] && S.cam !== 'overview') S.selected = m.id;
   render(true);
+  if (m.clip) playClip(m.clip);
   if (ui.has3d) announce(m.label);
 }
 
@@ -781,7 +803,11 @@ function prepare(data) {
   S.drsName = S.year >= 2026 ? 'OVERTAKE' : 'DRS';  // 2026 rules replaced DRS with the overtake mode energy boost
   setRadar(S.proj.pts, sectorCuts(), S.zones, S.drivers, S.year >= 2026 ? 'OVERTAKE' : 'DRS');
   ui.scrub.max = Math.floor(data.duration);
+  S.radio = null;
   showMarks(data.mode === 'gps' ? gpsMarks(data, S.lightsOut) : NO_MARKS);
+  // OpenF1 has team radio from 2023; it costs one request, then it's on the server's disk
+  if (data.mode === 'gps' && S.year >= 2023) get(`/api/f1tv/radio/${S.year}/${S.round}?${new URLSearchParams({session: data.session})}`)
+    .then(r => { if (S?.data === data) { S.radio = radioMarks(r.clips, data.start); showMarks(S.marks); } }, () => {});  // the replay's fine without it
   if (data.mode === 'laps') lapMarks(S.year, S.round, data.cum).then(m => { if (S?.data === data) showMarks(m); }, () => {});  // a timeline's still usable without them
   ui.reelBtn.hidden = !(data.mode === 'gps' ? data.intervals?.length : data.mode === 'laps' && S.year >= 2023);
   whyAvailable();
@@ -972,6 +998,7 @@ function lapsState(t) {
 
 function render(force) {
   if (!S.data || !S.proj) return;
+  if (S.radio && S.radioFor !== S.selected) showMarks(S.marks);  // another car followed: its radio on the scrubber
   ui.stage.classList.toggle('driving', !!S.sim?.player);  // Play: the replay's speed menu goes while you drive
   if (S.live) S.t = (Date.now() - S.liveInfo.origin) / 1000;
   const t = S.t, st = S.live ? liveRender() : S.sim ? simState(S.sim, S.byId) : S.data.mode === 'gps' ? gpsState(t) : lapsState(t);

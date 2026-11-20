@@ -19,9 +19,11 @@ import {resultLedgers} from './ledgers.js';
 import {setupDownloads, startDownload, canDownload} from './downloads.js';
 import {spoilerFree, setSpoilerFree, hides, reveal, recent} from './spoilers.js';
 import {openGlobe, globeOpen, flyTo, setPins} from './globe.js';
+import {openCar} from './carsdeck.js';
 
 const $ = id => document.getElementById(id);
-const A = {year: null, round: null, races: [], mode: 'watch', section: 'analytics'};
+// extra: the open view's own state in the address (share.js career, focus + stops, car), sent by its module as f1:address
+const A = {year: null, round: null, races: [], mode: 'watch', section: 'analytics', extra: {}};
 const today = () => new Date().toISOString().slice(0, 10);  // read per call: a tab open past midnight or New Year
 const ORDER = ['Practice 1', 'Practice 2', 'Practice 3', 'Sprint Qualifying', 'Sprint Shootout', 'Sprint', 'Qualifying', 'Race'];
 const jol = (kind, round) => get(`/api/jolpica/${A.year}/${kind}${round ? `?round=${round}` : ''}`).then(rows);
@@ -53,7 +55,8 @@ const TABS = {
   strategy: async r => {  // same three Jolpica tables as the lap chart, so switching between them is free
     const [laps, res, pits] = await Promise.all([jol('laps', r), jol('results', r), jol('pitstops', r)]);
     const year = A.year, why = noLaps(r);
-    return () => renderStrategyLab($('tab-strategy'), laps, res, pits, year, why, r);
+    const {focus, stops} = A.extra;  // a link's plan
+    return () => renderStrategyLab($('tab-strategy'), laps, res, pits, year, why, r, stops && {id: focus, stops});
   },
   standings: async r => {
     let [d, c] = await Promise.all([jol('driverstandings', r), jol('constructorstandings', r).catch(() => [])]), note;
@@ -68,13 +71,15 @@ const TABS = {
   drivers: async () => {  // the whole season, whichever race is picked
     const [st, res, dr] = await Promise.all([jol('driverstandings'), jol('results'), jol('drivers')]);
     const year = A.year, over = decided(A.races);
-    return () => renderDrivers($('tab-drivers'), year, st, res, dr, over, jol('qualifying'));
+    const open = A.extra.career;  // a link's career
+    return () => renderDrivers($('tab-drivers'), year, st, res, dr, over, jol('qualifying'), open);
   },
 };
 let active = 'replay', drawn = {};
 // the address keeps the view (#stream, #2026/18/results, a Simulation #2026/18/sim), so a reload or a shared link lands on it
 // (none under the globe: the address stays as it was, so a reload of the bare address comes back to the globe)
-const view = () => (globeOpen() ? null : A.section === 'stream' ? '#stream' : A.round ? `#${A.year}/${A.round}/${A.mode === 'sim' ? 'sim' : active}` : null);
+const view = () => (globeOpen() ? null : A.section === 'stream' ? '#stream'
+  : A.round ? formatHash({year: A.year, round: A.round, tab: A.mode === 'sim' ? 'sim' : active, ...A.extra}) : null);
 // a link's moment stays in the address, so a reload lands on it again, until the replay moves on or the view changes
 let pending = null;  // {link, path, hash, open}
 const address = () => {
@@ -119,6 +124,7 @@ function activate(name) {
   if (name !== active && document.startViewTransition && !document.hidden && !matchMedia('(prefers-reduced-motion: reduce)').matches)
     document.startViewTransition(swap).ready.catch(() => {});
   else swap();
+  if (name !== active && !A.routing) A.extra = {};
   active = name;
   syncHash();
   drawTab(name);
@@ -390,6 +396,7 @@ async function selectRace(round, sim = A.mode === 'sim', fly = true) {
   $('norace')?.remove();
   document.querySelector('.tabs').classList.remove('hidden');
   A.round = round;
+  if (!A.routing) A.extra = {};
   syncTitle();
   drawn = {};
   markRace(round);
@@ -542,6 +549,10 @@ async function route() {
   const wasSim = A.mode === 'sim', thisYear = today().slice(0, 4);
   A.routing = true;
   pending = null;
+  // the view's own state: only the fields the link's tab reads
+  const EXTRA = {drivers: ['career'], strategy: ['focus', 'stops'], replay: ['car'], sim: ['car']};
+  A.extra = Object.fromEntries((EXTRA[tab] ?? []).filter(k => link[k] !== undefined).map(k => [k, link[k]]));
+  if (A.extra.career || A.extra.stops) drawn[tab] = false;  // drawn already (Back to it): drawn again, to open the link's
   try {
     if (tab) setMode(tab === 'sim' ? 'sim' : 'watch', false);  // the link's view, over the stored mode
     if (TABS[tab] || tab === 'replay' || tab === 'explorer') active = tab;
@@ -552,7 +563,8 @@ async function route() {
     if (y !== A.year || !A.round) await loadSeason(y, round || null);
     else if (!stream && race(round) && (round !== String(A.round) || wasSim !== (A.mode === 'sim'))) selectRace(round);
     else if (!stream) activate(active);
-    const shown = A.round;
+    const shown = A.round, car = A.extra.car;
+    if (shown && !stream && car) A.shown.then(() => A.round === shown && A.extra.car === car && openCar(car));
     if (shown && !stream && A.mode === 'watch' && active === 'replay') {
       const path = view(), hash = formatHash({...link, year: A.year, round: shown, tab: 'replay'}), mine = hash !== path && {link, path, hash};
       if (mine) pending = mine;
@@ -598,6 +610,8 @@ async function init() {
   setTheme(stored('f1theme') ?? 'dark');
   setTeam(stored('f1team'));
   $('teambtn').onclick = () => openPalette(teamCommands());
+  $('reactbtn').onclick = openReaction;
+  addEventListener('f1:address', e => { A.extra = e.detail; syncHash(true); });  // a career, plan or car opened or closed: replaces, no Back step
   $('skip').onclick = e => {  // not a #fragment: the hash is the app's route
     e.preventDefault();
     const to = document.body.dataset.section === 'stream' ? $('stream') : document.querySelector('main');

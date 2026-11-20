@@ -10,7 +10,7 @@
 - [x] Phase 5: archive-backed replays (handover: `docs/handover/improve-5.md`)
 - [x] Phase 6: drop livef1, trim the exe (handover: `docs/handover/improve-6.md`)
 - [x] Phase 7: dependency refresh and load time (handover: `docs/handover/improve-7.md`)
-- [ ] Phase 8: fan features
+- [x] Phase 8: fan features (handover: `docs/handover/improve-8.md`)
 - [ ] Phase 9: code health and tests
 
 ## Baseline (phase 0, 20 Nov 2026, RTX 4080 laptop, `src/server.py` on 127.0.0.1:8086)
