@@ -197,11 +197,6 @@ function setSpeed(s) {
   ui.speeds.value = s;
 }
 
-// What a run race can replay, as replay.py decides: every car's GPS position (OpenF1, 2023 on), positions from lap
-// times (Jolpica's laps, races from 1996), or nothing but results before that. null: not run yet.
-export const REPLAY_KINDS = {gps: ['3D GPS', "Every car's real position on track"], laps: ['Lap replay', 'Positions worked out from lap times'],
-  results: ['Results only', 'No lap timing before 1996: results, standings and drivers']};
-export const replayKind = (year, date) => date > new Date().toISOString().slice(0, 10) ? null : year >= 2023 ? 'gps' : year >= 1996 ? 'laps' : 'results';
 
 // sim: Simulate mode, a physics race on this circuit (the session list is then just that, and hidden)
 export async function showRace(year, round, sessions, sim = false) {

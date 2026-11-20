@@ -259,3 +259,9 @@ export function roll(node, text) {
   node.setAttribute('aria-label', text);
   node.replaceChildren(...[...text].map((c, i) => el('span', {class: old && c !== old[i] && !calm() ? 'roll' : '', 'aria-hidden': 'true'}, c)));
 }
+
+// What a run race can replay, as replay.py decides (app.js tags the race list with it before the stage loads): every car's GPS position (OpenF1, 2023 on), positions from lap
+// times (Jolpica's laps, races from 1996), or nothing but results before that. null: not run yet.
+export const REPLAY_KINDS = {gps: ['3D GPS', "Every car's real position on track"], laps: ['Lap replay', 'Positions worked out from lap times'],
+  results: ['Results only', 'No lap timing before 1996: results, standings and drivers']};
+export const replayKind = (year, date) => date > new Date().toISOString().slice(0, 10) ? null : year >= 2023 ? 'gps' : year >= 1996 ? 'laps' : 'results';

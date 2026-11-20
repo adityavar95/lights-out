@@ -6,8 +6,8 @@ updates "Current state". This is the one handoff file for the whole plan.
 ## Current state
 
 - Branch: `modernize` (from `improve-phase-8`, HEAD `fff158f`, 21 Nov 2026).
-- Done: phase 1, phase 2 (21 Nov 2026).
-- Next: **Phase 3** (3D stage and Stream on demand). Start a new session and type: *"Do phase 3 of docs/modernize-plan.md."*
+- Done: phase 1, phase 2, phase 3 (21 Nov 2026).
+- Next: **Phase 4** (live feed as SSE). Start a new session and type: *"Do phase 4 of docs/modernize-plan.md."*
 - Rule: after each phase, stop and wait for the user's go.
 
 ## Before phase 1: watch out
@@ -102,3 +102,46 @@ Watch out:
 - `deviceMemory <= 4` also puts a 4 GB desktop on the mobile tier (as planned).
 - The tier is read on every load; a stored `lo-graphics` still wins over the tier's defaults.
 Next: Phase 3
+
+## Phase 3: load the 3D stage and Stream on demand (21 Nov 2026)
+Commits: see git log (phase 3 commit on `modernize`)
+Done:
+- `app.js` has no static import of `replay.js`, `globe.js` or `carsdeck.js` any more (all three reach three.js). `loadStage()`
+  (one promise: `import('./replay.js')`, `setupReplay`, then the staged race and its session list) runs from `activate('replay')`
+  and `setSection('analytics')` while the replay tab is active (covers Play, the replay tab, deep links to it, live),
+  from `loadGlobe()` (the globe shares the stage's renderer, so the stage loads first, as before), and from palette stage commands.
+- `selectRace` calls `stageRace(...)` instead of `showRace`: it records the race and shows it only if the stage is up; the
+  stage shows it when it loads. `A.shown` is gone: `shown()` loads the stage and resolves with `showRace`'s promise.
+  `moment()`/`ended()` read `{}`/false with no stage. `globeOpen()` is true from `showGlobe` until the globe module answers,
+  so a bare address isn't rewritten to a race hash while the globe loads.
+- `replayKind`/`REPLAY_KINDS` moved from `replay.js` to `util.js` (the race list tags races without the stage).
+- Stream: shaka was already on demand (`multiviewer.js` `loadShaka` injects the script on first play); `stream.js` and
+  `multiviewer.js` are plain JS with no three, so they stay static. #stream now loads no 3D at all.
+Measured (agent-browser headed 2040x1000, user's dev server, fresh session, 8 s after open):
+| `#2026/1/results` cold | Phase 1 | Phase 3 |
+|---|---|---|
+| Requests | 173 | 97 |
+| Decoded | 26.6 MB (5.5 MB JS) | 0.89 MB (0.41 MB JS) |
+| Transferred | 23.1 MB | 0.59 MB |
+| Load event | 1724 ms | 303 ms |
+| Stage/textures fetched | yes | none |
+First click on the Replay tab from Results (rAF gaps over 15 s): HEAD worst 3758 ms, 4 frames over 50 ms; phase 3 worst
+3183 ms, 14 frames over 50 ms (the extra ones are 300-560 ms: compiling the stage's JS, which HEAD did at page load).
+Results page itself: no frame over 50 ms in either.
+Checked with a window error listener, no errors: Results link (no stage), Replay tab click (race shown, Press ▶ hint), #stream
+cold (132 cards, no stage), bare address (globe, 23 pins, address stays bare), globe pin → ▶ Play (replay playing),
+`#2026/1/drivers?career=max_verstappen` (career open, no stage), `#2026/1/replay?car=2022` (showroom on RB18 2022, 3 of 4 runs),
+`#2026/1/replay?t=1200&focus=VER` (session list filled), and in a running tab `#stream`, `#2026/1/strategy`, `#2026/1/sim`.
+Tests: new `tests/test_app.mjs` (app.js's static import graph reaches no three.js module, nor replay.js/scene3d.js; replayKind
+cases). `scripts/test_all.py` all green, tsc included.
+Not done or not verified, and why:
+- One run of the car link opened the showroom on 2024 (MCL38) instead of 2022; four other runs (one traced) opened 2022 and
+  HEAD opened 2022. Not reproduced; watch for it.
+- The Live button path (`onStage(R => R.showLive())`) not exercised: no session live.
+- `docs/architecture/frontend.md` not updated (phase 6 does the docs).
+Watch out:
+- Anything new in `app.js` that touches the stage goes through `R` (null until loaded), `onStage(f)` or `shown()`; a static
+  import of a three-reaching module fails `tests/test_app.mjs`.
+- Option if the extra mid-size hitches on the first Replay click matter: prefetch `import('./replay.js')` in idle time once
+  a non-replay tab has drawn (costs the ~5 MB JS again, not the textures, which `setupReplay` starts).
+Next: Phase 4
