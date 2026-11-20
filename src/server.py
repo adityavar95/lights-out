@@ -3,6 +3,7 @@ import os
 # Before numpy loads (via livef1/pandas, on the first old-season table): OpenBLAS commits a buffer per CPU thread, ~740 MB on a 32-thread CPU, and
 # nothing here does matrix maths
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+import gzip
 import ipaddress
 import json
 import mimetypes
@@ -29,7 +30,7 @@ import f1tv
 import ledgers
 import radio
 from jolpica import JOLPICA, calendar_ics, driver_career, jolpica_fetch, list_seasons, races
-from replay import CACHE, OpenF1Locked, background, ReplayUnavailable, elevation, find_session, laps_replay, pitlane, replay, save, saved_replay, scheduled_session, session_events, season_session_rows, session_telemetry, telemetry
+from replay import CACHE, OpenF1Locked, background, ReplayUnavailable, elevation, find_session, laps_replay, pitlane, replay, save, saved_head, saved_replay, scheduled_session, session_events, season_session_rows, session_telemetry, telemetry
 import live
 from tracks import _geo_track, mv_track, track
 
@@ -330,14 +331,18 @@ def _is_live(race: dict, session: str) -> bool:
 
 
 @app.get("/api/replay/{year}/{round}")
-def race_replay(year: int, round: int, session: str = "Race", laps: bool = False):
+def race_replay(request: Request, year: int, round: int, session: str = "Race", laps: bool = False):
     """laps: the lap-timing replay even for a 2023+ race, which the page plays while the GPS one builds."""
     race = race_info(year, round)
     try:
         if laps and session == "Race":
             return raw_json(laps_replay(year, round))
         stored = saved_replay(year, race["date"], session)
-        return Response(stored, media_type="application/json") if stored else raw_json(replay(year, race, session))
+        if not stored:
+            return raw_json(replay(year, race, session))
+        if "gzip" not in request.headers.get("accept-encoding", ""):
+            return Response(gzip.decompress(stored), media_type="application/json")
+        return Response(stored, media_type="application/json", headers={"Content-Encoding": "gzip", "Vary": "Accept-Encoding"})
     except ReplayUnavailable as e:
         raise HTTPException(409, LIVE_NOW) if _is_live(race, session) else HTTPException(404, str(e))
     except Exception as e:
@@ -355,10 +360,10 @@ def session_laps(year: int, round: int, session: str = "Qualifying", build: bool
         raise HTTPException(404, f"No session timing for {year}: OpenF1's records start in 2023")
     race = race_info(year, round)
     try:
-        stored = saved_replay(year, race["date"], session)
-        if not stored and not build:
+        data = saved_head(year, race["date"], session)
+        if not data and not build:
             raise HTTPException(404, NOT_BUILT)
-        data = json.loads(stored) if stored else replay(year, race, session)
+        data = data or replay(year, race, session)
     except ReplayUnavailable as e:
         raise HTTPException(409, LIVE_NOW) if _is_live(race, session) else HTTPException(404, str(e))
     except HTTPException:
@@ -512,9 +517,6 @@ def f1tv_radio(year: int, round: int, session: str = "Race", driver: Annotated[i
 @app.post("/api/f1tv/radio/model", status_code=202)
 def f1tv_radio_model(request: Request):
     """Starts the speech model's download (radio.fetch_model): the radio panel's button, after the reader agrees to 2.5 GB."""
-    origin = request.headers.get("origin")
-    if origin and urlsplit(origin).netloc != request.headers.get("host"):  # another site's page can't start a 2.5 GB download
-        raise HTTPException(403, "Cross-origin download")
     radio.fetch_model()
     return Response(status_code=202)
 
@@ -630,10 +632,17 @@ IMPORTMAP_HASH = "'sha256-" + base64.b64encode(hashlib.sha256(re.search(r'<scrip
 async def revalidate_static(request, call_next):
     if not by_address(request.url.hostname):
         return Response("Open Lights Out by its address (http://127.0.0.1:8086), not a name.", status_code=400)
+    # a POST starts downloads (600 MB, 2.5 GB) or writes: only the page's own origin, never another site or a bare client
+    origin = request.headers.get("origin")
+    if request.method == "POST" and (not origin or urlsplit(origin).netloc != request.headers.get("host")):
+        return Response("Cross-origin request", status_code=403)
     # Without it browsers cache old modules heuristically and mix them with new ones after an edit, and one missing
     # export blanks the whole app. no-cache still serves 304s for unchanged files.
     response = await call_next(request)
-    if request.url.path == "/" or request.url.path.startswith("/static/"):
+    if request.url.path.startswith("/static/assets/") and response.status_code == 200:
+        # hash-pinned (asset_hashes.json): a file there never changes under the same name
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    elif request.url.path == "/" or request.url.path.startswith("/static/"):
         response.headers["Cache-Control"] = "no-cache"
     if request.url.path == "/" or request.url.path.endswith(".html"):
         # report-only while the page's inline scripts and handlers are moved out: violations show in the console
@@ -674,9 +683,6 @@ def count_event(event: str, day: str, path: Path = COUNTS) -> dict:
 
 @app.post("/api/count/{event}", status_code=204)
 def count(event: str, request: Request):
-    origin = request.headers.get("origin")
-    if origin and urlsplit(origin).netloc != request.headers.get("host"):  # another site's page can't add to the counts
-        raise HTTPException(403, "Cross-origin count")
     if event not in EVENTS:  # a fixed list, so the file can't be filled with whatever a caller sends
         raise HTTPException(404, "Unknown event")
     count_event(event, date.today().isoformat())
@@ -691,9 +697,6 @@ def assets_status():
 
 @app.post("/api/assets/download", status_code=202)
 def assets_download(request: Request):
-    origin = request.headers.get("origin")
-    if origin and urlsplit(origin).netloc != request.headers.get("host"):  # another site's page can't start a 600 MB download
-        raise HTTPException(403, "Cross-origin download")
     assets.start()
     return Response(status_code=202)
 
@@ -738,6 +741,11 @@ def warm_up():
         pool.map(quietly, jobs)
 
 
+# no auth: other devices on the network reach the server only when asked for
+LAN = os.environ.get("LIGHTSOUT_LAN") == "1"
+HOST = "0.0.0.0" if LAN else "127.0.0.1"
+
+
 def lan_ip() -> str | None:
     """This computer's address on the local network: the one a UDP socket would send from (connect sends nothing)."""
     import socket
@@ -752,6 +760,7 @@ def lan_ip() -> str | None:
 if __name__ == "__main__":
     threading.Thread(target=warm_up, daemon=True).start()
     # 0.0.0.0 listens on every address but isn't one a browser can open (ERR_ADDRESS_INVALID): say which ones work
-    ip = lan_ip()
-    print("Lights Out: open http://127.0.0.1:8086" + (f"  (other devices on this network: http://{ip}:8086)" if ip else ""), flush=True)
-    uvicorn.run(app, host="0.0.0.0", port=8086)
+    ip = lan_ip() if LAN else None
+    print("Lights Out: open http://127.0.0.1:8086" + (f"  (other devices on this network: http://{ip}:8086)" if ip else
+          "  (LIGHTSOUT_LAN=1 opens it to other devices on this network)"), flush=True)
+    uvicorn.run(app, host=HOST, port=8086)

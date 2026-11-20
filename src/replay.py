@@ -3,6 +3,7 @@
 - "gps" mode (2023+): real car positions and timing feeds from OpenF1, resampled to a fixed time grid.
 - "laps" mode (1996+ races): Jolpica lap times; the frontend moves cars along the track at each lap's average pace.
 """
+import gzip
 import json
 import math
 import os
@@ -12,6 +13,7 @@ from bisect import bisect_right
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+from functools import lru_cache
 from pathlib import Path
 import threading
 from threading import Lock
@@ -85,7 +87,7 @@ def save(path: Path, data):
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
     try:
-        tmp.write_text(json.dumps(data))
+        tmp.write_bytes(data) if isinstance(data, bytes) else tmp.write_text(json.dumps(data))
         for wait in (0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, None):
             try:
                 os.replace(tmp, path)
@@ -234,12 +236,46 @@ def _sweep_recent():
         _recent.pop(k, None)
 
 
-def saved_replay(year: int, race_date: str, session_name: str) -> bytes | None:
-    """A session's GPS replay as it lies on disk, for the route to send as it is: parsing and encoding it again took
-    130 ms of a 150 ms request (5 MB, gzip included). None when it isn't built yet."""
+def _built(year: int, race_date: str, session_name: str) -> Path | None:
+    """A session's GPS replay file, when it's built."""
     session = find_session(year, race_date, session_name) if year >= 2023 else None
     path = session and CACHE / f"{session['session_key']}.json"
-    return path.read_bytes() if path and path.exists() else None
+    return path if path and path.exists() else None
+
+
+def saved_replay(year: int, race_date: str, session_name: str) -> bytes | None:
+    """A session's GPS replay as it lies on disk, gzipped, for the route to send as it is: parsing and encoding it
+    again took 130 ms of a 150 ms request (5 MB, gzip included). The .json.gz beside the file is written once, and
+    again when the file is newer. None when it isn't built yet."""
+    path = _built(year, race_date, session_name)
+    if not path:
+        return None
+    gz = path.with_name(path.name + ".gz")
+    if not gz.exists() or gz.stat().st_mtime_ns < path.stat().st_mtime_ns:
+        save(gz, gzip.compress(path.read_bytes(), 6, mtime=0))
+    return gz.read_bytes()
+
+
+def replay_head(path: Path) -> dict | None:
+    """A built replay without its frames (the MBs of positions), parsed once per version of the file. Shared between
+    callers: read it, never change it. None when it isn't built."""
+    try:
+        return _head(path, path.stat().st_mtime_ns)
+    except (OSError, ValueError):
+        return None
+
+
+@lru_cache(maxsize=8)
+def _head(path: Path, mtime: int) -> dict:
+    data = json.loads(path.read_text())
+    data.pop("frames", None)
+    return data
+
+
+def saved_head(year: int, race_date: str, session_name: str) -> dict | None:
+    """replay_head of a session's replay, when it's built."""
+    path = _built(year, race_date, session_name)
+    return replay_head(path) if path else None
 
 
 def gps_replay(session: dict) -> dict:
@@ -396,11 +432,8 @@ CAR_FIELDS = ("speed", "rpm", "n_gear", "throttle", "brake", "drs")
 
 def _replay_grid(sk: int, start: datetime, duration: float) -> bool:
     """Whether this window is the cached GPS replay's own."""
-    try:
-        r = json.loads((CACHE / f"{sk}.json").read_text())
-    except (OSError, ValueError):
-        return False
-    return ts(r["start"]) == start and r["duration"] == duration
+    r = replay_head(CACHE / f"{sk}.json")
+    return bool(r) and ts(r["start"]) == start and r["duration"] == duration
 
 
 def telemetry(session: dict, driver_number: int, start: datetime, duration: float, tag: str = "") -> dict:

@@ -1,5 +1,7 @@
 """Run: .venv/Scripts/python tests/test_server.py"""
 import sys
+import gzip
+import os
 import hashlib
 import json
 from pathlib import Path
@@ -655,7 +657,14 @@ with tempfile.TemporaryDirectory() as tmp:
         real_find, rp.find_session = rp.find_session, lambda y, d, n: {"session_key": 77}
         assert rp.saved_replay(2024, "2024-03-02", "Race") is None
         rp.save(rp.CACHE / "77.json", {"mode": "gps"})
-        assert rp.saved_replay(2024, "2024-03-02", "Race") == b'{"mode": "gps"}' and rp.saved_replay(2022, "2022-03-20", "Race") is None
+        assert gzip.decompress(rp.saved_replay(2024, "2024-03-02", "Race")) == b'{"mode": "gps"}' and rp.saved_replay(2022, "2022-03-20", "Race") is None
+        assert (rp.CACHE / "77.json.gz").exists()  # improve-2: gzipped once, beside the file
+        # a rebuilt file (newer than its .gz) is gzipped again; the head (no frames) follows the file too
+        rp.save(rp.CACHE / "77.json", {"mode": "gps", "start": "x", "frames": {"1": []}})
+        os.utime(rp.CACHE / "77.json.gz", ns=(0, 0))
+        assert json.loads(gzip.decompress(rp.saved_replay(2024, "2024-03-02", "Race")))["start"] == "x"
+        assert rp.saved_head(2024, "2024-03-02", "Race") == {"mode": "gps", "start": "x"} and rp.replay_head(rp.CACHE / "78.json") is None
+        assert rp.saved_head(2022, "2022-03-20", "Race") is None
         rp.find_session = real_find
     finally:
         rp.openf1, rp.CACHE, rp.LISTS = real
@@ -824,14 +833,16 @@ try:
     # S-L3: only the page's own origin may count
     assert client.post("/api/count/visit", headers={"Origin": "https://evil.example"}).status_code == 403
     assert client.post("/api/count/nope", headers={"Origin": "http://127.0.0.1:8086"}).status_code == 404  # past the origin check
-    assert client.post("/api/count/nope").status_code == 404  # no Origin: not a page's cross-site request
+    # improve-2: a POST without an Origin is no browser page (curl from another device on the network): refused
+    assert client.post("/api/count/nope").status_code == 403
+    assert client.post("/api/assets/download").status_code == 403 and len(started) == 1
     # a domain pointed at this computer (DNS rebinding) is same-origin with it, so only an address or localhost is served
     started.clear()
     rebound = {"Host": "evil.example:8086", "Origin": "http://evil.example:8086"}
     assert client.get("/api/counts", headers=rebound).status_code == 400
     assert client.post("/api/assets/download", headers=rebound).status_code == 400 and not started
     for host in ["192.168.1.5:8086", "localhost:8086", "app.localhost", "[::1]:8086"]:
-        assert client.post("/api/count/nope", headers={"Host": host}).status_code == 404, host
+        assert client.post("/api/count/nope", headers={"Host": host, "Origin": f"http://{host}"}).status_code == 404, host
     # a season of lap times is ~240 Jolpica requests: a round is required
     real_fetch, server.jolpica_fetch = server.jolpica_fetch, lambda *a: [{"lap": "1"}]
     assert client.get("/api/jolpica/2020/laps").status_code == 400 and client.get("/api/jolpica/2020/pitstops").status_code == 400
@@ -845,7 +856,7 @@ try:
     server.radio.fetch_model = real_fetch_model
     # S-L4: an oversized licence body is refused unread, a chunked one as soon as it's over
     token = _jwt(exp=_time.time() + 3600)
-    assert client.post("/api/f1tv/license?u=https://x/", content=b"x" * 70000, headers={"X-F1-Token": token}).status_code == 413
+    assert client.post("/api/f1tv/license?u=https://x/", content=b"x" * 70000, headers={"X-F1-Token": token, "Origin": "http://127.0.0.1:8086"}).status_code == 413
     pulled = []
     class _Req:
         def __init__(self, length): self.headers = {"content-length": length} if length else {}
@@ -862,6 +873,18 @@ try:
     assert refused(_Req(None)) == 413 and len(pulled) == 3
     # S-L5
     assert client.get("/").headers["cache-control"] == "no-cache"
+    # improve-2: hash-pinned assets are cached for a year; the app's modules, and an asset that isn't there, revalidate
+    probe = Path(server.__file__).parent / "static" / "assets" / "_cache_probe.txt"
+    probe.parent.mkdir(exist_ok=True)
+    probe.write_text("x")
+    try:
+        assert client.get("/static/assets/_cache_probe.txt").headers["cache-control"] == "public, max-age=31536000, immutable"
+    finally:
+        probe.unlink()
+    assert client.get("/static/assets/_cache_probe.txt").headers["cache-control"] == "no-cache"
+    assert client.get("/static/util.js").headers["cache-control"] == "no-cache"
+    # improve-2: no auth, so other devices on the network reach the server only with LIGHTSOUT_LAN=1
+    assert server.HOST == ("0.0.0.0" if os.environ.get("LIGHTSOUT_LAN") == "1" else "127.0.0.1")
     # S-M7: the route answers from the feed when it's up, else the schedule, and never opens the feed
     server.live.snapshot = nope
     server.scheduled_session = lambda now: "US GP · Race"
@@ -901,16 +924,20 @@ try:
     def refuse(*a): raise server.ReplayUnavailable("locked")
     server.replay = refuse
     # a replay on disk goes out as stored (no parse, no re-encoding); the lap replay never takes that path
-    real_saved, server.saved_replay = server.saved_replay, lambda y, d, s: b'{"mode": "gps"}'
+    real_saved, server.saved_replay = server.saved_replay, lambda y, d, s: gzip.compress(b'{"mode": "gps"}')
+    real_head = server.saved_head
     real_laps, server.laps_replay = server.laps_replay, lambda y, r: {"mode": "laps"}
-    assert client.get("/api/replay/2024/1").json() == {"mode": "gps"}
+    r = client.get("/api/replay/2024/1")
+    assert r.json() == {"mode": "gps"} and r.headers["content-encoding"] == "gzip", r.headers  # the stored .gz, as it is
+    r = client.get("/api/replay/2024/1", headers={"Accept-Encoding": "identity"})
+    assert r.content == b'{"mode": "gps"}' and "content-encoding" not in r.headers
     assert client.get("/api/replay/2024/1?laps=1").json() == {"mode": "laps"}
     # the session's laps out of that file, without its positions; never a build unless asked
-    server.saved_replay = lambda y, d, s: b'{"session": "Qualifying", "laps": [[1, "4", 1, 80.0]], "frames": [1, 2], "drivers": []}'
+    server.saved_head = lambda y, d, s: {"session": "Qualifying", "laps": [[1, "4", 1, 80.0]], "drivers": []}
     r = client.get("/api/sessionlaps/2024/1").json()
     assert r == {"session": "Qualifying", "drivers": [], "laps": [[1, "4", 1, 80.0]], "stints": None, "race_control": None}, r
     assert client.get("/api/sessionlaps/2022/1").status_code == 404
-    server.saved_replay = lambda y, d, s: None
+    server.saved_head = lambda y, d, s: None
     r = client.get("/api/sessionlaps/2024/1")
     assert r.status_code == 404 and r.json()["detail"] == server.NOT_BUILT, r.text
     r = client.get("/api/sessionlaps/2024/1?build=1")  # asked: replay() is tried, and its refusal comes back as it is
@@ -924,7 +951,7 @@ try:
     assert client.get(f"/api/replay/{this}/1").status_code == 404
 finally:
     server.races, server.scheduled_session, server._elevation_at, server.live.snapshot, server.replay = real
-    server.saved_replay = real_saved
+    server.saved_replay, server.saved_head = real_saved, real_head
     live._state.clear()
 
 # scheduled_session: inside its times + 30 min

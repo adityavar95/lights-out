@@ -2,7 +2,7 @@
 import json
 from threading import Lock
 
-from replay import CACHE, ReplayUnavailable, _finished, laps_replay, openf1, save, ts
+from replay import CACHE, ReplayUnavailable, _finished, laps_replay, openf1, replay_head, save, ts
 
 LEDGERS = CACHE.parent / "ledgers"
 _locks: dict = {}  # two sections asking for one feed: the second waits for the file, not for another request
@@ -58,9 +58,8 @@ def overtakes(year: int, rnd: int, session: dict) -> dict:
     rows = _feed(session, "overtakes")
     if not rows:
         raise ReplayUnavailable("OpenF1 has no overtake rows for this race.")
-    built = CACHE / f"{session['session_key']}.json"
-    if built.exists():
-        d = json.loads(built.read_text())
+    d = replay_head(CACHE / f"{session['session_key']}.json")
+    if d:
         origin, laps = ts(d["start"]), [e[:3] for e in d["laps"]]
         pits, race_control = [e[:3] for e in d["pits"]], d["race_control"]
     else:

@@ -17,7 +17,7 @@ if sys.stdout is None:  # the windowed exe has no console, and uvicorn's log for
 import uvicorn
 import webview
 
-from server import app, warm_up
+from server import HOST, app, warm_up
 
 PORT = int(os.environ.get("LIGHTSOUT_PORT", 8086))
 URL = f"http://127.0.0.1:{PORT}/"
@@ -84,7 +84,7 @@ def came_up(server: threading.Thread) -> bool:
 if __name__ == "__main__":
     if not serving():  # else src/server.py is already running: use it
         threading.Thread(target=warm_up, daemon=True).start()
-        server = threading.Thread(target=uvicorn.Server(uvicorn.Config(app, host="0.0.0.0", port=PORT)).run, daemon=True)
+        server = threading.Thread(target=uvicorn.Server(uvicorn.Config(app, host=HOST, port=PORT)).run, daemon=True)
         server.start()
         if not came_up(server):  # the windowed exe has no console to say it on
             webview.create_window("Lights Out", html=f"<body style='font:15px system-ui;padding:24px'>Lights Out couldn't start "

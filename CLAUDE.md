@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 uv sync                                    # install deps (livef1==1.2.11, fastapi, uvicorn, onnx-asr, av, pywebview; dev: pyinstaller)
-.venv/Scripts/python src/server.py         # run app at http://127.0.0.1:8086 (LAN: http://<computer-ip>:8086)
+.venv/Scripts/python src/server.py         # run app at http://127.0.0.1:8086 (LIGHTSOUT_LAN=1 opens http://<computer-ip>:8086 to the network)
 .venv/Scripts/python src/desktop.py        # desktop launcher (pywebview/WebView2); reuses a running server.py; LIGHTSOUT_PORT overrides 8086
 .venv/Scripts/python scripts/build_exe.py  # PyInstaller: dist/LightsOut/LightsOut.exe (folder build, ~1.1 GB)
 .venv/Scripts/python tests/test_server.py  # plain asserts, no pytest
@@ -22,7 +22,7 @@ F1 web app: FastAPI backend in `src/` plus vanilla-JS ES modules in `src/static/
 
 Rules most tasks need:
 - Big payloads (replay, telemetry, live) go out through `raw_json`; table endpoints return `{columns, data, total}`.
-- After changing the replay payload format, delete `.cache/replay/*.json`.
+- After changing the replay payload format, delete `.cache/replay/*.json*` (each built replay has a `.json.gz` beside it).
 - OpenF1's free tier is ~30 req/min (`_throttle` in `openf1()`); a GPS replay costs ~30 requests. While a session is live OpenF1 answers 401 (`OpenF1Locked`).
 - The F1 TV token (`X-F1-Token`) is never stored or logged by the server.
 - 3D is three.js WebGPURenderer + TSL, no WebGL fallback. Every lit material goes through `csmSync`. No `:has()` in styles without measuring.
