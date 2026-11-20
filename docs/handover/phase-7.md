@@ -61,5 +61,5 @@ Next: the plan's phases are all done. What's left:
   ground should read darker than the 3-8 % the Monsoon fog leaves of it.
 - **Found on the way** (not graphics): leaving Play while driving leaves `.mapwrap.driving` set (no ▶ in the Races
   replay until a reload); C and keys 1-5 in Play hand the player's car to the AI.
-- **The branch chain** `graphics-perf-phase-1` → `-2` → … → `-7`, each made from the one before, none pushed or
-  merged into `master`. `graphics-perf-phase-7` holds all of them.
+- **The branch chain** `graphics-perf-phase-1` → `-2` → … → `-7`, each made from the one before. `graphics-perf-phase-7` holds all of them; local
+  `master` has since merged phases 0-7 (`b1e1052`).
