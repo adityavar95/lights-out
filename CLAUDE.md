@@ -29,6 +29,7 @@ Rules most tasks need:
 - The live feed is pushed as SSE (`/api/live/stream`); the F1 TV token reaches it through a one-time `POST /api/live/ticket`, never a URL. `/api/live` is the first state and the fallback poll.
 - OpenF1's free tier is ~30 req/min (`_throttle` in `openf1()`); a GPS replay costs ~30 requests. While a session is live OpenF1 answers 401 (`OpenF1Locked`).
 - The F1 TV token (`X-F1-Token`) is never stored or logged by the server.
+- Scripted motion goes through `motion.js` (anime.js and @theatre/core load on first use, never statically from `app.js`; reduced motion ends at once). The theatre.js studio is dev-only (AGPL) and never ships.
 - 3D is three.js WebGPURenderer + TSL, no WebGL fallback. Every lit material goes through `csmSync`. No `:has()` in styles without measuring.
 - Look: `--dp-*` tokens at the top of `style.css`, dark is the default, type floor 12 px. `--accent` is white in dark, so text on it uses `--accent-ink`.
 - `agent-browser console` doesn't show uncaught exceptions: add a window `error` listener when testing.

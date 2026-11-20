@@ -1,6 +1,6 @@
 // The launch globe's maths: where a place sits on the sphere, which tiles cover it, and the flight to a circuit
 import assert from 'node:assert/strict';
-import {llToVec, vecToLL, tileLL, tilesRound, flight, over, namesFit} from '../src/static/globemath.js';
+import {llToVec, vecToLL, tileLL, tilesRound, flight, timing, over, namesFit} from '../src/static/globemath.js';
 
 const near = (a, b, eps = 1e-9) => assert.ok(Math.abs(a - b) < eps, `${a} != ${b}`);
 
@@ -40,6 +40,12 @@ const monza = {lat: 45.6156, lng: 9.28111, alt: 0.0009}, spa = {lat: 50.4372, ln
 near(flight(monza, spa, 0).alt, 0.0009); near(flight(monza, spa, 1).alt, 0.0009);
 assert.ok(flight(monza, spa, 0.2).alt > 0.08 && flight(monza, spa, 0.2).alt < 0.1);
 near(flight(monza, monza, 0.2).alt, 0.0009);  // nowhere to go: it stays down
+
+// the timings are an argument: the sheet's values give the same flight as the curves' own, and each reaches its end at f = 1
+assert.deepEqual(flight(monza, spa, 0.3, timing(0.3)), flight(monza, spa, 0.3));
+assert.deepEqual(timing(1), {turn: 1, climb: 1, drop: 1});
+const held = flight(a, b, 0.7, {turn: 1, climb: 1, drop: 0});  // no drop yet: over the new circuit, at the height it started
+near(held.lat, b.lat); near(held.alt, a.alt);
 
 // Play's pin: the nearest one, only while it is in the middle of the window
 const ats = [monza, spa].map(c => llToVec(c.lat, c.lng));

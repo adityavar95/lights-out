@@ -1,0 +1,119 @@
+{
+ "definitionVersion": "0.4.0",
+ "sheetsById": {
+  "flight": {
+   "staticOverrides": {
+    "byObject": {}
+   },
+   "sequence": {
+    "type": "PositionalSequence",
+    "subUnitsPerUnit": 1000,
+    "length": 1,
+    "tracksByObject": {
+     "fly": {
+      "trackData": {
+       "turn": {
+        "type": "BasicKeyframedTrack",
+        "keyframes": [
+         {
+          "id": "turn-0",
+          "position": 0,
+          "value": 0,
+          "type": "bezier",
+          "handles": [
+           0,
+           0,
+           0.3333333333333333,
+           0
+          ],
+          "connectedRight": true
+         },
+         {
+          "id": "turn-1",
+          "position": 0.4,
+          "value": 1,
+          "type": "bezier",
+          "handles": [
+           0.6666666666666666,
+           1,
+           0.5,
+           1
+          ],
+          "connectedRight": false
+         }
+        ]
+       },
+       "climb": {
+        "type": "BasicKeyframedTrack",
+        "keyframes": [
+         {
+          "id": "climb-0",
+          "position": 0,
+          "value": 0,
+          "type": "bezier",
+          "handles": [
+           0,
+           0,
+           0.3333333333333333,
+           0
+          ],
+          "connectedRight": true
+         },
+         {
+          "id": "climb-1",
+          "position": 0.15,
+          "value": 1,
+          "type": "bezier",
+          "handles": [
+           0.6666666666666666,
+           1,
+           0.5,
+           1
+          ],
+          "connectedRight": false
+         }
+        ]
+       },
+       "drop": {
+        "type": "BasicKeyframedTrack",
+        "keyframes": [
+         {
+          "id": "drop-0",
+          "position": 0.3,
+          "value": 0,
+          "type": "bezier",
+          "handles": [
+           0,
+           0,
+           0.3333333333333333,
+           0
+          ],
+          "connectedRight": true
+         },
+         {
+          "id": "drop-1",
+          "position": 1,
+          "value": 1,
+          "type": "bezier",
+          "handles": [
+           0.6666666666666666,
+           1,
+           0.5,
+           1
+          ],
+          "connectedRight": false
+         }
+        ]
+       }
+      },
+      "trackIdByPropPath": {
+       "[\"turn\"]": "turn",
+       "[\"climb\"]": "climb",
+       "[\"drop\"]": "drop"
+      }
+     }
+    }
+   }
+  }
+ }
+}

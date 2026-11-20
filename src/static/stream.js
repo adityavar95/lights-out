@@ -7,6 +7,7 @@ import {get, el, flag, tvHeaders, count, failed, plain, skeleton} from './util.j
 import {openViewer, loadShaka, connectPanel, watched} from './multiviewer.js';
 import {icon} from './tvcontrols.js';
 import {fetchTile} from './satellite.js';
+import {stagger} from './motion.js';
 
 const $ = id => document.getElementById(id);
 const S = {year: null, races: [], linked: false};
@@ -279,6 +280,7 @@ function build(year, races) {
   const next = () => { const [x, r] = queue.shift() ?? []; return x?.isConnected && fill(x, r, (v, e) => settle(rows.indexOf(x), v, e)).then(next); };  // stops once the season changes
   headline(year, weekends.length ? skeleton(3) : el('h1', {}, 'No race weekends yet'));
   $('srows').replaceChildren(...(sched.length ? [row(['Coming up'], 'srow-next', sched)] : []), ...rows, row(['Lights Out'], 'srow-trailer', [trailer()]));
+  stagger(document.querySelectorAll('.sched'));
   continueRow();
   refreshLead();  // a session to come leads at once, without waiting for F1 TV
   loadNext(year);

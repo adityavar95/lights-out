@@ -16,6 +16,7 @@ node tests/test_whatif.mjs                 # Strategy Lab what-if model (baselin
 node tests/test_multiviewer.mjs            # F1 TV overlay timing (session names, telemetry lookup, lights-out sync)
 node tests/test_lanes.mjs                  # lap-timing replay lanes (two-column grid, passing without overlap); GPS retime (steady pace, same path)
 node tests/test_drivers.mjs                # Drivers tab season/career tallies (wins, podiums, poles, starts)
+node tests/test_motion.mjs                 # motion.js: reduced motion ends at once, stagger order, countUp, a failed anime.js load, the globe's flight sheet
 node tests/test_glass.mjs                  # Liquid Glass lens map and rim 9-slice
 node tests/test_util.mjs                   # shared helpers (fetch cache TTL, error wording, CSV)
 node tests/test_palette.mjs                # command palette matching and shortcut guards

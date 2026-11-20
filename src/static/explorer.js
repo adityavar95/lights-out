@@ -1,5 +1,6 @@
 // Data explorer: every raw dataset as a filterable table.
 import {get, el, th, skeleton, cellText, csvButton} from './util.js';
+import {stagger} from './motion.js';
 
 const SEASON = [['Sessions', y => `/api/season/${y}`],
   ['Calendar', y => `/api/jolpica/${y}/races`], ['Drivers', y => `/api/jolpica/${y}/drivers`],
@@ -36,6 +37,7 @@ async function show(url, btn) {
     if (me !== request) return;  // another table was picked meanwhile
     if (!t.columns) return topics(t);
     render(t);
+    stagger(table.querySelectorAll('tbody tr'));
     const all = `${t.total} rows${t.total > t.data.length ? `, showing first ${t.data.length}` : ''}`, shown = el('span', {}, all);
     const filter = el('input', {placeholder: 'Filter rows…', 'aria-label': 'Filter rows', oninput: () => {
       const q = filter.value.toLowerCase();

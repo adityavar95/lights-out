@@ -237,19 +237,22 @@ export function rcText(msg, flag) {
 }
 
 // Sonner-style toast: notices stack bottom-centre, slide in, pause their timer while hovered, slide out. ms 0 = stays.
-const calm = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+import {play, spring} from './motion.js';
+export const calm = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
 export function toast(children, ms = 5000) {
   let box = document.querySelector('.toasts');
   if (!box) document.body.append(box = el('div', {class: 'toasts'}));
   const n = el('div', {class: 'notice', role: 'status'}, ...children);
   let timer;
-  const close = () => { clearTimeout(timer); n.animate([{}, {opacity: 0, translate: '0 8px'}], {duration: calm() ? 0 : 180}).finished.then(() => n.remove()); };
+  n.style.opacity = 0;  // hidden until the entry plays, so it never flashes before motion.js loads
+  const close = () => { clearTimeout(timer); play(n, {opacity: 0, translateY: 8, duration: 180, ease: 'linear'}).finally(() => n.remove()); };  // goes even if anime.js can't load
   const arm = () => { if (ms) timer = setTimeout(close, ms); };
   n.onmouseenter = () => clearTimeout(timer);
   n.onmouseleave = arm;
   n.close = close;
   box.append(n);
   arm();
+  spring().then(ease => play(n, {opacity: [0, 1], translateY: [24, 0], duration: 600, ease})).catch(() => { n.style.opacity = ''; });
   return n;
 }
 
