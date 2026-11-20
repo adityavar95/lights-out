@@ -1,13 +1,13 @@
 // Strategy Lab tab: move one driver's pit stops in a real race and see where they'd have finished (whatif.js), or
 // search every 1-3 stop plan for the best one.
-import {el, svg, teamColor, th, csvButton, get} from './util.js';
+import {el, svg, teamColor, th, csvButton, get, signed as sign} from './util.js';
 import {raceModel, simulate, optimise, ranked, PASS, SC_LOSS} from './whatif.js';
 import {fuelPerLap, paceRanking, undercuts, compoundOf, stintBars} from './pace.js';
 import {TYRES} from './tower.js';
 
 const code = r => r['Driver.code'] || r['Driver.familyName'].slice(0, 3).toUpperCase();
 const chip = color => el('span', {class: 'chip', style: `background:${color}`});
-const signed = s => `${s > 0 ? '+' : s < 0 ? '−' : '±'}${Math.abs(s).toFixed(1)} s`;
+const signed = s => `${sign(s, 1, '±')} s`;
 const slope = s => `${s < 0 ? '−' : '+'}${Math.abs(s).toFixed(3)}`;
 const lapTime = s => `${Math.floor(s / 60)}:${(s % 60).toFixed(3).padStart(6, '0')}`;
 const NO_STOPS = year => (year < 2011 ? 'Jolpica has no pit stops before 2011' : 'Jolpica has no pit stops for this race yet');

@@ -1,6 +1,7 @@
 // Season analysis, pure (no DOM): teammate head-to-heads, cumulative points, who can still win, qualifying supertimes.
 // Rows are Jolpica's flattened season tables; those carry no round, so callers number them first: `numbered` (drivers.js)
 // for results and sprints, `qualiRounds` below for qualifying.
+import {signed} from './util.js';
 
 const driver = r => r['Driver.driverId'];
 const team = r => r['Constructor.constructorId'];
@@ -77,7 +78,7 @@ export function teammates(results, quali) {
     .sort((a, b) => b.rounds - a.rounds)]));
 }
 
-export const fmtGap = g => `${g > 0 ? '+' : g < 0 ? '−' : ''}${Math.abs(g).toFixed(2)} %`;
+export const fmtGap = g => `${signed(g, 2, '')} %`;
 
 // the driver card's line: the longest partnership, the others counted (the career dialog lists them)
 export function h2hLine(records, nameOf) {

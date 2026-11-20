@@ -168,10 +168,7 @@ function sortTable(th) {
   for (const h of table.tHead.rows[0].cells) h.removeAttribute('aria-sort');
   th.setAttribute('aria-sort', dir > 0 ? 'ascending' : 'descending');
   const key = tr => tr.cells[i]?.textContent.trim() ?? '';
-  body.append(...[...body.rows].sort((a, b) => {
-    const x = key(a), y = key(b), n = x !== '' && y !== '' ? x - y : NaN;  // plain numbers by value: signs and decimals
-    return dir * (Number.isNaN(n) ? x.localeCompare(y, undefined, {numeric: true}) : n);
-  }));
+  body.append(...[...body.rows].sort((a, b) => dir * cellOrder(key(a), key(b))));
 }
 
 // Spoiler-free mode (spoilers.js): the races of this season whose result is still hidden. Standings and Drivers are
@@ -265,11 +262,13 @@ function startIntro(r, shown) {
       el('button', {class: 'ighost', onclick: go('intro_stream', () => setView('stream'))}, 'Watch on F1 TV')));
   $('intro').querySelector('.tvbtn').focus({preventScroll: true});
   document.querySelector('.topbar').addEventListener('click', endIntro, {once: true});
-  addEventListener('keydown', e => e.key === 'Escape' && endIntro());
+  addEventListener('keydown', introEsc);
   if (!matchMedia('(prefers-reduced-motion: reduce)').matches) shown.then(() => A.round === r.round && intro());
 }
+const introEsc = e => e.key === 'Escape' && endIntro();
 const endIntro = () => {
-  if (!document.body.classList.contains('intro')) return;  // Esc and the top bar's listeners outlive the card
+  removeEventListener('keydown', introEsc);
+  if (!document.body.classList.contains('intro')) return;  // the top bar's listener outlives the card
   const held = $('intro').contains(document.activeElement);
   document.body.classList.remove('intro');
   if (held) document.querySelector('.hud-deck .deckgroup button')?.focus({preventScroll: true});  // the card is going: the keyboard lands on ▶, where Space still plays

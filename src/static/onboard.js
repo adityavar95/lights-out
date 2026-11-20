@@ -51,9 +51,9 @@ export function setupOnboard(wrap, handlers) {
   return el('div', {class: 'deckgroup'}, w.button, w.menu);
 }
 
-// the next camera in the menu's order, as if clicked
+// the next camera in the menu's order, as if clicked; only called while driving, so it skips Free Orbit
 export function nextCamera() {
-  const cams = [...w.modes.children], i = cams.findIndex(b => b.getAttribute('aria-pressed') === 'true');
+  const cams = [...w.modes.children].filter(b => b.dataset.mode !== 'overview'), i = cams.findIndex(b => b.getAttribute('aria-pressed') === 'true');
   cams[(i + 1) % cams.length].click();
 }
 

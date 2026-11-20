@@ -5,6 +5,7 @@
 // trace slides left of the slower car's, so the same corner sits at different x. Plotted against lap distance s the
 // braking zones overlay exactly and the difference becomes "brakes 16 m later". The lap [0, len) is cut into N buckets
 // of len / N metres (14 m at Spa); bucket b is sampled at the boundary s_b = b len / N.
+import {signed} from './util.js';
 
 export const N = 500;
 // Channels stored per bucket (typed arrays, NaN = not driven yet). t: seconds since this lap's start line crossing;
@@ -92,7 +93,7 @@ export function lapRows(L, len, pos) {
 
 // ---------- race engineer insights ----------
 
-const fmt = v => `${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(3)}s`;
+const fmt = v => `${signed(v, 3)}s`;
 const ok = v => !Number.isNaN(v);
 
 // corner apexes: buckets where speed is the minimum over +-10 buckets and at least 30 km/h under the lap's top speed

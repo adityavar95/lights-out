@@ -23,7 +23,7 @@ import {drsZones} from './telemetry.js';
 import {fetchCircuit, annotate, f1Coords} from './circuits.js';
 import {focusFrame} from './focus.js';
 import {pitTrace} from './strategy.js';
-import {lanes, GRID, apart, headings, retime} from './lanes.js';
+import {lanes, GRID, apart, headings, retime, parked} from './lanes.js';
 import {commentaryUi, syncCommentary} from './commentary.js';
 import {sessionStart} from './multiviewer.js';
 import {until} from './stream.js';
@@ -351,6 +351,8 @@ function reset(extra) {
   clearTimeout(ui.hintTimer);
   stopReel();
   S = {t: 0, playing: false, speed: ui.speed, selected: null, data: null, track: null, token: {}, cam: 'overview', tele: {}, ...extra};
+  ui.stage.classList.remove('driving');  // left Play mid-drive: render, which clears it, waits for the next load's data
+  enableInput(false);
   for (const c of [ui.session, ui.play, ui.speeds, ui.scrub]) c.hidden = !!S.live;  // live has no playback controls
   ui.reelBtn.hidden = !!S.live || S.year < 2023;  // GPS races only
   whyAvailable();
@@ -856,15 +858,6 @@ function spread(cars, t) {
   return cars;
 }
 
-function lapPos(id, t) {
-  const c = S.data.cum[id];
-  let k = 0;
-  while (k < c.length && c[k] <= t) k++;
-  if (k >= c.length) return null;
-  const start = k ? c[k - 1] : 0;
-  return pointAt((t - start) / (c[k] - start));
-}
-
 // Laps mode: every running car's map position at t, in its lane. Lap 1 starts from the car's grid slot behind the line;
 // lanes() fans the grid out into two columns and moves the faster car of a close pair aside to pass.
 function lapCars(t) {
@@ -879,11 +872,15 @@ function lapCars(t) {
     runs.push({id: d.id, s: run - back, v: len / d.pace, rank: k ? undefined : d.rank, run: k ? undefined : run});
   }
   const lat = lanes(runs, len, (S.track?.width ?? 13) / 2), cars = {};
-  for (const r of runs) {
-    const p = pointAt(r.s / len), q = pointAt((r.s + 2) / len), n = Math.hypot(q[0] - p[0], q[1] - p[1]) || 1, m = lat[r.id] / mpu / n;
-    cars[r.id] = [p[0] + (q[1] - p[1]) * m, p[1] - (q[0] - p[0]) * m];  // the left normal of the direction of travel
-  }
+  for (const r of runs) cars[r.id] = lapPlace(r.s, lat[r.id]);
   return cars;
+}
+
+// the map point s m round the lap, lat m to its left
+function lapPlace(s, lat) {
+  const {cum, mpu} = S.proj, len = cum.at(-1) * mpu;
+  const p = pointAt(s / len), q = pointAt((s + 2) / len), n = Math.hypot(q[0] - p[0], q[1] - p[1]) || 1, m = lat / mpu / n;
+  return [p[0] + (q[1] - p[1]) * m, p[1] - (q[0] - p[0]) * m];  // the left normal of the direction of travel
 }
 
 // car positions only (no timing board), for the heading half a second ahead
@@ -939,18 +936,19 @@ function gpsState(t) {
 }
 
 function lapsState(t) {
-  const cars = lapCars(t), board = [];
+  const cars = lapCars(t), board = [], flagged = [];
   for (const d of S.drivers) {
     const c = S.data.cum[d.id];
     let k = 0;
     while (k < c.length && c[k] <= t) k++;
     const done = k >= c.length, finished = done && (d.status === 'Finished' || /^\+\d+ Laps?$/.test(d.status) || d.status === 'Lapped');
     const lapStart = k ? c[k - 1] : 0, frac = done ? 0 : (t - lapStart) / (c[k] - lapStart);
-    if (finished) cars[d.id] = pointAt(0);
+    if (finished) flagged.push([c.at(-1), d.id]);
     const pits = S.data.pits[d.id] || [], lastPit = Math.max(0, ...pits.filter(p => p <= k));
     board.push({d, k, p: k + frac, last: k ? c[k - 1] : 0, out: done && !finished, finished, age: k + 1 - lastPit,
                 pit: !done && pits.includes(k + 1) && frac > 0.9});
   }
+  flagged.sort((a, b) => a[0] - b[0]).forEach(([, id], n) => { const q = parked(n); cars[id] = lapPlace(q.s, q.lat); });
   board.sort((a, b) => (a.out - b.out) || (b.p - a.p) || (a.last - b.last));
   const lead = board[0], cl = S.data.cum[lead.d.id];
   board.forEach((b, i) => {
@@ -1018,7 +1016,7 @@ function render(force) {
     renderFeed(ui, S.data, t);
     ui.scrub.setAttribute('aria-valuetext', `${fmtClock(t)}, ${ui.lap.textContent}`);
   }
-  const f = S.selected ? focusFrame(S, t, st, status, {pos: S.data.mode === 'gps' ? gpsPos : lapPos, nearest}) : null;
+  const f = S.selected ? focusFrame(S, t, st, status, {pos: (id, t) => carsAt(t)[id] ?? null, nearest}) : null;
   renderFocus(f);  // gauges every frame, so they move smoothly
   updateDrawer(f, t);
   updateDecks(S, st, f);
@@ -1031,7 +1029,7 @@ function setMode(m) {
     S.selected = S.board?.[0]?.d.id ?? null;
     if (!S.selected) return;  // nothing loaded yet
   }
-  if (m === 'overview') S.selected = null;
+  if (m === 'overview') S.selected = S.sim?.player ?? null;  // Play: Free Orbit keeps your car yours (the deck drives S.selected's car)
   const changed = m !== S.cam;
   S.cam = m;
   if (ui.has3d && changed) setView(m);

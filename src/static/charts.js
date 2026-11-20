@@ -1,5 +1,5 @@
 // Results, qualifying, lap chart and standings views.
-import {el, svg, teamColor, th} from './util.js';
+import {el, svg, teamColor, th, signed} from './util.js';
 import {raceModel} from './whatif.js';
 import {raceTrace, roadVsClassified} from './pace.js';
 import {faces} from './drivers.js';
@@ -207,7 +207,7 @@ function traceChart(M, ids, info, refId, pitted, pinned) {
   for (let g = Math.ceil(lo / step) * step; g <= hi; g += step) {
     chart.append(svg('line', {x1: m.l, x2: W - m.r, y1: y(g), y2: y(g), class: g ? 'grid' : 'zero'}));
     const t = svg('text', {x: m.l - 8, y: y(g), class: 'axis', 'text-anchor': 'end', 'dominant-baseline': 'central'});
-    t.textContent = g ? `${g > 0 ? '+' : '−'}${Math.abs(g)} s` : ref;
+    t.textContent = g ? `${signed(g)} s` : ref;
     chart.append(t);
   }
   lapAxis(chart, x, L, H - 8, 'Lap');

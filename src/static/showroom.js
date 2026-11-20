@@ -8,7 +8,7 @@ import {SkyMesh} from 'three/addons/objects/SkyMesh.js';
 import {RoomEnvironment} from 'three/addons/environments/RoomEnvironment.js';
 import {mergeGeometries} from 'three/addons/utils/BufferGeometryUtils.js';
 import {attribute, float, fract, mix, smoothstep, time, vec3} from 'three/tsl';
-import {el} from './util.js';
+import {el, failed} from './util.js';
 import {ready, setDeck, shared} from './scene3d.js';
 import {buildCar} from './cars3d.js';
 
@@ -261,13 +261,22 @@ export async function showCar(color, year, team, load) {
     S.car.dispose();
     S.flow?.geometry.dispose();
     S.scene.remove(S.flow);
+    S.car = S.flow = null;
   }
-  S.car = buildCar(color, null, year, S.blob, Infinity, team);
-  S.year = year;
-  S.scene.add(S.car.group);
-  S.flow = new THREE.Mesh(flowGeometry(S.car), flowMaterial());
-  S.flow.visible = S.flowOn;
-  S.flow.frustumCulled = false;
-  S.scene.add(S.flow);
-  buildPins();
+  S.ui.note.hidden = true;
+  try {
+    S.car = buildCar(color, null, year, S.blob, Infinity, team);
+    S.year = year;
+    S.scene.add(S.car.group);
+    S.flow = new THREE.Mesh(flowGeometry(S.car), flowMaterial());
+    S.flow.visible = S.flowOn;
+    S.flow.frustumCulled = false;
+    S.scene.add(S.flow);
+    buildPins();
+  } catch (e) {  // else the panel just stops on an empty floor
+    console.error(e);
+    buildPins();  // the old car's are gone with it
+    S.ui.note.replaceChildren(failed(`The car couldn't be built: ${e.message}`, () => showCar(color, year, team, load)));
+    S.ui.note.hidden = false;
+  }
 }

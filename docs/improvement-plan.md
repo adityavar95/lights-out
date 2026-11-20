@@ -5,7 +5,7 @@
 - [x] Phase 0: housekeeping and baseline (handover: `docs/handover/improve-0.md`)
 - [x] Phase 1: server robustness (handover: `docs/handover/improve-1.md`)
 - [x] Phase 2: LAN safety and caching (handover: `docs/handover/improve-2.md`)
-- [ ] Phase 3: known bugs (frontend)
+- [x] Phase 3: known bugs (frontend) (handover: `docs/handover/improve-3.md`)
 - [ ] Phase 4: F1 TV archive spike
 - [ ] Phase 5: archive-backed replays (only on go)
 - [ ] Phase 6: drop livef1, trim the exe

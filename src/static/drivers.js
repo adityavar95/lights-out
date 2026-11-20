@@ -1,6 +1,7 @@
 // Drivers tab: everyone who raced in the header's season (1950 on), with Wikipedia's portrait and the season's numbers
 // worked out from its race results; a click opens the driver's whole career, season by season (/api/driver).
 import {get, rows, el, teamColor, th, skeleton} from './util.js';
+import {modal} from './palette.js';
 import {teammates, qualiRounds, h2hLine, fmtGap} from './season.js';
 
 const id = r => r['Driver.driverId'] ?? r.Driver?.driverId;  // season tables come flattened, /api/driver rows nested
@@ -148,10 +149,7 @@ function h2hTable(records, year, family) {
 // a driver's whole career in a dialog: totals, teams, then every season
 async function career(d, h2h, year, family) {
   const body = el('div', {}, skeleton());
-  const dlg = el('dialog', {class: 'dcareer', 'aria-labelledby': 'dcareer-name', 'aria-label': `${d.given} ${d.family}`, onclose: () => dlg.remove(), onclick: e => e.target === dlg && dlg.close()},
-    el('button', {class: 'dclose', 'aria-label': 'Close', onclick: () => dlg.close()}, '✕'), body);
-  document.body.append(dlg);
-  dlg.showModal();
+  const dlg = modal('', `${d.given} ${d.family}`, null, el('button', {class: 'dclose', 'aria-label': 'Close', onclick: () => dlg.close()}, '✕'), body);
   dispatchEvent(new CustomEvent('f1:panel', {detail: dlg}));  // the circuits / cars / trace panels close
   const bio = fetch(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(wikiTitle(d.url).replace(/ /g, '_'))}`)
     .then(r => (r.ok ? r.json() : {})).catch(() => ({}));

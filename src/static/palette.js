@@ -61,8 +61,8 @@ export function countsTable(data) {
   return {days, rows, totals, total: totals.reduce((a, b) => a + b, 0)};
 }
 
-function modal(cls, label, onkey, ...body) {
-  const dlg = el('dialog', {class: `dcareer pdlg ${cls}`, 'aria-label': label, onclose: () => dlg.remove(), onclick: e => e.target === dlg && dlg.close(),
+export function modal(cls, label, onkey, ...body) {
+  const dlg = el('dialog', {class: `dcareer ${cls}`, 'aria-label': label, onclose: () => dlg.remove(), onclick: e => e.target === dlg && dlg.close(),
     // nothing behind it reacts to its keys: a panel's or the intro's Esc, T for the trace
     onkeydown: e => { e.stopPropagation(); onkey?.(e, dlg); }}, body);
   document.body.append(dlg);
@@ -73,14 +73,14 @@ const closer = () => el('button', {class: 'dclose', 'aria-label': 'Close', oncli
 
 export function openSheet() {
   count('shortcuts_open');
-  modal('psheet', 'Keyboard shortcuts', (e, dlg) => e.key === '?' && dlg.close(), closer(), el('h2', {}, 'Keyboard shortcuts'),
+  modal('pdlg psheet', 'Keyboard shortcuts', (e, dlg) => e.key === '?' && dlg.close(), closer(), el('h2', {}, 'Keyboard shortcuts'),
     el('div', {class: 'pkeys'}, SHORTCUTS.map(([group, keys]) => el('section', {}, el('h3', {}, group),
       el('dl', {}, keys.flatMap(([k, what]) => [el('dt', {}, k.split(' ').map(x => el('kbd', {}, x))), el('dd', {}, what)]))))));
 }
 
 export function openCounts() {
   const box = el('div', {}, skeleton(5));
-  modal('pcounts', 'Usage counts', null, closer(), el('h2', {}, 'Usage counts'), box,
+  modal('pdlg pcounts', 'Usage counts', null, closer(), el('h2', {}, 'Usage counts'), box,
     el('p', {class: 'muted'}, 'Counted: how many times each of these happened, per day, kept on this app’s own server. Each count is only the event’s name. ',
       'Not kept: any id, cookie, IP address or page address, and nothing goes to a third party. Nothing is sent at all when your browser asks not to be tracked (Do Not Track or Global Privacy Control).'));
   const load = async () => {
@@ -133,7 +133,7 @@ export function openPalette(commands) {
       el('span', {}, c.label), c.hint && el('small', {class: 'muted'}, c.hint))) : [el('li', {class: 'muted'}, 'No match')]));
     mark();
   };
-  const dlg = modal('ppal', 'Command palette', e => {
+  const dlg = modal('pdlg ppal', 'Command palette', e => {
     if (e.isComposing) return;
     const step = {ArrowDown: 1, ArrowUp: -1}[e.key];
     if (step && shown.length) { e.preventDefault(); at = (at + step + shown.length) % shown.length; mark(); }

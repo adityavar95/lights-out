@@ -5,7 +5,7 @@
 // or a timing-tower row's compare icon (`f1:trace` event). In a simulation it records every car, every substep, through
 // the race's onStep hook (trace.js does the resampling). On a GPS replay it compares real laps instead (reallap.js):
 // each driver's car data is fetched once, and only for the drivers picked, since OpenF1 allows ~30 requests a minute.
-import {el, svg, led, get} from './util.js';
+import {el, svg, led, get, signed, covered} from './util.js';
 import {N, CHANNELS, createRecorder, record, delta, insights, lapRows} from './trace.js';
 import {drawTrace, drawCursor, layout} from './tracechart.js';
 import {trackPos, at} from './track.js';
@@ -100,7 +100,7 @@ export function setupTrace(stage, deck, getState, controls) {
     zoom(f - (f - M.x0) * k, f + (M.x1 - f) * k);
   }, {passive: false});
   document.addEventListener('keydown', e => {
-    if (e.code !== 'KeyT' || !e.shiftKey || e.ctrlKey || e.metaKey || e.altKey || ['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName) || !stage.offsetParent) return;
+    if (e.code !== 'KeyT' || !e.shiftKey || e.ctrlKey || e.metaKey || e.altKey || ['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName) || !stage.offsetParent || covered()) return;
     toggle();
   });
   // the wanted driver goes in before opening, so a replay doesn't first fetch the default comparison's telemetry
@@ -350,7 +350,7 @@ function drawDominance(A, B, colA, colB) {
 function showCheck(check, A, B) {
   M.check.hidden = !(check && A && B);
   if (M.check.hidden) return;
-  const sign = v => `${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(3)} s`;
+  const sign = v => `${signed(v, 3)} s`;
   const parts = check.offsets.map((v, k) => (v === null ? null : `S${k + 1} ${sign(v)}`)).filter(Boolean);
   M.check.textContent = `${parts.length ? `Δt accuracy, integrated minus official gap: ${parts.join(' · ')}.` : 'No official sector times for these laps, so Δt can\'t be checked.'}`
     + ` Lap times are official (Δ ${sign(B.time - A.time)}).`;
@@ -397,7 +397,7 @@ function readout() {
     ca.textContent = f(a);
     cb.textContent = f(b);
     const d = b - a;
-    cd.textContent = Number.isNaN(d) ? '–' : `${d > 0 ? '+' : d < 0 ? '−' : ''}${Math.abs(d).toFixed(dp)}`;
+    cd.textContent = Number.isNaN(d) ? '–' : signed(d, dp, '');
   });
   const x = layout(M.wrap.clientWidth, M.wrap.clientHeight, v.x0, v.x1).X(i);
   // on a phone neither side of the crosshair has the readout's width: keep it inside the plot, which clips it
