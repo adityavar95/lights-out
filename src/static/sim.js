@@ -1,3 +1,4 @@
+// @ts-check
 // F1 race simulation: vehicle dynamics, aerodynamics, wake, tyres, DRS, ERS and AI drivers on a real circuit outline,
 // with weather (weather.js), wet tyres (tyres.js), pit stops and strategy (strategy.js) and race control
 // (racecontrol.js). Pure (no DOM / three.js) so node tests can run whole races. Units: SI throughout (m, s, kg, N, W, J);
@@ -221,7 +222,7 @@ export function createRace({year, mapPts, mpu, width, drivers, laps, compounds, 
     if (car.slide > 0) car.slide -= h;
     else if (v > vAq && Math.abs(ks) > 1 / 300 && Math.random() < h * 3 * (v / vAq - 1)) car.slide = 0.3;
     const temp = tyre.ts.reduce((a, b) => a + b) / 4, health = tyre.health.reduce((a, b) => a + b) / 4;
-    const win = [comp.window[0] + c.warm, comp.window[1] + c.warm];  // the era's rubber (eras.js tyre.warm)
+    const win = /** @type {[number, number]} */ ([comp.window[0] + c.warm, comp.window[1] + c.warm]);  // the era's rubber (eras.js tyre.warm)
     const skill = car.player ? 1 : car.skill * R.ai.pace;  // the AI pace slider (80-110 %) scales the AI cars' grip
     const off = !pit && Math.abs(car.d) > T.half + 1.6;
     // The player's car feels the surface; the AI never leaves the track on purpose and its plan knows only the flat 0.55.

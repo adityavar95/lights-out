@@ -16,7 +16,7 @@
   --glass: light-dark(rgb(255 255 255 / .58), rgb(255 255 255 / .09));
   --glass-strong: light-dark(rgb(255 255 255 / .78), rgb(30 30 32 / .82));
   --lg-glass: light-dark(rgb(255 255 255 / .6), rgb(28 28 30 / .55));  /* iOS's tint, as glisse measured it: thin enough for the lens to show */
-  --glass-blur: blur(22px) saturate(180%);
+  /* --glass-blur and --lg-legible: below, with the subtrees that stay dark */
   /* light caught on a pane of liquid glass: bright along the top-left edge, its reflection bottom-right, a faint glow just inside (after Stream's bevel) */
   --lg-spec: inset 1px 1px 1px -.5px rgb(255 255 255 / .6), inset -1px -1px 1px -.5px rgb(255 255 255 / .42), inset 0 0 10px 3px rgb(255 255 255 / .08);
   --edge: light-dark(rgb(255 255 255 / .9), rgb(255 255 255 / .1));
@@ -38,6 +38,13 @@
 }
 :root[data-theme=light] { color-scheme: light; }
 @media (prefers-color-scheme: light) { :root:not([data-theme=dark]) { color-scheme: light; } }
+/* Legible glass, after Apple's regular Liquid Glass: the backdrop's brightness is squeezed into a band (dark: ~10-60 %,
+   light: ~26-100 %) before the tint goes over it, so text holds over a white sky or a black stage alike and the tint can
+   stay thin. Redeclared where a subtree is always dark, since --glass-blur resolves where it is declared. */
+:root, .stream, body[data-section=stream] .topbar, .mapwrap, dialog.mv, .ghint, .gplay, .gclose { --lg-legible: contrast(.72) brightness(.7);
+  --glass-blur: blur(22px) saturate(180%) var(--lg-legible); }
+:root[data-theme=light] { --lg-legible: contrast(.6) brightness(1.3); }
+@media (prefers-color-scheme: light) { :root:not([data-theme=dark]) { --lg-legible: contrast(.6) brightness(1.3); } }
 * { box-sizing: border-box; }
 html { scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
 h1, h2, h3, h4 { text-wrap: balance; }
@@ -153,8 +160,10 @@ html.home .gposter { display: block; position: fixed; inset: 0; z-index: 3; poin
 .dlok { position: absolute; right: -2px; bottom: -2px; width: 10px; height: 10px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 2px var(--bg); }
 @media (max-width: 1400px) { .nextwhere { display: none; } }  /* the tooltip still names the race */
 @media (max-width: 1560px) { .nextbtn:not([hidden]) { display: none; } }  /* no room in the narrower headers; Stream's Coming up row has it */
-/* a race run since the last visit (app.js newRace) */
-.notice { position: fixed; z-index: 7; left: 50%; bottom: 20px; translate: -50% 0; display: flex; align-items: center; gap: 8px; padding: 8px 8px 8px 16px;
+/* toasts (util.js toast): Sonner-style stack, newest at the bottom */
+.toasts { position: fixed; z-index: 7; left: 50%; bottom: 20px; translate: -50% 0; display: flex; flex-direction: column; align-items: center; gap: 8px; pointer-events: none; }
+.toasts:empty { display: none; }
+.notice { pointer-events: auto; display: flex; align-items: center; gap: 8px; padding: 8px 8px 8px 16px;
   max-width: calc(100vw - 24px); border-radius: var(--r-pill); background: var(--lg-glass);
   border: 1px solid var(--hairline); box-shadow: var(--shadow); animation: introin .6s var(--spring) both; }
 .noticex { border: 0; background: none; color: var(--muted); cursor: pointer; padding: 4px 8px; }
@@ -247,6 +256,10 @@ body[data-mode=sim] .rkind { display: none; }
 /* an upcoming race: time to lights out, ticking every minute (app.js) */
 .countdown { display: grid; line-height: 1.15; font-family: var(--mono); font-variant-numeric: tabular-nums; text-align: right; }
 .countdown b { font-size: 18px; font-weight: 500; }
+/* util.js roll: a changed digit drops in, after NumberFlow */
+.countdown b { display: inline-flex; justify-content: flex-end; white-space: pre; overflow: hidden; }
+.roll { display: inline-block; animation: roll .4s var(--spring) both; }
+@keyframes roll { from { translate: 0 -.8em; opacity: 0; } }
 .spoilbtn { border: 1px solid var(--line, rgb(128 128 128 / .35)); background: none; border-radius: var(--r-pill); padding: 8px 12px; cursor: pointer; }
 .heroside { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
 .tvbtn { background: var(--accent); color: var(--accent-ink); border-color: rgb(255 255 255 / .2); border-radius: var(--r-pill); padding: 8px 12px; font-weight: 500;
@@ -916,6 +929,8 @@ option { background-color: var(--panel); color: var(--ink); }
 .flagpill.red { background: var(--flag-red); color: #fff; }
 .flagpill.chequered { background: repeating-conic-gradient(#fff 0 25%, #111 0 50%) 0 0 / 10px 10px; color: #111; text-shadow: 0 0 3px #fff, 0 0 3px #fff; }
 .lapcount { font-weight: 500; font-size: 18px; }
+.storyline { font-size: 13px; font-weight: 500; color: var(--hud-muted, #c8ccd8); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.storyline:empty { display: none; }
 .mode { color: var(--hud-muted); font-size: 13px; }
 .weather { display: flex; gap: 8px; flex-wrap: wrap; }
 .weather span { font-size: 12px; font-weight: 500; background: rgb(255 255 255 / .08); border-radius: var(--r-sm); padding: 2px 8px; }
@@ -930,6 +945,8 @@ option { background-color: var(--panel); color: var(--ink); }
 .clock { color: var(--hud-muted); font-size: 13px; }
 .marked { position: relative; flex: 1; min-width: 0; display: flex; align-items: center; }
 .marked > input { flex: 1; width: 100%; min-width: 0; }
+/* momentum (scrubmarks.js): the followed car's laps against the field, a hairline under the scrubber's track */
+.marked::after { content: ''; position: absolute; left: 0; right: 0; top: calc(50% + 6px); height: 3px; border-radius: var(--r-sm); background: var(--momentum, none); pointer-events: none; }
 .mkpins { position: absolute; inset: 0; pointer-events: none; }
 .marked:has(> input[hidden]) .mkpins { display: none; }
 .mk { position: absolute; top: 50%; width: 16px; height: 16px; margin: -8px 0 0 -8px; padding: 0; border: 0; background: none; display: grid; place-items: center; cursor: pointer; pointer-events: auto; }
@@ -1098,8 +1115,7 @@ option { background-color: var(--panel); color: var(--ink); }
 .drivedeck .pwwrap { display: grid; grid-template-rows: 1fr; transition: grid-template-rows var(--panel-t); }
 .drivedeck.collapsed .pwwrap { grid-template-rows: 0fr; }
 .ddbody { min-height: 0; overflow: hidden; display: flex; flex-direction: column; gap: 8px; padding-top: 8px; }
-.ddstatus { display: flex; gap: 4px; font-size: var(--text-1); font-weight: 500; letter-spacing: .06em; color: var(--hud-muted); min-width: 0; white-space: nowrap; }
-.ddstatus > * { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.ddstatus { display: flex; flex-wrap: wrap; gap: 2px 8px; font-size: var(--text-1); font-weight: 500; letter-spacing: .06em; color: var(--hud-muted); min-width: 0; white-space: nowrap; }
 .ddstatus .on { color: var(--led-on); }
 .ddstatus .warn { color: #ff3346; }
 .master.neu { justify-content: center; padding: 8px 8px; font-size: 12px; font-weight: 500; letter-spacing: .06em; }
@@ -1287,11 +1303,17 @@ table.data tbody tr:last-child td { border-bottom: 0; }
 .skeleton i:nth-child(odd) { margin-right: 12%; }
 @keyframes shimmer { from { background-position: 100% 0; } to { background-position: 0 0; } }
 ::view-transition-old(root), ::view-transition-new(root) { animation-duration: .22s; }
-.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.num { font-family: var(--face); font-variant-numeric: tabular-nums; }  /* table figures in the text face, as F1 timing sets them */
 .drv b { margin-right: 4px; }
 .purple { color: var(--purple); font-weight: 500; }
 .up { color: var(--up); font-size: 12px; }
 .down { color: var(--danger); font-size: 12px; }
+/* driver ratings (ledgers.js): FotMob's bands, fixed colours so they read the same in both themes */
+.rating { display: inline-block; min-width: 40px; padding: 2px 8px; border-radius: var(--r-sm); font-weight: 600; text-align: center; font-variant-numeric: tabular-nums; color: #000; }
+.rating.top { background: #1f6fff; color: #fff; }
+.rating.good { background: #2fd06f; }
+.rating.fair { background: #f5c518; }
+.rating.low { background: #ff5a52; }
 .thumb { height: 32px; }
 
 /* podium */
@@ -1299,8 +1321,11 @@ table.data tbody tr:last-child td { border-bottom: 0; }
 .step { width: min(30%, 200px); text-align: center; }
 .stepname { font-size: 18px; }
 .step .block { --metal: var(--muted); margin-top: 8px; border-top: 3px solid var(--metal); border-radius: var(--dp-radius-panel) var(--r-md) 0 0; display: grid; place-items: center;
-  font-size: var(--text-7); font-weight: 500; color: var(--metal);
+  grid-auto-flow: row; align-content: center; gap: 2px; font-weight: 500; color: var(--metal);
   background: linear-gradient(color-mix(in srgb, var(--metal) 22%, transparent), transparent 60%), var(--glass); }
+/* the gap big and tight, the place small above it (after Apple Sports' scores) */
+.step .block small { font-size: 12px; letter-spacing: .06em; }
+.step .block b { font-size: 24px; line-height: 32px; font-weight: 600; letter-spacing: -.03em; color: var(--ink); font-variant-numeric: tabular-nums; }
 .step.p1 .block { --metal: #d4af37; height: 130px; }
 .step.p2 .block { --metal: #c0c0c8; height: 100px; }
 .step.p3 .block { --metal: #cd7f32; height: 76px; }
@@ -1543,7 +1568,7 @@ body.intro .trackmap { height: calc(100dvh - 58px); max-height: none; aspect-rat
 /* iOS Liquid Glass (glass.js, after glisse): the painted rim replaces the border, and a lens bends the backdrop through
    --lg-filter where the browser can. Late in the file: it must beat each surface's own frost, not a page's override. */
 [data-lg] { border-image: var(--lg-rim, none); }
-[data-lg=lens] { -webkit-backdrop-filter: blur(var(--lg-blur, 5px)) var(--lg-filter, saturate(1.5)); backdrop-filter: blur(var(--lg-blur, 5px)) var(--lg-filter, saturate(1.5)); }
+[data-lg=lens] { -webkit-backdrop-filter: blur(var(--lg-blur, 5px)) var(--lg-filter, saturate(1.5)) var(--lg-legible); backdrop-filter: blur(var(--lg-blur, 5px)) var(--lg-filter, saturate(1.5)) var(--lg-legible); }
 @media (prefers-reduced-transparency: reduce) { [data-lg=lens] { -webkit-backdrop-filter: none; backdrop-filter: none; } }
 /* glisse's settings, read per surface by glass.js. Colour split only off the 3D stage, where three passes cost frames */
 .stream [data-lg=lens], body[data-section=stream] .topbar { --lg-glass-dispersion: .4; }
@@ -1553,7 +1578,7 @@ body.intro .trackmap { height: calc(100dvh - 58px); max-height: none; aspect-rat
   inset 1px 1px 1px -.5px rgb(255 255 255 / .6), inset -1px -1px 1px -.5px rgb(255 255 255 / .6), inset 0 0 6px 6px rgb(255 255 255 / .12), inset 0 0 2px 2px rgb(255 255 255 / .06), 0 0 12px rgb(0 0 0 / .15); }
 /* its buttons: the same bevel, the backdrop rippled through #lg-liquid (glass.js), growing on hover */
 .stream :is(.sghost, .swchip:not([aria-pressed=true]), .spage) { border-color: transparent; background: rgb(255 255 255 / .04); box-shadow: var(--lg-bevel);
-  -webkit-backdrop-filter: url("#lg-liquid") saturate(1.5); backdrop-filter: url("#lg-liquid") saturate(1.5); transition-property: background, scale; transition-duration: .3s; }
+  -webkit-backdrop-filter: url("#lg-liquid") saturate(1.5) var(--lg-legible); backdrop-filter: url("#lg-liquid") saturate(1.5) var(--lg-legible); transition-property: background, scale; transition-duration: .3s; }
 .stream :is(.sghost, .swchip, .spage):hover { scale: 1.05; }
 /* the filters cost most while what's behind them moves (scrolling 16 panes: 27 fps, frost 213), so plain frost until it stops */
 /* a backdrop-filter on the bar would cut its pills off from the page, leaving them see-through: its own glass goes on a layer beside them */
@@ -1636,7 +1661,9 @@ kbd { padding: 1px 8px; border: 1px solid var(--hairline); border-radius: var(--
 .ppal li[role=option] { cursor: pointer; }
 .ppal li[role=option]:hover { background: var(--hairline); }
 .ppal li[aria-selected=true] { background: var(--hairline); box-shadow: inset 3px 0 var(--ink); }
-.ppal small { flex: none; }
+.ppal small, .ppal kbd { flex: none; }
+.ppal .pgroup { padding: 12px 8px 4px; font-size: 12px; font-weight: 500; color: var(--muted); }
+.ppal .pgroup:first-child { padding-top: 4px; }
 @media (pointer: coarse) { .ppal li { min-height: 44px; align-items: center; } }
 
 /* telemetry trace, real laps: track dominance on the mini-map, its text summary and the accuracy line */

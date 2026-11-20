@@ -121,6 +121,8 @@ assert.deepEqual(sessionsOf(wk).map(short), ['FP1', 'FP2', 'Sprint quali', 'Qual
   assert.equal(lead([{videos: []}, {videos: [race]}], [b, a], undefined)[0], race, 'finished season: the newest weekend with videos');
   assert.equal(lead([undefined, {videos: [race]}], [b, a], undefined), null, 'a newer weekend is still to answer');
   assert.equal(lead([], [], undefined), null);
+  const kids = {id: 3, title: '2026 Mexico GP - F1 Kids', kind: 'REPLAY', start: now - 190 * H};
+  assert.equal(lead([{videos: [kids, race]}], [a], undefined)[0], race, "the race, not F1 TV's kids copy of it");
   // the picture is covered edge to edge, the circuit at its centre
   const tiles = aerialTiles(-23.7036, -46.6997, [1920, 1080]);
   assert.ok(tiles.every(a => Number.isInteger(a.x) && Number.isInteger(a.y)));

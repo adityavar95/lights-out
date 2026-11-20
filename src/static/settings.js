@@ -1,8 +1,8 @@
 // The stage's Settings button (top right) and its panel: every graphics, picture, display and sound setting. Changes apply at once and persist.
 import {el} from './util.js';
 import {icon} from './tvcontrols.js';
-import {setGraphics, graphics, framesDrawn, frameStats} from './scene3d.js';
-import {PRESETS, DEFAULTS, RANGES, presetOf} from './graphics.js';
+import {setGraphics, graphics, framesDrawn, frameStats, tier} from './scene3d.js';
+import {PRESETS, RANGES, presetOf, defaultsFor} from './graphics.js';
 import {levels} from './audio.js';
 
 // [setting, label, a list of [value, text] / 'range' / nothing for a switch, tooltip]
@@ -15,7 +15,8 @@ const SECTIONS = [
     ['carDetail', 'Car detail distance', [[0.5, 'Near'], [1, 'Normal'], [2, 'Far']], 'How far away a car keeps its full model'],
   ]],
   ['Image', [
-    ['msaa', 'Edge smoothing (MSAA)'], ['smaa', 'Shader smoothing (SMAA)'], ['ao', 'Ambient occlusion'], ['dof', 'Depth of field'],
+    ['msaa', 'Edge smoothing (MSAA)'], ['smaa', 'Shader smoothing (SMAA)'],
+    ['traa', 'Temporal smoothing (TRAA)', null, 'Trial: replaces MSAA and SMAA. Steadier fences, softer detail, can trail behind smoke'], ['ao', 'Ambient occlusion'], ['dof', 'Depth of field'],
     ['blur', 'Motion blur'], ['bloom', 'Bloom'], ['lens', 'Lens colour fringe'],
   ]],
   ['Scene', [
@@ -68,7 +69,7 @@ export function setupSettings(stage) {
     el('label', {class: 'setrow', title: 'G cycles the presets'}, 'Graphics preset', preset),
     ...SECTIONS.map(([title, rows]) => el('section', {'aria-label': title}, el('h4', {}, title), ...rows.map(rowOf))),
     el('section', {'aria-label': 'Sound'}, el('h4', {}, 'Sound'), audio),
-    el('button', {class: 'neu', onclick: () => setGraphics(DEFAULTS)}, 'Reset graphics and display'));
+    el('button', {class: 'neu', onclick: () => setGraphics(defaultsFor(tier))}, 'Reset graphics and display'));
   const button = el('button', {class: 'neu setbtn', popovertarget: 'setmenu', 'aria-haspopup': 'true', 'aria-expanded': false, title: 'Settings'}, icon('tune'), 'Settings');
   const rate = el('output', {class: 'setfps', hidden: true, 'aria-label': 'Frames per second'});
   menu.addEventListener('toggle', e => {

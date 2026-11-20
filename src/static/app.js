@@ -1,8 +1,7 @@
 // App shell: the Races / Simulate / Stream switch (Stream is the F1 TV browse page, stream.js), the Watch / Simulate switch, race dropdown, race header and tabs. Watch is the race browser (replays of
 // real sessions, results, standings, live timing); Simulate drops the browser chrome for a full-window physics race
 // on the chosen circuit (circuit and car pickers on the stage, season = the cars' era).
-import {get, rows, el, flag, fmtDate, teamColor, inkOn, count, failed, skeleton} from './util.js';
-import {setupReplay, showRace, showLive, setSessions, intro, setCinematic, play, replayKind, REPLAY_KINDS, moment, openMoment, stageCommands, ended} from './replay.js';
+import {get, rows, el, flag, fmtDate, teamColor, inkOn, count, failed, skeleton, toast, roll, replayKind, REPLAY_KINDS} from './util.js';
 import {renderResults, renderLapChart, renderStandings} from './charts.js';
 import {seasonTrends} from './seasonview.js';
 import {setupExplorer} from './explorer.js';
@@ -18,8 +17,24 @@ import {parseHash, formatHash, held} from './share.js';
 import {resultLedgers} from './ledgers.js';
 import {setupDownloads, startDownload, canDownload} from './downloads.js';
 import {spoilerFree, setSpoilerFree, hides, reveal, recent} from './spoilers.js';
-import {openGlobe, globeOpen, flyTo, setPins} from './globe.js';
-import {openCar} from './carsdeck.js';
+
+// The 3D stage (replay.js, three.js, ~5 MB of JS, then textures and the sky) loads on first need: the replay tab, Play,
+// live, the globe, a palette stage command. A link straight to Results or Stream never pulls it.
+let R = null, G = null, stageP = null, globeP = null, globeWanted = false;
+let staged = null, shownP = null, sessions = null;  // the race the stage is to show (showRace's args), its promise, its session list
+const loadStage = () => stageP ??= import('./replay.js').then(m => {
+  m.setupReplay($('tab-replay'), copyView);
+  R = m;
+  if (staged) shownP = m.showRace(...staged);
+  if (sessions) m.setSessions(sessions);
+  return m;
+});
+const onStage = f => loadStage().then(f);
+const stageRace = (...args) => { staged = args; sessions = null; if (R) shownP = R.showRace(...args); };
+const shown = () => loadStage().then(() => shownP);  // the shown race, loading the stage first if need be
+const loadGlobe = () => globeP ??= loadStage().then(() => import('./globe.js')).then(m => G = m);  // the globe shares the stage's renderer
+const globeOpen = () => (G ? G.globeOpen() : globeWanted);  // asked for, still loading: the address stays bare meanwhile
+const moment = () => (R ? R.moment() : {});
 
 const $ = id => document.getElementById(id);
 // extra: the open view's own state in the address (share.js career, focus + stops, car), sent by its module as f1:address
@@ -27,7 +42,7 @@ const A = {year: null, round: null, races: [], mode: 'watch', section: 'analytic
 const today = () => new Date().toISOString().slice(0, 10);  // read per call: a tab open past midnight or New Year
 const ORDER = ['Practice 1', 'Practice 2', 'Practice 3', 'Sprint Qualifying', 'Sprint Shootout', 'Sprint', 'Qualifying', 'Race'];
 const jol = (kind, round) => get(`/api/jolpica/${A.year}/${kind}${round ? `?round=${round}` : ''}`).then(rows);
-const ordinal = n => { const s = ['th', 'st', 'nd', 'rd'], v = n % 100; return n + (s[(v - 20) % 10] || s[v] || s[0]); };  // 1st 2nd 3rd 4th 11th 21st
+const ordinal = n => `R${n}`;  // round, as F1's graphics write it
 const race = round => A.races.find(x => x.round === String(round));
 const hasRun = r => at(r, '') <= new Date();  // lights out has gone: a race later today hasn't
 // the session list's names -> Jolpica's keys for their start times
@@ -108,7 +123,8 @@ const syncTitle = () => {
 function activate(name) {
   document.body.dataset.tab = name;  // style.css: phones drop the hero over the replay
   const swap = () => {
-    for (const b of document.querySelectorAll('[role=tab]')) {
+    if (name === 'replay' && A.section === 'analytics') loadStage();
+  for (const b of document.querySelectorAll('[role=tab]')) {
       const on = b.dataset.tab === name;
       b.setAttribute('aria-selected', on);
       b.tabIndex = on ? 0 : -1;
@@ -139,8 +155,8 @@ function setTeam(id) {
   else { s.removeProperty('--accent'); s.removeProperty('--accent-ink'); }
   try { if (c) localStorage.setItem('f1team', id); else localStorage.removeItem('f1team'); } catch (e) { /* storage blocked: not remembered */ }
 }
-const teamCommands = () => [...TEAMS.map(([id, name]) => ({label: `Team colours: ${name}`, hint: 'Accent', text: `team colours colour theme ${name}`, run: () => setTeam(id)})),
-  {label: 'Team colours: off', hint: 'Accent', text: 'team colours colour theme off default', run: () => setTeam(null)}];
+const teamCommands = () => [...TEAMS.map(([id, name]) => ({label: `Team colours: ${name}`, hint: 'Accent', group: 'Settings', text: `team colours colour theme ${name}`, run: () => setTeam(id)})),
+  {label: 'Team colours: off', hint: 'Accent', group: 'Settings', text: 'team colours colour theme off default', run: () => setTeam(null)}];
 
 const THEMES = [['auto', '◐', 'Theme: follows the system'], ['light', '☀', 'Theme: light'], ['dark', '☾', 'Theme: dark']];
 function setTheme(t) {
@@ -154,12 +170,13 @@ function setTheme(t) {
 // an upcoming race: time to lights out in the hero's podium slot, refreshed every half minute until the race starts
 let timer;
 function countdown(r) {
-  const start = at(r, ''), box = el('div', {class: 'countdown'});
+  const start = at(r, ''), box = el('div', {class: 'countdown'}), left = el('b');
+  box.append(el('small', {class: 'muted'}, 'LIGHTS OUT IN'), left, el('small', {class: 'muted'}, when(start)));
   const tick = () => {
     const s = (start - Date.now()) / 1000;
     if (s <= 0) { clearInterval(timer); return box.replaceChildren(el('span', {class: 'muted'}, 'Race under way')); }
     const d = Math.floor(s / 86400), h = Math.floor(s / 3600) % 24, m = Math.floor(s / 60) % 60;
-    box.replaceChildren(el('small', {class: 'muted'}, 'LIGHTS OUT IN'), el('b', {}, `${d ? `${d}d ` : ''}${h}h ${String(m).padStart(2, '0')}m`), el('small', {class: 'muted'}, when(start)));
+    roll(left, `${d ? `${d}d ` : ''}${h}h ${String(m).padStart(2, '0')}m`);
   };
   clearInterval(timer);
   timer = setInterval(tick, 30000);
@@ -232,7 +249,7 @@ function setSection(section, round = null) {
   syncSwitch();
   syncTitle();
   syncHash();
-  if (section === 'analytics') return;
+  if (section === 'analytics') { if (active === 'replay') loadStage(); return; }
   count('stream_open');
   if (A.races.length) showStream(A.year, A.races, round);
 }
@@ -269,7 +286,7 @@ function startIntro(r, shown) {
   $('intro').querySelector('.tvbtn').focus({preventScroll: true});
   document.querySelector('.topbar').addEventListener('click', endIntro, {once: true});
   addEventListener('keydown', introEsc);
-  if (!matchMedia('(prefers-reduced-motion: reduce)').matches) shown.then(() => A.round === r.round && intro());
+  if (!matchMedia('(prefers-reduced-motion: reduce)').matches) shown.then(() => A.round === r.round && R.intro());
 }
 const introEsc = e => e.key === 'Escape' && endIntro();
 const endIntro = () => {
@@ -278,7 +295,7 @@ const endIntro = () => {
   const held = $('intro').contains(document.activeElement);
   document.body.classList.remove('intro');
   if (held) document.querySelector('.hud-deck .deckgroup button')?.focus({preventScroll: true});  // the card is going: the keyboard lands on ▶, where Space still plays
-  setCinematic(false);  // past the card: the tower and panels the intro kept out of the way
+  R?.setCinematic(false);  // past the card: the tower and panels the intro kept out of the way
 };
 
 // A return visit after a race that wasn't run at the last visit: a notice with a button that plays it. The first visit
@@ -289,19 +306,18 @@ function newRace() {
   let seen;
   try { seen = localStorage.getItem('f1latest'); localStorage.setItem('f1latest', `${A.year}/${r.round}`); } catch (e) { return; }
   if (!seen || seen === `${A.year}/${r.round}`) return;
-  const box = el('div', {class: 'notice', role: 'status'},
+  const box = toast([
     el('span', {class: 'eyebrow'}, 'NEW'), el('span', {}, `${r.raceName} replay`),
     el('button', {class: 'tvbtn', onclick: async () => {
       count('new_race_watch');
-      box.remove();
+      box.close();
       setView('analytics');
       if (A.year !== year) await loadSeason(year, r.round);  // the reader has moved to another season since
       else if (A.round !== r.round) selectRace(r.round);
       activate('replay');
-      A.shown.then(play);
+      shown().then(() => R.play());
     }}, '▶ Watch'),
-    el('button', {class: 'noticex', 'aria-label': 'Dismiss', onclick: () => box.remove()}, '✕'));
-  document.body.append(box);
+    el('button', {class: 'noticex', 'aria-label': 'Dismiss', onclick: () => box.close()}, '✕')], 0);
 }
 
 // Header: the current season's next session, ticking; a click opens Stream on the Coming up row
@@ -332,7 +348,8 @@ function noRace(title, message) {
   $('norace')?.remove();
   A.round = null;
   A.races = [];
-  if (A.shown) A.shown = showRace(A.year, null, []);  // stops and empties the stage (its track request just fails)
+  staged = null;
+  if (R) shownP = R.showRace(A.year, null, []);  // stops and empties the stage (its track request just fails)
   document.title = 'Lights Out';
   $('hero').replaceChildren(el('div', {class: 'herotext'}, el('h1', {}, title)));
   $('racebtn').replaceChildren('Races ▾');
@@ -360,7 +377,7 @@ async function loadSeason(year, round = null, sim = A.mode === 'sim') {
   }
   if (A.year !== year) return;  // the reader has picked another season meanwhile
   A.races = races;
-  setPins(pins());
+  G?.setPins(pins());
   const next = A.races.find(r => !hasRun(r));
   cal.replaceChildren(...A.races.map(r => el('button', {
     class: `racecard ${hasRun(r) ? '' : 'upcoming'}`, 'data-round': r.round,
@@ -372,7 +389,7 @@ async function loadSeason(year, round = null, sim = A.mode === 'sim') {
   if (!race(round)) round = null;  // e.g. a stale link
   if (round ?? last) selectRace(round ?? last.round, sim, round !== null);  // the season's default race doesn't fly the globe
   else noRace(`${year} season`, () => el('p', {class: 'empty'}, `No races on the ${year} calendar yet.`));
-  if (A.intro && A.round && !sim) startIntro(A.races.find(x => x.round === String(A.round)), A.shown);
+  if (A.intro && A.round && !sim) startIntro(A.races.find(x => x.round === String(A.round)), shown());
   if (A.firstSeason && year === +today().slice(0, 4)) newRace();
   A.intro = A.firstSeason = false;
   if (A.section === 'stream') showStream(year, A.races);
@@ -437,9 +454,9 @@ async function selectRace(round, sim = A.mode === 'sim', fly = true) {
 
   $('racebtn').replaceChildren(el('span', {class: 'rnd'}, ordinal(+r.round)), flag(r['Circuit.Location.country'], 40),
     el('b', {}, r['Circuit.Location.country']), el('span', {class: 'caret', 'aria-hidden': 'true'}, '▾'));
-  A.shown = showRace(A.year, round, ['Race'], sim);
+  stageRace(A.year, round, ['Race'], sim);
   // chosen with the globe up: it flies to the circuit, where Play fades it into the stage
-  if (fly && globeOpen()) flyTo(pin(r));
+  if (fly && G?.globeOpen()) G.flyTo(pin(r));
   // a results-only race opens on Results, not on a stage with nothing to play; the next replayable race goes back
   const kind = replayKind(A.year, r.date);
   if (!sim && kind === 'results' && active === 'replay') { A.bounced = true; activate('results'); }
@@ -453,7 +470,7 @@ async function selectRace(round, sim = A.mode === 'sim', fly = true) {
     const rank = s => (ORDER.indexOf(s['Session Name']) + 1) || 99;  // a fixed weekend order, not start dates
     // a session still to come has nothing to replay: not offered, so the default is the latest that has run
     const list = rows(t).filter(s => s.Round === String(round) && sessionStarted(r, s['Session Name'])).sort((a, b) => rank(a) - rank(b));
-    if (list.length) setSessions(list.map(s => s['Session Name']));
+    if (list.length) { sessions = list.map(s => s['Session Name']); R?.setSessions(sessions); }
   }).catch(() => {});
 }
 
@@ -462,7 +479,8 @@ async function selectRace(round, sim = A.mode === 'sim', fly = true) {
 // it once the globe has gone; a race picked in the header flies there too (selectRace), and another season changes the pins.
 // state: the race on screen ('shown') and the next one to run ('next') get their own pin look (style.css .gpin)
 const pin = (r, next) => ({round: r.round, name: r['Circuit.circuitName'], place: `${r['Circuit.Location.locality']}, ${r['Circuit.Location.country']}`,
-  country: r['Circuit.Location.country'], state: String(r.round) === String(A.round) ? 'shown' : r === next ? 'next' : '',
+  // country is the pin's label: the place, since three races are in the USA
+  country: r['Circuit.Location.locality'] || r['Circuit.Location.country'], state: String(r.round) === String(A.round) ? 'shown' : r === next ? 'next' : '',
   lat: +r['Circuit.Location.lat'], lng: +r['Circuit.Location.long'], label: hasRun(r) ? '▶ Play' : 'Open', ...dossier(r)});
 // the pin's dossier: what's known about the circuit (length and lap record where circuits.js has a preset) and its other ways in
 function dossier(r) {
@@ -470,7 +488,7 @@ function dossier(r) {
   return {
     facts: [`Round ${r.round} · ${fmtDate(r.date)}`, p?.record && `${p.lengthKm} km · lap record ${p.record[0]} (${p.record[1]}, ${p.record[2]})`].filter(Boolean),  // not every preset has a record
     actions: [
-      ...(watch ? [{label: 'Highlights', enter: true, run: () => stageCommands.highlights()},
+      ...(watch ? [{label: 'Highlights', enter: true, run: () => onStage(R => R.stageCommands.highlights())},
         {label: 'Strategy lab', enter: true, run: () => activate('strategy')}] : []),
       {label: 'Drive it', run: () => { if (A.section !== 'analytics') setSection('analytics'); setMode('sim', false); selectRace(r.round); }},
       {label: 'Stream', run: () => setView('stream')},
@@ -482,20 +500,24 @@ const pins = () => {
   return A.races.filter((r, i, all) => all.findIndex(x => x['Circuit.circuitId'] === r['Circuit.circuitId']) === i).map(r => pin(r, next));
 };
 const showGlobe = () => {
-  openGlobe(c => {
-    if (String(c.round) !== String(A.round)) selectRace(c.round, undefined, false);  // the header's race is loaded already
-    return A.shown;
-  }, (entered, after) => { syncHash(); if (after) { after(); syncHash(); } else if (entered) play(); });
-  setPins(pins());
+  globeWanted = true;
+  loadGlobe().then(g => {
+    globeWanted = false;
+    g.openGlobe(c => {
+      if (String(c.round) !== String(A.round)) selectRace(c.round, undefined, false);  // the header's race is loaded already
+      return shown();
+    }, (entered, after) => { syncHash(); if (after) { after(); syncHash(); } else if (entered) R.play(); });
+    g.setPins(pins());
+  });
 };
 
 // the command palette's list (palette.js). Circuits and Cars live in Play; the trace and cinematic on the stage of the current mode
 function commands() {
   const stage = () => { if (A.section !== 'analytics') setSection('analytics'); activate('replay'); };
-  const open = panel => document.querySelector(`[aria-controls=${panel}]`).click();
+  const open = panel => onStage(() => document.querySelector(`[aria-controls=${panel}]`).click());  // the decks are the stage's
   return [
-    ...[['analytics', 'Races'], ['sim', 'Play'], ['stream', 'Stream']].map(([v, label]) => ({label, hint: 'View', run: () => setView(v)})),
-    ...(A.round ? [...document.querySelectorAll('[role=tab]')].map(b => ({label: b.textContent, hint: 'Tab', run: () => {
+    ...[['analytics', 'Races'], ['sim', 'Play'], ['stream', 'Stream']].map(([v, label]) => ({label, hint: 'View', group: 'Go to', run: () => setView(v)})),
+    ...(A.round ? [...document.querySelectorAll('[role=tab]')].map(b => ({label: b.textContent, hint: 'Tab', group: 'Go to', run: () => {
       setView('analytics');
       A.bounced = false;
       activate(b.dataset.tab);
@@ -505,20 +527,20 @@ function commands() {
     {label: 'Circuits', hint: 'Play', run: () => { setView('sim'); open('circuitdeck'); }},
     {label: 'Cars', hint: 'Play', run: () => { setView('sim'); open('carsdeck'); }},
     ...(A.round ? [{label: 'Telemetry trace', hint: 'Shift T', run: () => { stage(); open('tracedeck'); }},
-      {label: 'Race highlights', hint: 'H', run: () => { stage(); stageCommands.highlights(); }},
-      {label: 'Telemetry drawer', hint: 'T', run: () => { stage(); stageCommands.drawer(); }},
-      {label: 'Next time of day', hint: 'L', run: () => { stage(); stageCommands.sky(); }},
-      {label: 'Next graphics quality', hint: 'G', run: () => { stage(); stageCommands.tier(); }},
-      {label: 'Cinematic view', hint: 'Replay', run: () => { stage(); setCinematic(); }}] : []),
+      {label: 'Race highlights', hint: 'H', run: () => { stage(); onStage(R => R.stageCommands.highlights()); }},
+      {label: 'Telemetry drawer', hint: 'T', run: () => { stage(); onStage(R => R.stageCommands.drawer()); }},
+      {label: 'Next time of day', hint: 'L', run: () => { stage(); onStage(R => R.stageCommands.sky()); }},
+      {label: 'Next graphics quality', hint: 'G', run: () => { stage(); onStage(R => R.stageCommands.tier()); }},
+      {label: 'Cinematic view', hint: 'Replay', run: () => { stage(); onStage(R => R.setCinematic()); }}] : []),
     {label: 'Start reaction game', hint: 'Five red lights', text: 'lights out reaction start game test', run: openReaction},
     {label: 'Switch theme', run: () => $('themebtn').click()},
     ...teamCommands(),
-    ...('Notification' in globalThis ? [{label: `Session start notices: turn ${notices() ? 'off' : 'on'}`, hint: 'When a session goes live', text: 'notify notification session start live alert', run: () => setNotices(!notices())}] : []),
-    {label: `Spoiler-free mode: turn ${spoilerFree() ? 'off' : 'on'}`, hint: 'Hides recent results until watched', text: 'spoiler free mode hide results', run: () => setSpoilers(!spoilerFree())},
+    ...('Notification' in globalThis ? [{label: `Session start notices: turn ${notices() ? 'off' : 'on'}`, hint: 'When a session goes live', group: 'Settings', text: 'notify notification session start live alert', run: () => setNotices(!notices())}] : []),
+    {label: `Spoiler-free mode: turn ${spoilerFree() ? 'off' : 'on'}`, hint: 'Hides recent results until watched', group: 'Settings', text: 'spoiler free mode hide results', run: () => setSpoilers(!spoilerFree())},
     {label: 'Keyboard shortcuts', hint: '?', run: openSheet},
     {label: 'Usage counts', run: openCounts},
     {label: 'Copy link', run: copyView},
-    ...A.races.map(r => ({label: r.raceName, hint: `Round ${r.round} · ${fmtDate(r.date)}`,
+    ...A.races.map(r => ({label: r.raceName, group: 'Races', hint: `Round ${r.round} · ${fmtDate(r.date)}`,
       text: `${r.raceName} ${r['Circuit.Location.country']} ${r['Circuit.Location.locality']} ${r['Circuit.circuitName']} round ${r.round}`,
       run: () => {
         if (A.section !== 'analytics') setSection('analytics');
@@ -563,14 +585,14 @@ async function route() {
     if (y !== A.year || !A.round) await loadSeason(y, round || null);
     else if (!stream && race(round) && (round !== String(A.round) || wasSim !== (A.mode === 'sim'))) selectRace(round);
     else if (!stream) activate(active);
-    const shown = A.round, car = A.extra.car;
-    if (shown && !stream && car) A.shown.then(() => A.round === shown && A.extra.car === car && openCar(car));
-    if (shown && !stream && A.mode === 'watch' && active === 'replay') {
-      const path = view(), hash = formatHash({...link, year: A.year, round: shown, tab: 'replay'}), mine = hash !== path && {link, path, hash};
+    const here = A.round, car = A.extra.car;
+    if (here && !stream && car) shown().then(() => A.round === here && A.extra.car === car && import('./carsdeck.js').then(m => m.openCar(car)));
+    if (here && !stream && A.mode === 'watch' && active === 'replay') {
+      const path = view(), hash = formatHash({...link, year: A.year, round: here, tab: 'replay'}), mine = hash !== path && {link, path, hash};
       if (mine) pending = mine;
-      A.shown.then(() => {
-        if (A.round !== shown) return;
-        openMoment(link);
+      shown().then(() => {
+        if (A.round !== here) return;
+        R.openMoment(link);
         if (pending === mine) mine.open = true;  // from here the replay is the link's, and moving it lets go
       });
     }
@@ -599,7 +621,6 @@ async function init() {
   // the season list and this season's calendar are requested before the 3D stage is set up (~0.3 s of main thread)
   get('/api/seasons').catch(() => {});
   get(`/api/jolpica/${today().slice(0, 4)}/races`).catch(() => {});
-  setupReplay($('tab-replay'), copyView);
   setupExplorer($('tab-explorer'), () => ({year: A.year, round: A.round}));
   const stored = k => { try { return localStorage.getItem(k); } catch (e) { return null; } };
   const last = +stored('f1visit') || 0, now = Date.now();  // a return: another day than the last visit, within a week
@@ -630,7 +651,7 @@ async function init() {
   // shortcut: polled, since the replay's time moves in a dozen places; replay.js could say so itself if a second reader appears
   setInterval(() => {
     pending?.open && syncHash(true);
-    if (ended() && hidden()) revealRaces([race(A.round)]);  // watched to the flag: nothing left to spoil
+    if (R?.ended() && hidden()) revealRaces([race(A.round)]);  // watched to the flag: nothing left to spoil
   }, 1000);
   addEventListener('hashchange', () => {
     takeToken();
@@ -671,7 +692,7 @@ async function init() {
     $('hero').replaceChildren(el('div', {class: 'herotext'},
       el('div', {class: 'eyebrow'}, 'LIVE TIMING'), el('h1', {}, $('livebtn').title)));
     activate('replay');
-    showLive();
+    onStage(R => R.showLive());
   };
   checkLive();
   setInterval(checkLive, 60000);

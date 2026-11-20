@@ -1,7 +1,9 @@
+// @ts-check
 // Keyboard layer: ? the shortcut sheet, / the Drivers search (else the palette), Ctrl/Cmd+K the command palette, plus the
 // usage counts view. app.js registers the commands; the sheet lists the keys other modules really handle.
-import {el, count, failed, fmtDate, th, skeleton} from './util.js';
+import {el, count, failed, fmtDate, th, skeleton, toast} from './util.js';
 
+/** @type {[string, [string, string][]][]} */
 const SHORTCUTS = [
   ['Anywhere', [['?', 'This sheet'], ['/', 'Find a driver on the Drivers tab, else the command palette'], ['Ctrl K', 'Command palette (⌘ K on a Mac)'],
     ['Esc', 'Close a dialog or panel']]],
@@ -104,16 +106,13 @@ export function openCounts() {
 
 // url: what to copy (share.js, built by app.js: never the raw address, which could hold what isn't for sharing)
 export function copyLink(url) {
-  const say = text => {
-    const n = el('div', {class: 'notice', role: 'status'}, el('span', {}, text));
-    document.body.append(n);
-    setTimeout(() => n.remove(), 5000);
-  };
+  const say = text => toast([el('span', {}, text)]);
   // no navigator.clipboard over plain http on the LAN: the address is shown instead
   Promise.resolve().then(() => navigator.clipboard.writeText(url)).then(() => say('Link copied'), () => say(`Copy this address: ${url}`));
 }
 
 // the command palette. Commands: {label, hint?, text? (what's searched, default the label), run}
+const KEY = /^(Shift |Ctrl )?[A-Z?]$/;  // H, T, Shift T, ?
 export function openPalette(commands) {
   count('palette_open');
   let shown = [], at = 0;
@@ -122,15 +121,23 @@ export function openPalette(commands) {
     'aria-controls': 'palettelist', 'aria-autocomplete': 'list', autocomplete: 'off', spellcheck: 'false', oninput: () => draw()});
   const list = el('ul', {id: 'palettelist', role: 'listbox', 'aria-label': 'Commands'});
   const mark = () => {
-    [...list.children].forEach((li, i) => li.role === 'option' && li.setAttribute('aria-selected', i === at));
+    list.querySelectorAll('[role=option]').forEach((li, i) => li.setAttribute('aria-selected', i === at));
     input.setAttribute('aria-activedescendant', shown.length ? `palette${at}` : '');
-    if (shown.length) list.children[at].scrollIntoView({block: 'nearest'});
+    if (shown.length) list.querySelector(`#palette${at}`).scrollIntoView({block: 'nearest'});
   };
+  // with nothing typed, the list in sections (Linear's and Raycast's menus), each in the order its first command comes;
+  // a hint that is a key reads as a key
   const draw = () => {
     shown = rank(input.value, commands);
+    const grouped = !input.value.trim(), group = c => c.group ?? 'Actions', items = [];
+    if (grouped) { const order = [...new Set(shown.map(group))]; shown = shown.toSorted((a, b) => order.indexOf(group(a)) - order.indexOf(group(b))); }
     at = 0;
-    list.replaceChildren(...(shown.length ? shown.map((c, i) => el('li', {role: 'option', id: `palette${i}`, onclick: () => go(c)},
-      el('span', {}, c.label), c.hint && el('small', {class: 'muted'}, c.hint))) : [el('li', {class: 'muted'}, 'No match')]));
+    shown.forEach((c, i) => {
+      if (grouped && group(c) !== group(shown[i - 1] ?? {group: null})) items.push(el('li', {class: 'pgroup', role: 'presentation'}, group(c)));
+      items.push(el('li', {role: 'option', id: `palette${i}`, onclick: () => go(c)}, el('span', {}, c.label),
+        c.hint && (KEY.test(c.hint) ? el('kbd', {}, c.hint) : el('small', {class: 'muted'}, c.hint))));
+    });
+    list.replaceChildren(...(shown.length ? items : [el('li', {class: 'muted'}, 'No match')]));
     mark();
   };
   const dlg = modal('pdlg ppal', 'Command palette', e => {
@@ -150,7 +157,7 @@ export function setupPalette({commands, driving}) {
     const what = action(e, {isTyping: typing(e.target), driving: driving(), modal});
     if (!what) return;
     e.preventDefault();  // Ctrl+K's address bar, Firefox's quick find on /
-    const search = document.querySelector('#tab-drivers input[type=search]');
+    const search = /** @type {HTMLInputElement | null} */ (document.querySelector('#tab-drivers input[type=search]'));
     if (what === 'sheet') openSheet();
     else if (what === 'slash' && search?.offsetParent) search.select();
     else openPalette(commands());

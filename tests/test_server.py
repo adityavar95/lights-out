@@ -1073,6 +1073,10 @@ assert token_of("") is None and token_of("%7Bbroken") is None
 # the asset scrape finds the sky presets, photo sets and tiles in the real static files
 heavy = _assets._heavy()
 assert any("/HDRIs/" in u for u in heavy) and any("/Textures/" in u for u in heavy)
+# every photo set at both tiers' resolutions (it once listed only gravel at 2k and 1k)
+for _set in ("asphalt_pit_lane", "gravel_floor", "sparse_grass"):
+    for _res in ("4k", "1k"):
+        assert f"{_assets.PH}/Textures/jpg/{_res}/{_set}/{_set}_diff_{_res}.jpg" in heavy, (_set, _res)
 assert any("tiles" in d.parts for d in heavy.values())
 print("asset scrape ok")
 
@@ -1273,3 +1277,52 @@ try:
 finally:
     server.race_info, server.saved_replay, server.replay = real
 print("replay route token ok")
+
+# modernize phase 4: /api/live/stream pushes a recorded feed (tests/fixtures/live.jsonl) as events, in order
+import asyncio
+real = (os.environ.get("LIGHTSOUT_LIVE_PLAY"), os.environ.get("LIGHTSOUT_LIVE_SPEED"), live._thread, live._status["last_request"])
+os.environ["LIGHTSOUT_LIVE_PLAY"] = str(Path(__file__).parent / "fixtures" / "live.jsonl")
+os.environ["LIGHTSOUT_LIVE_SPEED"] = "4"  # 0.25 s between messages
+live._thread = None
+
+
+async def _laps():
+    seen, pings = [], 0
+    events = server.live_events(None, wait=0.02, keepalive=0.1)
+    async for e in events:
+        if e.startswith(":"):
+            pings += 1
+        else:
+            assert e.startswith("data: ") and e.endswith("\n\n")
+            seen.append(json.loads(e[6:])["topics"]["LapCount"]["CurrentLap"])
+        if seen[-1:] == [3] and pings:
+            await events.aclose()
+            return seen
+
+
+try:
+    assert asyncio.run(asyncio.wait_for(_laps(), 10)) == [1, 2, 3]  # one event per change, none repeated
+finally:
+    live._status["last_request"] = 0.0  # idle: the player stops
+    live._thread.join(5)
+    for k, v in zip(("LIGHTSOUT_LIVE_PLAY", "LIGHTSOUT_LIVE_SPEED"), real):
+        os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+    live._thread, live._status["last_request"] = real[2], real[3]
+    live._status.update(connected=False, error=None)
+assert not live._state
+
+# the F1 TV token reaches the stream through a one-time ticket, never the URL
+real = server.f1auth.valid
+server.f1auth.valid = lambda t: t
+try:
+    o = {"Origin": "http://127.0.0.1:8086"}
+    assert client.post("/api/live/ticket", headers=o).json() == {"ticket": None}
+    ticket = client.post("/api/live/ticket", headers={**o, "X-F1-Token": "tok"}).json()["ticket"]
+    assert "tok" not in ticket and server._tickets[ticket][0] == "tok"
+    server._tickets["old"] = ("x", time.time() - 1)
+    client.post("/api/live/ticket", headers=o)
+    assert "old" not in server._tickets  # expired ones are dropped
+    assert server._tickets.pop(ticket, None)  # (the route pops it the same way: single use)
+finally:
+    server.f1auth.valid = real
+print("live stream ok")

@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    "checkJs": false,
+    "allowJs": true,
+    "noEmit": true,
+    "strict": false,
+    "target": "es2022",
+    "module": "es2022",
+    "moduleResolution": "bundler",
+    "lib": [
+      "es2023",
+      "dom",
+      "dom.iterable"
+    ]
+  },
+  "files": [
+    "src/static/util.js",
+    "src/static/sim.js",
+    "src/static/vehicle.js",
+    "src/static/share.js",
+    "src/static/palette.js"
+  ]
+}

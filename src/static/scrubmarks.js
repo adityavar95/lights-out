@@ -8,6 +8,25 @@ import {raceModel} from './whatif.js';
 import {raceStory, AT_LAP_END} from './story.js';
 
 export const NO_MARKS = {pins: [], bands: []};
+
+// Momentum, after FotMob's: the followed car's laps against the field's median for the same lap, as a strip of colour under
+// the scrubber, green where it gained and red where it lost, stronger the bigger the difference (full at 1.5 s).
+// laps: {id: [[start, lap, duration], ...]} on the scrubber's clock. Laps over 115 % of the median (pit stops, safety cars,
+// a spin) and laps fewer than three cars ran stay clear: they say nothing about pace. Returns a CSS background.
+export function momentum(laps, id, duration) {
+  const mine = laps?.[id];
+  if (!mine?.length || !(duration > 0)) return 'none';
+  const by = {};
+  for (const l of Object.values(laps).flat()) if (l[2] > 0) (by[l[1]] ??= []).push(l[2]);
+  const at = x => `${(Math.min(Math.max(x / duration, 0), 1) * 100).toFixed(2)}%`, stops = [];
+  for (const [start, lap, dur] of mine) {
+    const field = (by[lap] ?? []).toSorted((a, b) => a - b), med = field[field.length >> 1];
+    if (!(dur > 0) || field.length < 3 || dur > med * 1.15) continue;
+    const d = dur - med, a = (0.2 + 0.8 * Math.min(Math.abs(d) / 1.5, 1)).toFixed(2), c = d < 0 ? `rgb(47 208 111 / ${a})` : `rgb(255 90 82 / ${a})`;
+    stops.push(`transparent ${at(start)}, ${c} ${at(start)}, ${c} ${at(start + dur)}, transparent ${at(start + dur)}`);
+  }
+  return stops.length ? `linear-gradient(90deg, ${stops.join(', ')})` : 'none';
+}
 const COLOR = {sc: '#ffc800', vsc: '#ffe680', slow: '#ffc800', red: '#ff2d38', out: '#ff8a3d', pit: '#9aa0a6', pass: '#7cc4ff', radio: '#c69cff'};  // else white
 const byTime = list => list.sort((a, b) => a.t - b.t);
 const named = b => ({t: b.t, kind: b.kind, label: KIND_NAME[b.kind]});

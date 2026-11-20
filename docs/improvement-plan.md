@@ -176,6 +176,7 @@ Question: does the user's F1 TV token (Access+) make `livetiming.formula1.com/st
    `spoilers.js`).
 
 ## Phase 9: Code health and tests
+Overlap: `docs/modernize-plan.md` phase 1 (21 Nov 2026) added `jsconfig.json` + `tsc` (`// @ts-check` on util, sim, vehicle, share, palette) to CI and `scripts/test_all.py`; extend that list rather than adding another checker.
 1. Move routing (`route`, `syncHash`, `address`, `app.js:77-96,539-571`) into `router.js`, with
    `tests/test_router.mjs` covering Back/Forward and deep links. Move theme/team colours out of `app.js`.
 2. One `modal()` and one `typing()` in `util.js`. Replace the 4 modal copies and 3 typing checks.

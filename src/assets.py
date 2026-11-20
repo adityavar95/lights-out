@@ -128,16 +128,16 @@ def core() -> None:
 
 
 def _heavy() -> dict[str, Path]:
-    """Sky presets, photo sets at both tiers' resolutions, and the tiles scripts/tile_list.py listed."""
+    """Sky presets, photo sets at both tiers' resolutions (4k desktop, 1k mobile), and the tiles scripts/tile_list.py listed."""
     jobs = {}
     hdris = re.findall(r"hdri\('(\w+)'\)", _read("scene3d.js"))
     assert hdris, "no sky presets found in scene3d.js"
     for name in hdris:
         jobs[f"{PH}/HDRIs/hdr/4k/{name}_4k.hdr"] = ASSETS / "hdri" / f"{name}_4k.hdr"
-    photos = re.findall(r"photo\('(\w+)'.*?high \? '(\w+)' : '(\w+)'\)", _read("textures3d.js"))
+    photos = re.findall(r"photo\('(\w+)'", _read("textures3d.js"))
     assert photos, "no photo sets found in textures3d.js"
-    for name, hi, lo in photos:
-        for res in (hi, lo):
+    for name in photos:
+        for res in ("4k", "1k"):
             for kind in ("diff", "nor_gl", "rough"):
                 file = f"{res}/{name}/{name}_{kind}_{res}.jpg"
                 jobs[f"{PH}/Textures/jpg/{file}"] = ASSETS / "textures" / file

@@ -1,3 +1,4 @@
+// @ts-check
 // The address as shareable state: #year/round/tab[?t=&focus=&session=&cmp=&career=&stops=&car=]. Pure. A link is someone else's input, so every
 // value is checked here and a bad one is dropped alone; only the names below can be written, so a token (#f1tv=) never is.
 export const TABS = ['replay', 'results', 'lapchart', 'strategy', 'standings', 'drivers', 'explorer', 'sim',
@@ -13,6 +14,7 @@ const pick = (v, ok) => (ok(v) ? v : undefined);
 const validCmp = c => Array.isArray(c) && c.length === 2 && c.every(x => DRIVER.test(x?.driver) && Number.isInteger(x?.lap) && x.lap >= 1 && x.lap <= 200);
 
 // what's fit to read or write: anything else is left out
+/** @param {Record<string, any>} state */
 function clean({stream, year, round, tab, t, focus, session, cmp, career, stops, car}) {
   if (stream) return {stream: true};
   return {
@@ -56,7 +58,7 @@ export function formatHash(state) {
   if (s.stream) return '#stream';
   if (!s.year) return '';
   const params = new URLSearchParams();
-  if (s.t !== undefined) params.set('t', Math.round(s.t * 10) / 10);
+  if (s.t !== undefined) params.set('t', String(Math.round(s.t * 10) / 10));
   if (s.focus) params.set('focus', s.focus);
   if (s.session) params.set('session', s.session);
   if (s.cmp) params.set('cmp', s.cmp.map(c => `${c.driver}:${c.lap}`).join(','));

@@ -12,6 +12,7 @@ uv sync                                    # install deps (fastapi, uvicorn, bas
 .venv/Scripts/python tests/test_server.py  # plain asserts, no pytest
 .venv/Scripts/python scripts/test_all.py        # every suite (JS and tests/test_server.py), first failure stops; CI runs it on Windows
 for f in tests/test_*.mjs; do node "$f"; done   # JS tests, one file per module (what each covers: docs/architecture/testing.md)
+npx -y -p typescript@7.0.2 tsc -p jsconfig.json  # type check the // @ts-check modules listed in jsconfig.json (test_all runs it)
 .venv/Scripts/python scripts/fetch_assets.py    # all assets into src/static/assets (gitignored, 610 MB, ~45 min, resumes); build_exe.py fetches only core + skies
 .venv/Scripts/python scripts/tile_list.py       # regenerate static/tile_list.json when a circuit joins the calendar (needs node); build_exe.py runs it first
 ```
@@ -23,6 +24,9 @@ F1 web app: FastAPI backend in `src/` plus vanilla-JS ES modules in `src/static/
 Rules most tasks need:
 - Big payloads (replay, telemetry, live) go out through `raw_json`; table endpoints return `{columns, data, total}`.
 - After changing the replay payload format, delete `.cache/replay/*.json*` (each built replay has a `.json.gz` beside it).
+- The 3D stage loads on demand: `app.js` reaches it only through `loadStage()`, `R`, `onStage` or `shown()`; a static import of a three-reaching module fails `tests/test_app.mjs`.
+- Device tier (`graphics.js` `deviceTier`, `?tier=` forces one): desktop gets Ultra, 4k photo sets and the 4k sky; mobile gets Low and 1k.
+- The live feed is pushed as SSE (`/api/live/stream`); the F1 TV token reaches it through a one-time `POST /api/live/ticket`, never a URL. `/api/live` is the first state and the fallback poll.
 - OpenF1's free tier is ~30 req/min (`_throttle` in `openf1()`); a GPS replay costs ~30 requests. While a session is live OpenF1 answers 401 (`OpenF1Locked`).
 - The F1 TV token (`X-F1-Token`) is never stored or logged by the server.
 - 3D is three.js WebGPURenderer + TSL, no WebGL fallback. Every lit material goes through `csmSync`. No `:has()` in styles without measuring.

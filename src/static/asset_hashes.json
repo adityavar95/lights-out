@@ -14,6 +14,8 @@
  "examples/jsm/tsl/display/BloomNode.js": "e7a39bf41581b5ada6463dfd2e571c6fff27648e459cc0d7fd13d64bbcf0f6ea",
  "examples/jsm/tsl/display/GTAONode.js": "ea946e1d8281ccf14cd19b3cd8b3e5ad387ff20320427e7153fdd884ce8da081",
  "examples/jsm/tsl/display/SMAANode.js": "397ca1a38d5f31681c86705df052271eaff230b52848f768b6dd9ed482f4ae0a",
+ "examples/jsm/tsl/display/TRAANode.js": "c1e253f9953b90534b1604e4e8afd8a0a7f4865ecc29697068df050c2e1c25e2",
+ "examples/jsm/tsl/utils/TAAUtils.js": "f1a9b0530383c20bbeceda2c4276d6e676130ca9bea71c74a3373bf35a637bb7",
  "examples/jsm/utils/BufferGeometryUtils.js": "7bda2a8ba836b2bcf67cb938d4b9e1bb5d1b1bc616817103ed858c0b58296ce7",
  "examples/jsm/utils/SkeletonUtils.js": "b1632a703206c3d830de9fcbe515696770d04b71a15ee6b50afa6d2c3298c86f"
 }

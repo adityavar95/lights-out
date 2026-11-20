@@ -101,3 +101,23 @@ export function roadVsClassified(laps, results) {
   return results.filter(r => road.has(r['Driver.driverId']) && road.get(r['Driver.driverId']) !== +r.position)
     .map(r => ({id: r['Driver.driverId'], road: road.get(r['Driver.driverId']), classified: +r.position}));
 }
+
+// Driver ratings out of 10, after FotMob's: worked out from lap times and the result, never anyone's opinion.
+// 4.5 (a midfield race lands near FotMob's average of 6.5), plus up to 3.5 for race pace (median clean lap, paceRanking's order, fastest = 3.5), plus 0.15 a place gained or lost
+// from the grid (capped at 8), plus or minus 0.5 for beating or losing to the teammate on pace, minus 0.5 for not
+// finishing; 3 to 10. Drivers without MIN_LAPS clean laps get none. results: Jolpica's rows.
+export function ratings(M, results) {
+  const ranked = paceRanking(M), at = new Map(ranked.map((r, i) => [r.id, i])), med = new Map(ranked.map(r => [r.id, r.median]));
+  return results.map(r => {
+    const id = r['Driver.driverId'], i = at.get(id);
+    if (i === undefined) return null;
+    const team = r['Constructor.constructorId'], finished = /^\d+$/.test(r.positionText);
+    const mate = results.find(x => x !== r && x['Constructor.constructorId'] === team && med.has(x['Driver.driverId']));
+    const gained = finished ? (+r.grid || results.length) - +r.position : 0;  // grid 0: from the pit lane, so from the back
+    const vsMate = mate ? med.get(mate['Driver.driverId']) - med.get(id) : null;  // s a lap, + = quicker than the teammate
+    const pace = ranked.length > 1 ? 1 - i / (ranked.length - 1) : 1;
+    const score = 4.5 + 3.5 * pace + 0.15 * Math.max(-8, Math.min(8, gained)) + (vsMate === null ? 0 : vsMate > 0 ? 0.5 : -0.5) - (finished ? 0 : 0.5);
+    return {id, code: r['Driver.code'] || r['Driver.familyName'], team, teamName: r['Constructor.name'], pos: finished ? +r.position : null,
+      status: finished ? `P${r.position}` : r.status, paceRank: i + 1, gained, vsMate, rating: Math.round(Math.max(3, Math.min(10, score)) * 10) / 10};
+  }).filter(Boolean).sort((a, b) => b.rating - a.rating);
+}

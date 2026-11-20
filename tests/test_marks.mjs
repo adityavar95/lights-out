@@ -1,6 +1,17 @@
 // Run: node tests/test_marks.mjs  — the scrubbers' important events (scrubmarks.js): GPS, lap-timing and F1 TV sources.
 import assert from 'node:assert/strict';
-import {gpsMarks, storyMarks, sessionMarks, radioMarks} from '../src/static/scrubmarks.js';
+import {gpsMarks, storyMarks, sessionMarks, radioMarks, momentum} from '../src/static/scrubmarks.js';
+
+{  // momentum: green where the car beat the field's median lap, red where it lost, pit laps and thin fields left clear
+  const laps = {a: [[0, 1, 90], [90, 2, 92], [182, 3, 120]], b: [[0, 1, 91], [91, 2, 91], [182, 3, 91]], c: [[0, 1, 92], [92, 2, 90], [182, 3, 92]]};
+  const g = momentum(laps, 'a', 400);
+  assert.match(g, /^linear-gradient/);
+  assert.match(g, /rgb\(47 208 111 \/ 0\.73\) 0\.00%/, 'lap 1, 1 s under the median of 91');
+  assert.match(g, /rgb\(255 90 82 \/ 0\.73\) 22\.50%/, 'lap 2: 92 s, 1 s over the median of 91');
+  assert.equal(g.match(/rgb\(/g).length, 4, 'lap 3 at 120 s is a pit lap: clear');
+  assert.equal(momentum(laps, 'x', 400), 'none');
+  assert.equal(momentum({a: [[0, 1, 90]]}, 'a', 100), 'none', 'one car is no field');
+}
 
 const rc = [[1000, 'SafetyCar', null, 'SAFETY CAR DEPLOYED'], [1200, 'Flag', 'GREEN', 'TRACK CLEAR'], [3000, 'Flag', 'CHEQUERED', 'CHEQUERED FLAG']];
 const positions = [[0, '1', 1], [0, '2', 2], [2000, '2', 1], [2000, '1', 2]];

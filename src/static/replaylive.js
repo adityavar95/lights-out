@@ -2,7 +2,7 @@
 // through setupLive, because reset() replaces the state object, so it is read through h.S() each time.
 import {covered, get, rows} from './util.js';
 import {asItStands, POINTS, SPRINT_POINTS} from './season.js';
-import {fetchLive, liveInfo, liveDrivers, liveFeeds, liveState, liveGps, hasGps, gpsAt, liveCar, resetGps} from './live.js';
+import {fetchLive, streamLive, liveInfo, liveDrivers, liveFeeds, liveState, liveGps, hasGps, gpsAt, liveCar, resetGps} from './live.js';
 
 // lap fraction -> outline fraction, through the mini-sector boundaries when they match the live feed
 function msFrac(ms, f, segments) {
@@ -46,12 +46,27 @@ export function setupLive(h) {
     }).catch(() => {});
     h.setOverlay('');
     s().playing = true;
+    let es = null, opening = false, gen = 0, polling = false;  // the push stream while the tab is visible; the 1 s poll once it fails
+    const follow = async () => {
+      if (token !== s().token) return document.removeEventListener('visibilitychange', follow);
+      if (document.hidden) { gen++; es?.close(); es = null; return; }  // an unseen tab mustn't hold F1's feed open on the server
+      if (es || opening || polling) return;
+      opening = true;
+      const g = ++gen, opened = await streamLive(
+        next => { if (token === s().token && next.topics.DriverList) applyLive(next); },
+        () => { es = null; polling = true; poll(); });
+      opening = false;
+      if (g === gen && token === s().token && !document.hidden) es = opened;
+      else { opened.close(); follow(); }  // hidden (or shown again) while it opened
+    };
+    document.addEventListener('visibilitychange', follow);
+    follow();
     requestAnimationFrame(function frame() {
-      if (token !== s().token) return;
+      if (token !== s().token) { es?.close(); es = null; return; }
       if (!covered()) h.render(false);
       requestAnimationFrame(frame);
     });
-    (async function poll() {  // a couple of seconds behind the track at most: feed latency + this 1 s refresh
+    async function poll() {  // a couple of seconds behind the track at most: feed latency + this 1 s refresh
       while (token === s().token) {
         await new Promise(r => setTimeout(r, 1000));
         if (document.hidden) continue;  // an unseen tab's polls kept F1's feed open on the server for good
@@ -60,7 +75,7 @@ export function setupLive(h) {
           if (token === s().token && next.topics.DriverList) applyLive(next);
         } catch (e) { /* keep showing the last state; the next poll retries */ }
       }
-    })();
+    }
   }
 
   function applyLive({topics, auth_error}) {  // one /api/live response

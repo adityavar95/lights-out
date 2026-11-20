@@ -161,3 +161,17 @@ export function renderTower(rows, board, cols, column, selected, onTyre) {
     setAttr(badge, 'title', b.stops ? `${b.stops} pit stop${b.stops > 1 ? 's' : ''}` : '');
   });
 }
+
+// The one line over the stage, after Flighty's: who leads and by how much, then where the followed car is and how far
+// behind the car ahead. board: in race order; cols: timing()'s, by id (intNum: the interval in s).
+export function storyLine(board, cols, selected) {
+  const [lead, second] = board, s = n => (n == null ? null : `${n.toFixed(1)} s`);
+  if (!lead || !second) return '';
+  const gap = s(cols[second.d.id]?.intNum), i = board.findIndex(b => b.d.id === selected);
+  const line = [gap ? `${lead.d.code} leads ${second.d.code} by ${gap}` : `${lead.d.code} leads`];
+  if (i > 1) {
+    const g = s(cols[selected]?.intNum);
+    line.push(`${board[i].d.code} P${i + 1}${g ? `, ${g} behind ${board[i - 1].d.code}` : ''}`);
+  }
+  return line.join(' · ');
+}

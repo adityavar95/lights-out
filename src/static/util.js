@@ -1,3 +1,4 @@
+// @ts-check
 // Shared helpers: fetching, team colours, flags, formatting.
 
 const cache = new Map(), MAX = 200;
@@ -76,7 +77,7 @@ export function el(tag, attrs = {}, ...children) {
 // One anonymous usage count on our own server (/api/count, server.py EVENTS): the event's name and nothing else. None
 // when the browser asks not to be tracked (Do Not Track, Global Privacy Control).
 export function count(event) {
-  if (navigator.doNotTrack === '1' || navigator.globalPrivacyControl) return;
+  if (navigator.doNotTrack === '1' || /** @type {any} */ (navigator).globalPrivacyControl) return;
   try { navigator.sendBeacon(`/api/count/${event}`); } catch (e) { /* counts are best effort */ }
 }
 
@@ -234,3 +235,33 @@ export function rcText(msg, flag) {
   const out = m.split(' ').map(w => (/^\([A-Z]{3}\)/.test(w) || /^[A-Z]+\d+$/.test(w) || RC_CAPS.has(w.replace(/[^A-Z]/g, '')) ? w : w.toLowerCase())).join(' ');
   return out.charAt(0).toUpperCase() + out.slice(1);
 }
+
+// Sonner-style toast: notices stack bottom-centre, slide in, pause their timer while hovered, slide out. ms 0 = stays.
+const calm = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+export function toast(children, ms = 5000) {
+  let box = document.querySelector('.toasts');
+  if (!box) document.body.append(box = el('div', {class: 'toasts'}));
+  const n = el('div', {class: 'notice', role: 'status'}, ...children);
+  let timer;
+  const close = () => { clearTimeout(timer); n.animate([{}, {opacity: 0, translate: '0 8px'}], {duration: calm() ? 0 : 180}).finished.then(() => n.remove()); };
+  const arm = () => { if (ms) timer = setTimeout(close, ms); };
+  n.onmouseenter = () => clearTimeout(timer);
+  n.onmouseleave = arm;
+  n.close = close;
+  box.append(n);
+  arm();
+  return n;
+}
+
+// NumberFlow-style: sets node's text one span per character, rolling in only the characters that changed
+export function roll(node, text) {
+  const old = [...node.children].map(s => s.textContent).join('');
+  node.setAttribute('aria-label', text);
+  node.replaceChildren(...[...text].map((c, i) => el('span', {class: old && c !== old[i] && !calm() ? 'roll' : '', 'aria-hidden': 'true'}, c)));
+}
+
+// What a run race can replay, as replay.py decides (app.js tags the race list with it before the stage loads): every car's GPS position (OpenF1, 2023 on), positions from lap
+// times (Jolpica's laps, races from 1996), or nothing but results before that. null: not run yet.
+export const REPLAY_KINDS = {gps: ['3D GPS', "Every car's real position on track"], laps: ['Lap replay', 'Positions worked out from lap times'],
+  results: ['Results only', 'No lap timing before 1996: results, standings and drivers']};
+export const replayKind = (year, date) => date > new Date().toISOString().slice(0, 10) ? null : year >= 2023 ? 'gps' : year >= 1996 ? 'laps' : 'results';

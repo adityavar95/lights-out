@@ -58,7 +58,16 @@ console.log('live ok');
 
 // timing tower order: two cars side by side swapping every update don't move the rows; a pass that holds for 3
 // updates does; an order that never settles still shows within 1 s; a scrub (force) takes the board's order at once
-import {stableOrder, rowAfter} from '../src/static/tower.js';
+import {stableOrder, rowAfter, storyLine} from '../src/static/tower.js';
+{  // the stage's one-line story: the lead and its margin, then the followed car's place and interval
+  const b = ['VER', 'NOR', 'LEC', 'HAM'].map(code => ({d: {id: code, code}}));
+  const cols = {NOR: {intNum: 2.43}, LEC: {intNum: 0.8}, HAM: {intNum: 1.26}};
+  assert.equal(storyLine(b, cols, null), 'VER leads NOR by 2.4 s');
+  assert.equal(storyLine(b, cols, 'HAM'), 'VER leads NOR by 2.4 s · HAM P4, 1.3 s behind LEC');
+  assert.equal(storyLine(b, cols, 'NOR'), 'VER leads NOR by 2.4 s', 'P2 is already in the lead line');
+  assert.equal(storyLine(b, {}, 'LEC'), 'VER leads · LEC P3');
+  assert.equal(storyLine(b.slice(0, 1), cols, null), '');
+}
 assert.equal(rowAfter('ArrowDown', 3, 20), 4);
 assert.equal(rowAfter('ArrowDown', 19, 20), 19, 'stops at the last row');
 assert.equal(rowAfter('ArrowUp', 0, 20), 0, 'stops at the first row');
@@ -81,3 +90,23 @@ for (let k = 1; k <= 12 && moved === null; k++) if (!shown(stableOrder(busy, cyc
 assert.ok(moved !== null && moved <= 1200, `reshuffling field shown after ${moved} ms`);
 assert.equal(shown(stableOrder(st, B('C', 'A', 'B'), 1100, true)), '1C 2A 3B');
 console.log('tower order ok');
+
+// modernize phase 4: the push stream parses each event and falls back once on an error
+{
+  const {streamLive} = await import('../src/static/live.js');
+  let made;
+  globalThis.EventSource = class { constructor(url) { made = this; this.url = url; this.closed = false; } close() { this.closed = true; } };
+  const got = [];
+  let fails = 0;
+  const es = await streamLive(b => got.push(b), () => fails++);
+  assert.equal(es, made);
+  assert.equal(es.url, '/api/live/stream');  // no F1 TV token: no ticket asked for
+  es.onmessage({data: '{"topics":{"LapCount":{"CurrentLap":2}},"auth":false}'});
+  assert.deepEqual(got, [{topics: {LapCount: {CurrentLap: 2}}, auth: false}]);
+  es.onerror();
+  assert.ok(es.closed && fails === 1);
+  globalThis.sessionStorage = {getItem: () => 'tok'};
+  globalThis.fetch = async (url, o) => ({json: async () => ({ticket: o.headers['X-F1-Token'] === 'tok' && url === '/api/live/ticket' ? 'a b' : null})});
+  assert.equal((await streamLive(() => {}, () => {})).url, '/api/live/stream?ticket=a%20b');
+  console.log('live stream ok');
+}

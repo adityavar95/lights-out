@@ -20,6 +20,19 @@ export async function fetchLive() {
   return body;
 }
 
+// /api/live pushed by /api/live/stream: onData(body) per change; on an error the stream is closed and onFail() called
+// once (the caller falls back to fetchLive). EventSource sends no headers, so a token goes through a one-time ticket.
+export async function streamLive(onData, onFail) {
+  const tv = tvHeaders();
+  const {ticket} = tv['X-F1-Token']
+    ? await fetch('/api/live/ticket', {method: 'POST', headers: tv}).then(r => r.json()).catch(() => ({}))
+    : {};
+  const es = new EventSource(`/api/live/stream${ticket ? `?ticket=${encodeURIComponent(ticket)}` : ''}`);
+  es.onmessage = e => onData(JSON.parse(e.data));
+  es.onerror = () => { es.close(); onFail(); };
+  return es;
+}
+
 // session start in ms since epoch (StartDate is local time at the circuit)
 function origin(info) {
   const [h, m] = (info.GmtOffset || '00:00').replace('-', '').split(':').map(Number);

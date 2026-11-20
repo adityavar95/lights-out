@@ -1,3 +1,4 @@
+// @ts-check
 // The vehicle solver: one deterministic physics step for every car, the player's or the AI's, from the same normalised
 // control struct and the car's EraVehicleProfile (eras.js, flattened by carSpec). Pure; sim.js calls it per car per
 // physics step. Units SI; lateral quantities are + to the right (the track's convention: right-hand turns have k > 0).
