@@ -25,6 +25,19 @@ export function flight(a, b, f) {
   return {lat: a.lat + (b.lat - a.lat) * turn, lng: a.lng + dl * turn, alt: a.alt * (up / a.alt) ** ease(Math.min(1, f / 0.15)) * (b.alt / up) ** drop};
 }
 
+// Which pins' names fit on screen: pins are {x, y, w (the name's width), rank}. In order of rank a name (a box beside its dot) is
+// kept only if it overlaps no dot or kept name of a pin ranked above it, so a crowd (Europe) shows its few best names until zoomed in.
+// Returns the Set of kept pins.
+export function namesFit(pins) {
+  const apart = ([a, b, c, d], [e, f, g, h]) => c <= e || a >= g || d <= f || b >= h, taken = [], kept = new Set();
+  for (const p of [...pins].sort((a, b) => b.rank - a.rank)) {
+    const box = [p.x + 9, p.y - 10, p.x + 14 + p.w, p.y + 10];
+    if (taken.every(t => apart(t, box))) { taken.push(box); kept.add(p); }
+    taken.push([p.x - 7, p.y - 7, p.x + 7, p.y + 7]);  // its dot, for those below it
+  }
+  return kept;
+}
+
 // The pin the view is over: the index of the one of `ats` (unit vectors) nearest the camera's direction `dir` (unit),
 // or -1 unless it is in the middle of the window: within 0.4 of the height (the 40° lens sees 0.36 each way), and
 // within ~5 km however low, so the circuit can be looked round

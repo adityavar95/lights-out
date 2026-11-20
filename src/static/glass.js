@@ -3,7 +3,7 @@
 // filters to the live backdrop (so does WebView2); other browsers keep the frost and the rim.
 // Surfaces get data-lg (lens or rim only, style.css): a lens only over something worth bending, since each frame of the
 // 3D stage re-runs its filter; the big decks, and cards on the flat page, would show nothing but the cost.
-const LENS = '.glass:not(.circuitdeck, .tracedeck), .topbar, .notice, .deckmenu, .sghost, .swchip, .introcard, .scard:not(.skel), .sched, .sconnect';
+const LENS = '.glass:not(.circuitdeck, .tracedeck), .topbar, .notice, .deckmenu, .sghost, .swchip, .introcard, .scard:not(.skel), .sched, .sconnect, .ghint, .gplay, .gclose';
 const RIM = '.circuitdeck, .tracedeck, .card, .hero, .calendar, .modeswitch, .racebtn, .livebtn, .nextbtn, .themebtn, .tvbtn, .labbtn, .dcareer, .dcard';
 // glisse's glass: how far the rim reaches for what it shows (.45), the band that bends (.25), the dome over it (.5), all
 // shares of the shorter side; capped so a tall panel keeps a rim, not a quarter of its width bent
@@ -117,7 +117,7 @@ function filterOf(id, width, height, href, bend, dispersion) {
 }
 
 // iOS's white at the rim and hairline: fainter on a dark page, as measured by glisse
-const SHINE = {light: .3, dark: .13}, HAIRLINE = {light: [0, 0, 0, .08], dark: [255, 255, 255, .08]};
+const SHINE = {light: .3, dark: .3}, HAIRLINE = {light: [0, 0, 0, .08], dark: [255, 255, 255, .08]};
 const rims = new Map();
 function rim(radius, scheme, shine) {
   const density = Math.min(devicePixelRatio || 1, 3), key = [radius, scheme, density, shine].join();

@@ -11,7 +11,7 @@ import {min, normalView, positionView, smoothstep, uniform, uv} from 'three/tsl'
 import {el} from './util.js';
 import {ready, setDeck, shared, warmStage} from './scene3d.js';
 import {TILES, fetchTile} from './satellite.js';
-import {llToVec, vecToLL, tileLL, tilesRound, flight, over} from './globemath.js';
+import {llToVec, vecToLL, tileLL, tilesRound, flight, over, namesFit} from './globemath.js';
 
 const BASE = 5;                 // the whole Earth: 32 x 32 tiles, 8192 px across (the user's choice, ~340 MB on the GPU), as four 4096 px quarters:
                                 // tiles show as they land, and each refresh uploads a 64 MB quarter, not the 256 MB whole
@@ -22,6 +22,14 @@ const FLY = 5000, FADE = 900;   // ms
 const UNDER = '.hero, .tabs, main, .foot';  // what the globe covers: out of the keyboard's reach while it does
 
 let G = null;
+
+// a fixed sky: ~110 faint dots as CSS gradients, from a seeded sequence so every visit (and the page's poster) matches
+function stars() {
+  let s = 7;
+  const rnd = () => (s = s * 16807 % 2147483647) / 2147483647;
+  return Array.from({length: 110}, () => `radial-gradient(circle at ${(rnd() * 100).toFixed(1)}% ${(rnd() * 100).toFixed(1)}%, rgb(255 255 255 / ${(0.25 + rnd() * 0.6).toFixed(2)}) 0, transparent ${(0.6 + rnd() * 0.9).toFixed(1)}px)`).join(',');
+}
+const unposter = () => setTimeout(() => document.querySelector('.gposter')?.remove(), 900);  // after the globe has faded in over it
 
 // A piece of the sphere holding the n x n tiles from (x0, y0) at zoom z, with the canvas they are drawn on as its map.
 // The vertices sit at the tiles' own Mercator spacing, so the picture needs no reprojection.
@@ -137,7 +145,7 @@ async function warm(g) {
 
 const view = g => { const [lat, lng] = vecToLL(g.camera.position.toArray()); return {lat, lng, alt: g.camera.position.length() - 1}; };
 // the whole Earth in the window, whatever its shape
-const home = g => 3.9 / Math.min(1, g.camera.aspect) - 1;
+const home = g => 3.45 / Math.min(1, g.camera.aspect) - 1;
 
 function place(g, {lat, lng, alt}) {
   g.camera.position.set(...llToVec(lat, lng)).multiplyScalar(1 + alt);
@@ -151,7 +159,8 @@ function card(g, c) {
   g.card.classList.toggle('on', !!c);
   g.hint.hidden = !!c;
   if (!c) return;
-  g.card.firstChild.replaceChildren(el('b', {}, c.name), el('small', {}, c.place), ...(c.facts ?? []).map(f => el('small', {class: 'gfact'}, f)));
+  const [round, ...facts] = c.facts ?? [];  // the round and date lead; length and lap record follow
+  g.card.firstChild.replaceChildren(el('small', {class: 'geyebrow'}, round ?? ''), el('b', {}, c.name), el('small', {}, c.place), ...facts.map(f => el('small', {class: 'gfact'}, f)));
   g.play.textContent = c.label;
   g.after = null;
   // the dossier's other ways in (app.js pin): enter flies down and opens the race first; the rest close the globe and go
@@ -161,7 +170,7 @@ function card(g, c) {
 // Play: the race opens under the globe (pick gives the promise of its stage), the view settles over the circuit, and
 // once both are done the globe fades
 function enter(g) {
-  const c = g.over, fly = g.fly = {from: view(g), to: {lat: c.lat, lng: c.lng, alt: END}, t0: performance.now(), ms: 1200, enter: true, ready: false};
+  const c = g.over, fly = g.fly = {from: view(g), to: {lat: c.lat, lng: c.lng, alt: END}, t0: performance.now(), ms: view(g).alt > 0.3 ? 3000 : 1200, enter: true, ready: false};
   g.controls.enabled = false;
   Object.assign(g.play, {disabled: true, textContent: 'Loading…'});
   for (const b of g.acts.children) b.disabled = true;
@@ -173,19 +182,28 @@ function enter(g) {
   Promise.resolve(g.pick(c)).then(warmStage).then(go, go);  // the circuit's shaders compiled before it shows
 }
 
+// Each pin's name where it fits (globemath.js namesFit; rank: the race on screen, the next one, then the nearest the middle)
+function labels(shown) {
+  for (const p of shown) p.w ||= p.name.offsetWidth;  // measured once it has a size
+  const kept = namesFit(shown);
+  for (const p of shown) if (p.free !== kept.has(p)) p.name.classList.toggle('off', !(p.free = kept.has(p)));
+}
+
 const v = new THREE.Vector3();
 function draw(dt) {
   const g = G, {camera} = g;
   if (!g.w) return;  // hidden (Stream)
+  if (!g.ready) { g.ready = true; g.el.classList.add('ready'); unposter(); }  // the first frame is about to be drawn: fade in over the page's poster
   if (g.size) { g.surface.setSize(g.w, g.h, false); g.size = false; }  // here, not in the observer: showroom.js says why
   if (g.fly) {
     const {fly} = g, f = Math.min(1, (performance.now() - fly.t0) / fly.ms);
     g.controls.update();  // the spin's damped leftover dies out here, under the flight, not as a lurch once it lands
     place(g, flight(fly.from, fly.to, f));
-    if (f === 1 && !fly.enter) {  // down: the view is the reader's again, with Play under their hand
+    if (f === 1 && !fly.enter) {  // down: the view is the reader's again, with Play under their hand; back out: the Earth spins again
       g.fly = null;
       g.controls.enabled = true;
-      g.play.focus({preventScroll: true});
+      if (fly.out) g.controls.autoRotate = true;
+      else g.play.focus({preventScroll: true});
     } else if (f === 1 && fly.ready && !g.fading) {  // over the circuit, and its stage is there to be seen
       g.fading = true;
       g.el.classList.add('out');
@@ -202,7 +220,9 @@ function draw(dt) {
   const alt = camera.position.length() - 1;
   if (!g.fly?.enter) {  // Play: over a circuit and close enough to see it; a race chosen in the header is the one it opens there
     const i = alt < SHOW ? over(g.ats, v.copy(camera.position).normalize().toArray(), alt) : -1, c = g.pins[i]?.c ?? null;
-    const at = c && g.to?.lat === c.lat && g.to.lng === c.lng ? g.to : c;
+    const chosen = c && g.to?.lat === c.lat && g.to.lng === c.lng;
+    if (g.to && ((!g.fly && alt > 1.2) || (c && !chosen))) g.to = null;  // zoomed out by hand, or over another circuit: the choice is let go
+    const at = chosen ? g.to : c ?? g.to ?? null;  // a chosen circuit's card shows from the moment of choosing, on the way down too
     if (at !== g.over) card(g, at);
   }
   Object.assign(camera, {near: alt * 0.2, far: alt + 2.5});
@@ -220,11 +240,19 @@ function draw(dt) {
     g.painted = performance.now();
   }
   // the pins: on this side of the horizon, and away once the ground is close
-  for (const {b, at} of g.pins) {
-    const on = (!g.fly || alt > 0.05) && at.dot(camera.position) > 1 + alt * 0.004;
-    if (on) { v.copy(at).project(camera); b.style.translate = `${((v.x + 1) / 2 * g.w).toFixed(1)}px ${((1 - v.y) / 2 * g.h).toFixed(1)}px`; }
+  const shown = [];
+  for (const p of g.pins) {
+    const {b, at} = p, facing = at.dot(camera.position), on = (!g.fly || alt > 0.05) && facing > 1 + alt * 0.004;
+    if (on) {
+      v.copy(at).project(camera);
+      [p.x, p.y] = [(v.x + 1) / 2 * g.w, (1 - v.y) / 2 * g.h];
+      b.style.translate = `${p.x.toFixed(1)}px ${p.y.toFixed(1)}px`;
+      p.rank = (p.c.state === 'shown' ? 4 : p.c.state === 'next' ? 2 : 0) + facing / camera.position.length();
+      shown.push(p);
+    }
     if (b.hidden === on) b.hidden = !on;
   }
+  labels(shown);
   shared().renderer.render(g.scene, camera);
 }
 
@@ -237,17 +265,27 @@ export function flyTo(c) {
   g.to = c;
   g.fly = {from: view(g), to: {lat: c.lat, lng: c.lng, alt: END}, t0: performance.now(), ms: FLY};
   g.controls.enabled = g.controls.autoRotate = false;
-  g.hint.textContent = '';
   detail(g, c.lat, c.lng);
+}
+
+// Back out: the choice is let go and the view rises to the whole Earth, spinning again
+function leave(g) {
+  const at = view(g);
+  g.to = null;
+  g.controls.enabled = g.controls.autoRotate = false;
+  g.fly = {from: at, to: {lat: at.lat, lng: at.lng, alt: home(g)}, t0: performance.now(), ms: 2400, out: true};
 }
 
 // The pins: [{name, place, lat, lng, label, ...}], the circuits of the season in the header. A pin flies to its circuit.
 export function setPins(list) {
   const g = G;
   if (!g) return;
-  g.pins = list.map(c => ({c, at: new THREE.Vector3(...llToVec(c.lat, c.lng)),
-    b: el('button', {class: 'gpin', hidden: true, 'data-state': c.state || null, 'aria-label': `${c.name}, ${c.place}`, onclick: () => flyTo(c)},
-      el('i', {class: 'gname', 'aria-hidden': 'true'}, c.country ?? ''), el('span', {}, el('b', {}, c.name), el('small', {}, c.place)))}));
+  g.pins = list.map(c => {
+    const name = el('i', {class: 'gname off', 'aria-hidden': 'true'}, c.country ?? '');
+    return {c, at: new THREE.Vector3(...llToVec(c.lat, c.lng)), name,
+      b: el('button', {class: 'gpin', hidden: true, 'data-state': c.state || null, 'aria-label': `${c.name}, ${c.place}`, onclick: () => flyTo(c)},
+        name, el('span', {}, el('b', {}, c.name), el('small', {}, c.place)))};
+  });
   g.ats = list.map(c => llToVec(c.lat, c.lng));
   g.pinbox.replaceChildren(...g.pins.map(p => p.b));
   warm(g);
@@ -258,13 +296,14 @@ export function setPins(list) {
 export async function openGlobe(pick, closed) {
   if (G || !ready) return;  // no GPU: the page as it was
   const canvas = el('canvas', {'aria-hidden': 'true'}), pinbox = el('div', {class: 'gpins'});
-  const hint = el('p', {class: 'ghint', role: 'status'}, 'Drag to spin. Pick a circuit, zoom in on one, or choose a race above. Esc closes.');
-  const play = el('button', {onclick: () => enter(G)}), acts = el('div', {class: 'gacts'});
-  const card = el('div', {class: 'gplay'}, el('span', {'aria-live': 'polite'}), play, acts);
+  const hint = el('p', {class: 'ghint', role: 'status'}, el('b', {}, 'Pick a circuit.'), ' Watch its race in 3D, drive it, or open it on F1 TV. Drag to spin, scroll to zoom.');
+  const play = el('button', {class: 'gprimary', onclick: () => enter(G)}), acts = el('div', {class: 'gacts'});
+  const card = el('div', {class: 'gplay'}, el('span', {'aria-live': 'polite'}), play, acts, el('button', {class: 'gback', onclick: () => leave(G)}, '← Whole Earth'));
   const g = G = {pick, closed, hint, pinbox, play, acts, card, pins: [], ats: [], patches: [], w: 0, h: 0, painted: 0,
     el: el('section', {class: 'globe', 'aria-label': 'World map of circuits'}, canvas, pinbox, hint, card,
       el('small', {class: 'gcredit'}, 'Imagery: Esri, Maxar, Earthstar Geographics'),
-      el('button', {class: 'themebtn gclose', 'aria-label': 'Close the world map', title: 'Close (Esc)', onclick: closeGlobe}, '✕'))};
+      el('button', {class: 'themebtn gclose', title: 'Skip the globe, to the race page (Esc)', onclick: closeGlobe}, 'Race page ›'))};
+  g.el.style.setProperty('--stars', stars());
   g.keys = e => { if (e.key === 'Escape' && !document.querySelector('dialog:modal, :popover-open')) closeGlobe(); };
   addEventListener('keydown', g.keys);
   dispatchEvent(new CustomEvent('f1:panel', {detail: g.el}));  // the showroom lets go of the renderer's one deck
@@ -305,6 +344,7 @@ export function closeGlobe() {
   removeEventListener('keydown', g.keys);
   for (const x of document.querySelectorAll(UNDER)) x.inert = false;
   delete document.body.dataset.globe;
+  document.querySelector('.gposter')?.remove();  // no GPU: the globe never drew
   g.el.remove();
   for (const s of [...g.earth ?? [], ...g.patches, g.look, g.next, g.old]) if (s) s.dead = true;  // paint stops asking for tiles
   if (g.surface) {
