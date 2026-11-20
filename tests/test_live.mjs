@@ -58,7 +58,16 @@ console.log('live ok');
 
 // timing tower order: two cars side by side swapping every update don't move the rows; a pass that holds for 3
 // updates does; an order that never settles still shows within 1 s; a scrub (force) takes the board's order at once
-import {stableOrder, rowAfter} from '../src/static/tower.js';
+import {stableOrder, rowAfter, storyLine} from '../src/static/tower.js';
+{  // the stage's one-line story: the lead and its margin, then the followed car's place and interval
+  const b = ['VER', 'NOR', 'LEC', 'HAM'].map(code => ({d: {id: code, code}}));
+  const cols = {NOR: {intNum: 2.43}, LEC: {intNum: 0.8}, HAM: {intNum: 1.26}};
+  assert.equal(storyLine(b, cols, null), 'VER leads NOR by 2.4 s');
+  assert.equal(storyLine(b, cols, 'HAM'), 'VER leads NOR by 2.4 s · HAM P4, 1.3 s behind LEC');
+  assert.equal(storyLine(b, cols, 'NOR'), 'VER leads NOR by 2.4 s', 'P2 is already in the lead line');
+  assert.equal(storyLine(b, {}, 'LEC'), 'VER leads · LEC P3');
+  assert.equal(storyLine(b.slice(0, 1), cols, null), '');
+}
 assert.equal(rowAfter('ArrowDown', 3, 20), 4);
 assert.equal(rowAfter('ArrowDown', 19, 20), 19, 'stops at the last row');
 assert.equal(rowAfter('ArrowUp', 0, 20), 0, 'stops at the first row');

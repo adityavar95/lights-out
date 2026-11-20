@@ -234,3 +234,27 @@ export function rcText(msg, flag) {
   const out = m.split(' ').map(w => (/^\([A-Z]{3}\)/.test(w) || /^[A-Z]+\d+$/.test(w) || RC_CAPS.has(w.replace(/[^A-Z]/g, '')) ? w : w.toLowerCase())).join(' ');
   return out.charAt(0).toUpperCase() + out.slice(1);
 }
+
+// Sonner-style toast: notices stack bottom-centre, slide in, pause their timer while hovered, slide out. ms 0 = stays.
+const calm = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+export function toast(children, ms = 5000) {
+  let box = document.querySelector('.toasts');
+  if (!box) document.body.append(box = el('div', {class: 'toasts'}));
+  const n = el('div', {class: 'notice', role: 'status'}, ...children);
+  let timer;
+  const close = () => { clearTimeout(timer); n.animate([{}, {opacity: 0, translate: '0 8px'}], {duration: calm() ? 0 : 180}).finished.then(() => n.remove()); };
+  const arm = () => { if (ms) timer = setTimeout(close, ms); };
+  n.onmouseenter = () => clearTimeout(timer);
+  n.onmouseleave = arm;
+  n.close = close;
+  box.append(n);
+  arm();
+  return n;
+}
+
+// NumberFlow-style: sets node's text one span per character, rolling in only the characters that changed
+export function roll(node, text) {
+  const old = [...node.children].map(s => s.textContent).join('');
+  node.setAttribute('aria-label', text);
+  node.replaceChildren(...[...text].map((c, i) => el('span', {class: old && c !== old[i] && !calm() ? 'roll' : '', 'aria-hidden': 'true'}, c)));
+}

@@ -4,7 +4,7 @@ import {compared, openCompare} from './tracemodal.js';
 import {highlightReel, shotsFor} from './highlights.js';
 import {setupStory} from './storypanel.js';
 import {nextMoment} from './moments.js';
-import {markLayer, gpsMarks, lapMarks, radioMarks, NO_MARKS} from './scrubmarks.js';
+import {markLayer, gpsMarks, lapMarks, radioMarks, momentum, NO_MARKS} from './scrubmarks.js';
 import {favourite} from './favourite.js';
 import {get, el, rows, tvHeaders, failed, teamColor, fmtClock, fmtLap, lastBefore, trackStatus, led, covered, dropUp, count} from './util.js';
 import {init3d, setTrack, setCars, updateCars, setView, setParts, setTyre, setGround, setPitLane, setStartLights, setDaylight, nextSky, nextTier, announce, hasCockpitWheel, setGhost, setTagPositions, timed} from './scene3d.js';
@@ -19,7 +19,7 @@ import {setupCard, resultsCard, pauseCard, saveBest, ghostAt, PACE} from './play
 import {drive, KEYHELP} from './driverdeck.js';
 import {enableInput} from './input.js';
 import {setupDecks, updateDecks} from './decks.js';
-import {buildTower, timing, renderTower, stableOrder, COLUMNS} from './tower.js';
+import {buildTower, timing, renderTower, stableOrder, storyLine, COLUMNS} from './tower.js';
 import {drsZones} from './telemetry.js';
 import {fetchCircuit, annotate, f1Coords} from './circuits.js';
 import {focusFrame} from './focus.js';
@@ -45,6 +45,7 @@ export function setupReplay(root, copyView) {
     scrub: el('input', {type: 'range', min: 0, max: 1, step: 1, value: 0, 'aria-label': 'Replay position', class: 'scrub'}),
     clock: el('span', {class: 'clock'}, '0:00:00'),
     lap: el('div', {class: 'lapcount'}, ''),
+    summary: el('div', {class: 'storyline', 'aria-live': 'off'}, ''),
     flag: el('div', {class: 'flagpill'}, ''),
     startLights: el('div', {class: 'startlights', hidden: true, role: 'img', 'aria-label': 'Start lights'}, ...Array.from({length: 5}, () => el('i'))),
     mode: el('div', {class: 'mode'}, ''),
@@ -116,7 +117,7 @@ export function setupReplay(root, copyView) {
   setupDrawer(ui.stage);
   const hud = setupHud(ui.stage, {onClose: () => S?.selected && select(S.selected),
     onErsMode: m => S?.sim?.setErsMode(S.selected, m), onDrsTest: () => S?.sim?.toggleDrsTest(S.selected)});
-  hud.top.append(ui.flag, ui.lap, ui.mode, ui.weather);
+  hud.top.append(ui.flag, ui.lap, ui.summary, ui.mode, ui.weather);
   ui.reelBtn = el('button', {class: 'neu reelbtn', title: 'Race highlights: the key moments in about 5 minutes (H)', onclick: toggleHighlights}, 'Play highlights');
   ui.story = setupStory(ui.stage, () => S, openLap);
   ui.story.btn.classList.add('storybtn');
@@ -368,7 +369,7 @@ function reset(extra) {
   ui.rc.replaceChildren();
   renderFocus(null);
   setRadar(null);
-  ui.flag.textContent = ui.lap.textContent = ui.mode.textContent = ui.clock.textContent = '';
+  ui.flag.textContent = ui.lap.textContent = ui.summary.textContent = ui.mode.textContent = ui.clock.textContent = '';
   ui.weather.replaceChildren();
   ui.marks?.set();
   ui.scrub.max = 1;
@@ -936,6 +937,9 @@ function holdHeadings(cars, ahead, t) {
   return ahead;
 }
 
+// a lap-timing replay's laps in lapsBy's shape, [start, lap, duration], from its cumulative times
+const lapRows = cum => Object.fromEntries(Object.entries(cum ?? {}).map(([id, c]) => [id, c.map((end, k) => [k ? c[k - 1] : 0, k + 1, end - (k ? c[k - 1] : 0)])]));
+
 function gpsState(t) {
   const cars = {}, board = [];
   for (const d of S.drivers) {
@@ -1017,6 +1021,12 @@ function render(force) {
     ui.scrub.value = Math.floor(t);
     ui.scrub.style.setProperty('--p', `${(t / (S.data.duration || 1) * 100).toFixed(2)}%`);
   }
+  // the followed car's momentum under the scrubber (scrubmarks.js), redrawn when the car or the replay's kind changes
+  const mom = S.live || S.sim || !S.selected ? '' : `${S.data.mode}:${S.selected}`;
+  if (S.momFor !== mom) {
+    S.momFor = mom;
+    ui.marks.wrap.style.setProperty('--momentum', mom ? momentum(S.lapsBy ?? lapRows(S.data.cum), S.selected, S.data.duration) : 'none');
+  }
   const left = S.live && S.liveInfo.live ? liveClock(S.live) : null;
   ui.clock.textContent = S.live ? (left !== null ? `${fmtClock(left)} remaining` : '') : S.sim ? fmtClock(t) : `${fmtClock(t)} / ${fmtClock(S.data.duration)}`;
   const race = S.live ? S.data.race : S.sim || S.data.mode === 'laps' || S.data.intervals.length > 0;
@@ -1041,6 +1051,8 @@ function render(force) {
     renderTower(S.rows, stableOrder(S.order ??= {}, st.board, now, force), S.cols, COLUMNS[ui.column][0], S.selected,
                 (id, c) => ui.has3d && setTyre(id, c));
     renderFeed(ui, S.data, t);
+    const summary = race ? storyLine(st.board, S.cols, S.selected) : '';
+    if (ui.summary.textContent !== summary) ui.summary.textContent = summary;
     ui.scrub.setAttribute('aria-valuetext', `${fmtClock(t)}, ${ui.lap.textContent}`);
   }
   const f = S.selected ? focusFrame(S, t, st, status, {pos: (id, t) => carsAt(t)[id] ?? null, nearest}) : null;

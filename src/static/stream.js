@@ -120,8 +120,8 @@ export function lead(answers, weekends, next, nextVideos = []) {
   if (k >= 0) return [answers[k].videos.find(live), weekends[k], answers[k].videos];
   if (next) return [null, next.r, nextVideos, next];
   for (let i = 0; answers[i]; i++) {
-    const v = answers[i].videos;
-    if (v.length) return [v.find(x => tvLabel(x) === 'Race') ?? v[0], weekends[i], v];
+    const v = answers[i].videos, s = sessionsOf(v);
+    if (v.length) return [s.findLast(x => short(x) === 'Race') ?? s.at(-1) ?? v[0], weekends[i], v];
   }
   return null;
 }

@@ -2,6 +2,8 @@
 // session's own laps (quali.js) qualifying's evolution and practice's long runs.
 import {el, failed, get, skeleton, teamColor, th, trackStatus, lastBefore, csvButton, fmtLap, fmtClock, signed as sign} from './util.js';
 import {qualiEvolution, longRuns, idealLaps, MIN_RUN, SPREAD, LIMIT} from './quali.js';
+import {raceModel} from './whatif.js';
+import {ratings} from './pace.js';
 
 export const PIT_WINDOW = 30;  // s either side of a stop: OpenF1's stop date is near the car leaving the lane
 export const MAX_STOP = 60;    // s of pit-lane time: longer is a red flag or a garage repair, not a pit stop
@@ -110,6 +112,25 @@ function section(title, load) {
   };
   const box = el('details', {class: 'card ledgerbox', ontoggle: () => { if (box.open && !body.hasChildNodes()) run(); }}, el('summary', {}, title), body);
   return box;
+}
+
+// Driver ratings (pace.js ratings): a score per driver from this race's lap times and result, shown with what made it
+const band = x => (x >= 8 ? 'top' : x >= 7 ? 'good' : x >= 6 ? 'fair' : 'low');
+async function ratingParts(year, round, results, jol) {
+  if (year < 1996) return [none(`No lap times for ${year}: Jolpica's start in 1996, so there is nothing to rate.`)];
+  const [laps, pits] = await Promise.all([jol('laps', round), jol('pitstops', round).catch(() => [])]);
+  if (!laps.length) return [none('Jolpica has no lap times for this race yet.')];
+  const list = ratings(raceModel(laps, pits), results);
+  const head = ['Rating', 'Driver', 'Result', 'Pace', 'Places', 'Vs teammate'];
+  return [note('Out of 10, from lap times and the result, not from anyone\'s opinion: race pace (median clean lap) is worth up to 3.5, places gained or lost from the grid 0.15 each, beating or losing to the teammate on pace 0.5, and not finishing costs 0.5.'),
+    bar('Best rated first', csvButton(`ratings_${year}_${round}`, head, () => list.map(r => [r.rating, r.code, r.status, r.paceRank, r.gained, r.vsMate === null ? '' : +r.vsMate.toFixed(3)]))),
+    table(head, list.map(r => el('tr', {},
+      el('td', {}, el('span', {class: `rating ${band(r.rating)}`}, r.rating.toFixed(1))),
+      el('td', {}, el('span', {class: 'chip', style: `background:${teamColor(r.team, r.teamName)}`}), el('b', {}, r.code)),
+      el('td', {class: 'num'}, r.status),
+      el('td', {class: 'num'}, `P${r.paceRank}`),
+      el('td', {class: `num ${r.gained > 0 ? 'up' : r.gained < 0 ? 'down' : ''}`}, r.gained ? `${r.gained > 0 ? '▲' : '▼'}${Math.abs(r.gained)}` : '–'),
+      el('td', {class: 'num'}, r.vsMate === null ? '–' : `${r.vsMate > 0 ? '−' : '+'}${Math.abs(r.vsMate).toFixed(3)} s`))))];
 }
 
 async function pitParts(year, round, results, jol) {
@@ -287,7 +308,7 @@ function practiceParts(year, round, names) {
 export function resultLedgers(year, round, results, jol, sessions = []) {
   const practice = sessions.filter(s => s.startsWith('Practice'));
   return [
-    ...(results.length ? [section('Pit-stop league table', () => pitParts(year, round, results, jol)), section('Overtake ledger', () => overtakeParts(year, round, results))] : []),
+    ...(results.length ? [section('Driver ratings', () => ratingParts(year, round, results, jol)), section('Pit-stop league table', () => pitParts(year, round, results, jol)), section('Overtake ledger', () => overtakeParts(year, round, results))] : []),
     year >= 2023 && results.length && section('Stewards', async () => [sessionBox(year, round, 'Race', d => stewardParts(year, round, d))]),
     year >= 2023 && sessions.includes('Qualifying') && section('Qualifying evolution', async () => [sessionBox(year, round, 'Qualifying', d => qualiParts(year, round, d))]),
     year >= 2023 && practice.length && section('Practice long runs', async () => practiceParts(year, round, practice)),

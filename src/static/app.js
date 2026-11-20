@@ -1,7 +1,7 @@
 // App shell: the Races / Simulate / Stream switch (Stream is the F1 TV browse page, stream.js), the Watch / Simulate switch, race dropdown, race header and tabs. Watch is the race browser (replays of
 // real sessions, results, standings, live timing); Simulate drops the browser chrome for a full-window physics race
 // on the chosen circuit (circuit and car pickers on the stage, season = the cars' era).
-import {get, rows, el, flag, fmtDate, teamColor, inkOn, count, failed, skeleton} from './util.js';
+import {get, rows, el, flag, fmtDate, teamColor, inkOn, count, failed, skeleton, toast, roll} from './util.js';
 import {setupReplay, showRace, showLive, setSessions, intro, setCinematic, play, replayKind, REPLAY_KINDS, moment, openMoment, stageCommands, ended} from './replay.js';
 import {renderResults, renderLapChart, renderStandings} from './charts.js';
 import {seasonTrends} from './seasonview.js';
@@ -27,7 +27,7 @@ const A = {year: null, round: null, races: [], mode: 'watch', section: 'analytic
 const today = () => new Date().toISOString().slice(0, 10);  // read per call: a tab open past midnight or New Year
 const ORDER = ['Practice 1', 'Practice 2', 'Practice 3', 'Sprint Qualifying', 'Sprint Shootout', 'Sprint', 'Qualifying', 'Race'];
 const jol = (kind, round) => get(`/api/jolpica/${A.year}/${kind}${round ? `?round=${round}` : ''}`).then(rows);
-const ordinal = n => { const s = ['th', 'st', 'nd', 'rd'], v = n % 100; return n + (s[(v - 20) % 10] || s[v] || s[0]); };  // 1st 2nd 3rd 4th 11th 21st
+const ordinal = n => `R${n}`;  // round, as F1's graphics write it
 const race = round => A.races.find(x => x.round === String(round));
 const hasRun = r => at(r, '') <= new Date();  // lights out has gone: a race later today hasn't
 // the session list's names -> Jolpica's keys for their start times
@@ -139,8 +139,8 @@ function setTeam(id) {
   else { s.removeProperty('--accent'); s.removeProperty('--accent-ink'); }
   try { if (c) localStorage.setItem('f1team', id); else localStorage.removeItem('f1team'); } catch (e) { /* storage blocked: not remembered */ }
 }
-const teamCommands = () => [...TEAMS.map(([id, name]) => ({label: `Team colours: ${name}`, hint: 'Accent', text: `team colours colour theme ${name}`, run: () => setTeam(id)})),
-  {label: 'Team colours: off', hint: 'Accent', text: 'team colours colour theme off default', run: () => setTeam(null)}];
+const teamCommands = () => [...TEAMS.map(([id, name]) => ({label: `Team colours: ${name}`, hint: 'Accent', group: 'Settings', text: `team colours colour theme ${name}`, run: () => setTeam(id)})),
+  {label: 'Team colours: off', hint: 'Accent', group: 'Settings', text: 'team colours colour theme off default', run: () => setTeam(null)}];
 
 const THEMES = [['auto', '◐', 'Theme: follows the system'], ['light', '☀', 'Theme: light'], ['dark', '☾', 'Theme: dark']];
 function setTheme(t) {
@@ -154,12 +154,13 @@ function setTheme(t) {
 // an upcoming race: time to lights out in the hero's podium slot, refreshed every half minute until the race starts
 let timer;
 function countdown(r) {
-  const start = at(r, ''), box = el('div', {class: 'countdown'});
+  const start = at(r, ''), box = el('div', {class: 'countdown'}), left = el('b');
+  box.append(el('small', {class: 'muted'}, 'LIGHTS OUT IN'), left, el('small', {class: 'muted'}, when(start)));
   const tick = () => {
     const s = (start - Date.now()) / 1000;
     if (s <= 0) { clearInterval(timer); return box.replaceChildren(el('span', {class: 'muted'}, 'Race under way')); }
     const d = Math.floor(s / 86400), h = Math.floor(s / 3600) % 24, m = Math.floor(s / 60) % 60;
-    box.replaceChildren(el('small', {class: 'muted'}, 'LIGHTS OUT IN'), el('b', {}, `${d ? `${d}d ` : ''}${h}h ${String(m).padStart(2, '0')}m`), el('small', {class: 'muted'}, when(start)));
+    roll(left, `${d ? `${d}d ` : ''}${h}h ${String(m).padStart(2, '0')}m`);
   };
   clearInterval(timer);
   timer = setInterval(tick, 30000);
@@ -289,19 +290,18 @@ function newRace() {
   let seen;
   try { seen = localStorage.getItem('f1latest'); localStorage.setItem('f1latest', `${A.year}/${r.round}`); } catch (e) { return; }
   if (!seen || seen === `${A.year}/${r.round}`) return;
-  const box = el('div', {class: 'notice', role: 'status'},
+  const box = toast([
     el('span', {class: 'eyebrow'}, 'NEW'), el('span', {}, `${r.raceName} replay`),
     el('button', {class: 'tvbtn', onclick: async () => {
       count('new_race_watch');
-      box.remove();
+      box.close();
       setView('analytics');
       if (A.year !== year) await loadSeason(year, r.round);  // the reader has moved to another season since
       else if (A.round !== r.round) selectRace(r.round);
       activate('replay');
       A.shown.then(play);
     }}, '▶ Watch'),
-    el('button', {class: 'noticex', 'aria-label': 'Dismiss', onclick: () => box.remove()}, '✕'));
-  document.body.append(box);
+    el('button', {class: 'noticex', 'aria-label': 'Dismiss', onclick: () => box.close()}, '✕')], 0);
 }
 
 // Header: the current season's next session, ticking; a click opens Stream on the Coming up row
@@ -462,7 +462,8 @@ async function selectRace(round, sim = A.mode === 'sim', fly = true) {
 // it once the globe has gone; a race picked in the header flies there too (selectRace), and another season changes the pins.
 // state: the race on screen ('shown') and the next one to run ('next') get their own pin look (style.css .gpin)
 const pin = (r, next) => ({round: r.round, name: r['Circuit.circuitName'], place: `${r['Circuit.Location.locality']}, ${r['Circuit.Location.country']}`,
-  country: r['Circuit.Location.country'], state: String(r.round) === String(A.round) ? 'shown' : r === next ? 'next' : '',
+  // country is the pin's label: the place, since three races are in the USA
+  country: r['Circuit.Location.locality'] || r['Circuit.Location.country'], state: String(r.round) === String(A.round) ? 'shown' : r === next ? 'next' : '',
   lat: +r['Circuit.Location.lat'], lng: +r['Circuit.Location.long'], label: hasRun(r) ? '▶ Play' : 'Open', ...dossier(r)});
 // the pin's dossier: what's known about the circuit (length and lap record where circuits.js has a preset) and its other ways in
 function dossier(r) {
@@ -494,8 +495,8 @@ function commands() {
   const stage = () => { if (A.section !== 'analytics') setSection('analytics'); activate('replay'); };
   const open = panel => document.querySelector(`[aria-controls=${panel}]`).click();
   return [
-    ...[['analytics', 'Races'], ['sim', 'Play'], ['stream', 'Stream']].map(([v, label]) => ({label, hint: 'View', run: () => setView(v)})),
-    ...(A.round ? [...document.querySelectorAll('[role=tab]')].map(b => ({label: b.textContent, hint: 'Tab', run: () => {
+    ...[['analytics', 'Races'], ['sim', 'Play'], ['stream', 'Stream']].map(([v, label]) => ({label, hint: 'View', group: 'Go to', run: () => setView(v)})),
+    ...(A.round ? [...document.querySelectorAll('[role=tab]')].map(b => ({label: b.textContent, hint: 'Tab', group: 'Go to', run: () => {
       setView('analytics');
       A.bounced = false;
       activate(b.dataset.tab);
@@ -513,12 +514,12 @@ function commands() {
     {label: 'Start reaction game', hint: 'Five red lights', text: 'lights out reaction start game test', run: openReaction},
     {label: 'Switch theme', run: () => $('themebtn').click()},
     ...teamCommands(),
-    ...('Notification' in globalThis ? [{label: `Session start notices: turn ${notices() ? 'off' : 'on'}`, hint: 'When a session goes live', text: 'notify notification session start live alert', run: () => setNotices(!notices())}] : []),
-    {label: `Spoiler-free mode: turn ${spoilerFree() ? 'off' : 'on'}`, hint: 'Hides recent results until watched', text: 'spoiler free mode hide results', run: () => setSpoilers(!spoilerFree())},
+    ...('Notification' in globalThis ? [{label: `Session start notices: turn ${notices() ? 'off' : 'on'}`, hint: 'When a session goes live', group: 'Settings', text: 'notify notification session start live alert', run: () => setNotices(!notices())}] : []),
+    {label: `Spoiler-free mode: turn ${spoilerFree() ? 'off' : 'on'}`, hint: 'Hides recent results until watched', group: 'Settings', text: 'spoiler free mode hide results', run: () => setSpoilers(!spoilerFree())},
     {label: 'Keyboard shortcuts', hint: '?', run: openSheet},
     {label: 'Usage counts', run: openCounts},
     {label: 'Copy link', run: copyView},
-    ...A.races.map(r => ({label: r.raceName, hint: `Round ${r.round} · ${fmtDate(r.date)}`,
+    ...A.races.map(r => ({label: r.raceName, group: 'Races', hint: `Round ${r.round} · ${fmtDate(r.date)}`,
       text: `${r.raceName} ${r['Circuit.Location.country']} ${r['Circuit.Location.locality']} ${r['Circuit.circuitName']} round ${r.round}`,
       run: () => {
         if (A.section !== 'analytics') setSection('analytics');

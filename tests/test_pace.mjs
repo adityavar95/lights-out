@@ -1,7 +1,7 @@
 // Run: node tests/test_pace.mjs  — race trace, tyre-wear fits and undercut ledger (pace.js) on synthetic races.
 import assert from 'node:assert/strict';
 import {raceModel} from '../src/static/whatif.js';
-import {raceTrace, fuelPerLap, ols, stintPace, paceRanking, undercuts, compoundOf, stintBars} from '../src/static/pace.js';
+import {raceTrace, fuelPerLap, ols, stintPace, paceRanking, undercuts, compoundOf, stintBars, ratings} from '../src/static/pace.js';
 
 {  // a fitted stint's compound: OpenF1's stint on at its middle lap, whichever side of the stop each source puts the pit lap
   const rows = [['1', 1, 18, 'MEDIUM', 0], ['1', 19, null, 'HARD', 3], ['44', 1, 57, null, 0]];
@@ -26,6 +26,19 @@ function race(cars, stops = {}, N = 20) {
     for (const s of stops[id] ?? []) pits.push({driverId: id, lap: String(s)});
   }
   return raceModel(laps, pits);
+}
+
+// driver ratings: pace, places gained, the teammate, and a retirement
+{
+  const M = race({A: () => 90, B: () => 90.5, C: () => 91, D: L => (L > 12 ? null : 90.2)});
+  const row = (id, team, pos, grid, positionText = String(pos), status = 'Finished') => ({'Driver.driverId': id, 'Driver.code': id, 'Constructor.constructorId': team, position: String(pos), positionText, grid: String(grid), status});
+  const R = ratings(M, [row('A', 'x', 1, 3), row('B', 'x', 2, 1), row('C', 'y', 3, 2), row('D', 'y', 4, 4, 'R', 'Engine')]);
+  const by = Object.fromEntries(R.map(r => [r.id, r]));
+  assert.equal(by.A.rating, 8.8, 'fastest, 2 places up, beat the teammate: 4.5 + 3.5 + 0.3 + 0.5');
+  assert.equal(by.B.rating, 5, 'third of four on pace, lost a place and to the teammate: 4.5 + 1.17 - 0.15 - 0.5');
+  assert.equal(by.D.status, 'Engine');
+  assert.equal(by.D.rating, 6.8, 'second on pace, beat the teammate, retired: 4.5 + 2.33 + 0.5 - 0.5');
+  assert.deepEqual(R.map(r => r.id), ['A', 'D', 'B', 'C'], 'best first');
 }
 
 // race trace

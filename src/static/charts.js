@@ -51,8 +51,17 @@ export function renderResults(root, results, sprint, quali, view, onView) {
       el('div', {class: 'stepname'}, chip(teamColor(r['Constructor.constructorId'])), el('b', {}, code(r))),
       el('div', {class: 'muted small'}, name(r)),
       el('div', {class: 'muted small'}, r['Constructor.name']),
-      el('div', {class: 'block'}, el('span', {}, r.position))));
+      el('div', {class: 'block'}, el('small', {}, `P${r.position}`), el('b', {}, timeOrStatus(r, results[0])))));
   root.replaceChildren(...[podium.length && el('div', {class: 'podium'}, podium), views.length > 1 && pick, body].filter(Boolean));
+}
+
+// Jolpica's position letters as F1's classification prints them
+const STATUS = {R: 'DNF', D: 'DSQ', W: 'DNS', N: 'NC', F: 'DNQ', E: 'EX'};
+// a lapped finisher reads +1 lap, as on F1's timing screens (Jolpica gives some of them a time gap to someone else)
+export function timeOrStatus(r, winner) {
+  const down = +winner?.laps - +r.laps;
+  if (/^\d+$/.test(r.positionText) && down > 0) return `+${down} lap${down > 1 ? 's' : ''}`;
+  return r['Time.time'] || r.status;
 }
 
 function classification(rows, title) {
@@ -64,12 +73,12 @@ function classification(rows, title) {
       el('tbody', {}, firstOf(rows, isFav).map(r => {
         const out = ['W', 'F'].includes(r.positionText), grid = out ? 0 : +r.grid, pos = +r.position, delta = grid ? grid - pos : null;  // W / F: never started
         return el('tr', {class: isFav(r) ? 'fav' : ''},
-          el('td', {class: 'num'}, r.positionText),
+          el('td', {class: 'num'}, STATUS[r.positionText] ?? r.positionText),
           driverCell(r),
           el('td', {class: 'muted'}, r['Constructor.name']),
           el('td', {class: 'num'}, out ? '–' : grid || 'PL', delta ? el('span', {class: delta > 0 ? 'up' : 'down'}, ` ${delta > 0 ? '▲' : '▼'}${Math.abs(delta)}`) : null),
           el('td', {class: 'num'}, r.laps),
-          el('td', {class: 'num'}, r['Time.time'] || r.status),
+          el('td', {class: 'num'}, timeOrStatus(r, rows[0])),
           el('td', {class: 'num'}, r.points),
           el('td', {class: `num ${r['FastestLap.rank'] === '1' ? 'purple' : ''}`}, r['FastestLap.Time.time'] || ''));
       })))));
