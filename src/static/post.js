@@ -8,6 +8,7 @@ import {pass, mrt, output, velocity, emissive, uniform, Fn, vec2, vec3, vec4, fl
 import {ao} from 'three/addons/tsl/display/GTAONode.js';
 import {bloom} from 'three/addons/tsl/display/BloomNode.js';
 import {smaa} from 'three/addons/tsl/display/SMAANode.js';
+import {traa} from 'three/addons/tsl/display/TRAANode.js';
 
 const EXPOSURE = 1 / 100;  // simulated camera shutter time, s: a broadcast camera's (1/60 smeared fast pans and the ground)
 const SENSOR = 0.024;      // m, full-frame sensor height: with the camera's vertical fov it gives the focal length
@@ -18,10 +19,11 @@ const MAX_BLUR = 0.015;
 
 const ign = () => fract(dot(screenCoordinate.xy, vec2(0.06711056, 0.00583715)).mul(52.9829189));  // interleaved gradient noise
 
-// options: graphics.js's msaa, smaa, ao, dof, blur, bloom, lens, contrast, saturation
+// options: graphics.js's msaa, smaa, traa, ao, dof, blur, bloom, lens, contrast, saturation
 export function createPost(renderer, scene, camera, options) {
   // MSAA here, not on the canvas: edges of wishbones, fences and track lines are resolved while the values are still HDR
-  const scenePass = pass(scene, camera, {samples: options.msaa ? 4 : 0});
+  // TRAA replaces both: it wants no MSAA, and SMAA on top only softens what it already smoothed
+  const scenePass = pass(scene, camera, {samples: options.msaa && !options.traa ? 4 : 0});
   // Velocity blends by its own alpha: a solid surface writes alpha 1, and an effect (vfx.js noVelocity) writes 0 and leaves the
   // surface's vector. Without this every smoke puff stamped one vector over its whole disc, and the blur smeared the car under it.
   const keepUnder = Object.assign(new THREE.BlendMode(THREE.CustomBlending), {blendSrc: THREE.SrcAlphaFactor, blendDst: THREE.OneMinusSrcAlphaFactor});
@@ -102,16 +104,16 @@ export function createPost(renderer, scene, camera, options) {
     return vec4(sum.div(total), 0, 0, 1);
   })();
 
-  let aoNode = null, bloomNode = null, smaaNode = null, tier = options, focusAt = 0, stop = 0, height = 1, mps = 1;
+  let aoNode = null, bloomNode = null, smaaNode = null, traaNode = null, tier = options, focusAt = 0, stop = 0, height = 1, mps = 1;
   const pipeline = new THREE.RenderPipeline(renderer);
   pipeline.outputColorTransform = false;  // renderOutput below does it before SMAA, which wants the display image
 
   const targets = [], target = n => { const r = convertToTexture(n); targets.push(r); return r; };
   const build = () => {
     // every rebuild makes new full-screen targets: 14 setting changes at 4K ran the GPU out of memory
-    for (const n of [aoNode, bloomNode, smaaNode]) n?.dispose?.();
+    for (const n of [aoNode, bloomNode, smaaNode, traaNode]) n?.dispose?.();
     for (const r of targets.splice(0)) r.renderTarget?.dispose();
-    aoNode = bloomNode = smaaNode = null;
+    aoNode = bloomNode = smaaNode = traaNode = null;
     let image = color;
     if (tier.ao) {
       // Normals from depth, not an MRT target: smoke writes no depth but overwrote the normal under it, and GTAO turned each
@@ -126,6 +128,15 @@ export function createPost(renderer, scene, camera, options) {
       image = vec4(image.rgb.mul(aoBlur(target(aoBlur(aoNode.getTextureNode(), vec2(1, 0))), vec2(0, 1)).r), 1);
     }
     let sharp = target(image);
+    if (tier.traa) {
+      // the sky's stored vector means nothing (see motion), so TRAA gets the camera's rotation there too, per frame
+      const vFrame = target(Fn(() => {
+        const p = uv(), ndc = vec2(p.x.mul(2).sub(1), float(1).sub(p.y.mul(2))), prev = uReproj.mul(vec4(ndc, uFarZ, 1));
+        return vec4(depth.sample(p).r.equal(uFarZ).select(ndc.sub(prev.xy.div(prev.w)), vel.sample(p).xy), 0, 1);
+      })());
+      traaNode = traa(sharp, depth, vFrame, camera);
+      sharp = traaNode.getTextureNode();
+    }
     if (tier.dof) sharp = target(dofOf(sharp));
     const blurred = tier.blur ? target(blurOf(sharp)) : sharp;
     // threshold in linear HDR: 2.5 rather than a display-range 0.85, or every pixel of the photographed sky would bloom.
@@ -141,7 +152,7 @@ export function createPost(renderer, scene, camera, options) {
     const shown = pow(max(renderOutput(vec4(bloomNode ? lens.rgb.add(bloomNode.rgb) : lens.rgb, 1)).rgb, vec3(0)), vec3(uPunch));
     const graded = vec4(clamp(mix(vec3(dot(shown, vec3(0.2126, 0.7152, 0.0722))), shown, uSaturation), 0, 1), 1);
     // on the tone-mapped image: specular and shader aliasing MSAA doesn't touch
-    pipeline.outputNode = tier.smaa ? (smaaNode = smaa(target(graded))) : graded;
+    pipeline.outputNode = tier.smaa && !tier.traa ? (smaaNode = smaa(target(graded))) : graded;
     pipeline.needsUpdate = true;
   };
   build();
@@ -155,7 +166,7 @@ export function createPost(renderer, scene, camera, options) {
     setOptions(o) {
       uPunch.value = o.contrast;
       uSaturation.value = o.saturation;
-      const same = ['msaa', 'smaa', 'ao', 'dof', 'blur', 'bloom', 'lens'].every(k => o[k] === tier[k]);
+      const same = ['msaa', 'smaa', 'traa', 'ao', 'dof', 'blur', 'bloom', 'lens'].every(k => o[k] === tier[k]);
       tier = o;
       if (same) return;
       build();
@@ -171,7 +182,10 @@ export function createPost(renderer, scene, camera, options) {
       focusAt = distance;
       stop = fNumber;
     },
-    reset() { skip = true; },  // after a camera cut: no blur from the jump
+    reset() {  // after a camera cut: no blur from the jump, no history from before it
+      skip = true;
+      traaNode?._historyRenderTarget.setSize(1, 1);  // shortcut: private field; a size change makes TRAA restart from this frame
+    },
     setMps(m) {
       mps = m;
       if (aoNode) { aoNode.radius.value = 0.35 / m; aoNode.thickness.value = 1 / m; }  // scene units
@@ -199,7 +213,7 @@ export function createPost(renderer, scene, camera, options) {
       skip = false;
     },
     dispose() {
-      for (const n of [aoNode, bloomNode, smaaNode]) n?.dispose?.();
+      for (const n of [aoNode, bloomNode, smaaNode, traaNode]) n?.dispose?.();
       for (const r of targets) r.renderTarget?.dispose();
       scenePass.dispose();
       pipeline.dispose();

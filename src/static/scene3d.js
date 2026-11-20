@@ -355,7 +355,7 @@ export function setGraphics(patch) {
   saveGraphics(gfx);
   dispatchEvent(new Event('f1:graphics'));
   if (!post) return;  // init3d reads them
-  if (gfx.msaa !== was.msaa) {  // the pass's targets and every pipeline have the sample count built in
+  if (gfx.msaa !== was.msaa || gfx.traa !== was.traa) {  // the pass's targets and every pipeline have the sample count built in
     post.dispose();
     post = createPost(renderer, scene, camera, gfx);
     if (map) post.setMps(map.mps);

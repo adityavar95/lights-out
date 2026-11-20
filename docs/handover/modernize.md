@@ -178,3 +178,19 @@ Watch out:
 - TestClient buffers whole responses, so it hangs on `/api/live/stream`: test `live_events` directly.
 - Each open stream copies nothing extra (`_shared`), but serializes the whole snapshot per event (≤ 2 a second).
 Next: Phase 5
+
+## Phase 5: TRAA trial (21 Nov 2026)
+Commits: see git log (phase 5 commit on `modernize`)
+Done:
+- `post.js`: a TRAA path (three r187 `TRAANode`) on the HDR image after AO, before DOF / blur / bloom. It replaces MSAA
+  (the pass drops to 0 samples) and SMAA. TRAA gets its own per-frame velocity target: the sky's vector comes from the camera
+  rotation, as `motion` does. `reset()` (camera cuts) restarts its history through the private `_historyRenderTarget`.
+- Setting `traa` (Image, "Temporal smoothing (TRAA)"), off in every preset; `scene3d.js` rebuilds post when it changes (sample count).
+- `asset_hashes.json`: TRAANode.js and utils/TAAUtils.js (written by `write_three_hashes`).
+Verdict: **not shipped as the default.** `#2026/1/replay` overview at rest, Ultra, 2040x1000 headed, no errors: with TRAA the
+trees break into dark speckle and the track edges are noisier than MSAA + SMAA. That fails the "nothing looks worse" rule, so it stays opt-in.
+Tests: `tests/test_graphics.mjs` (no preset turns TRAA on, clean keeps it, it makes Custom).
+Not done or not verified, and why:
+- Only the overview at rest was compared. Fences, kerbs, car edges, smoke and sky at speed weren't shot, because it already failed at rest.
+- Still frames redraw at 4 fps (`scene3d.js` still check), so TRAA converges slowly on a paused view.
+Next: Phase 6

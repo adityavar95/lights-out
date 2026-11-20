@@ -5,6 +5,9 @@ import {PRESETS, DEFAULTS, presetOf, nextPreset, clean, loadGraphics, saveGraphi
 assert.equal(presetOf(DEFAULTS), 'Ultra');
 for (const p of PRESETS) assert.equal(presetOf({...DEFAULTS, ...p}), p.name);
 assert.equal(presetOf({...DEFAULTS, ao: false}), 'Custom');
+assert.ok(PRESETS.every(p => p.traa === false), 'TRAA is an opt-in trial (modernize phase 5): no preset turns it on');
+assert.equal(clean({traa: true}).traa, true);
+assert.equal(presetOf({...DEFAULTS, traa: true}), 'Custom');
 assert.equal(presetOf({...DEFAULTS, exposure: 1.5, sky: 3, tags: false}), 'Ultra', 'picture and display settings are no part of a preset');
 
 // G goes round every preset, and from Custom to the first

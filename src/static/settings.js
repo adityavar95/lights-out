@@ -15,7 +15,8 @@ const SECTIONS = [
     ['carDetail', 'Car detail distance', [[0.5, 'Near'], [1, 'Normal'], [2, 'Far']], 'How far away a car keeps its full model'],
   ]],
   ['Image', [
-    ['msaa', 'Edge smoothing (MSAA)'], ['smaa', 'Shader smoothing (SMAA)'], ['ao', 'Ambient occlusion'], ['dof', 'Depth of field'],
+    ['msaa', 'Edge smoothing (MSAA)'], ['smaa', 'Shader smoothing (SMAA)'],
+    ['traa', 'Temporal smoothing (TRAA)', null, 'Trial: replaces MSAA and SMAA. Steadier fences, softer detail, can trail behind smoke'], ['ao', 'Ambient occlusion'], ['dof', 'Depth of field'],
     ['blur', 'Motion blur'], ['bloom', 'Bloom'], ['lens', 'Lens colour fringe'],
   ]],
   ['Scene', [

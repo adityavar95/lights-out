@@ -1,6 +1,6 @@
 // The stage's settings as plain data, pure: presets, defaults and what a stored value may be. settings.js is the panel, scene3d.js applies them.
 
-const QUALITY = {res: 1, msaa: true, smaa: true, ao: true, dof: true, blur: true, bloom: true, lens: true, shadows: 2048, shadowRange: 1, farEvery: false,
+const QUALITY = {res: 1, msaa: true, smaa: true, traa: false, ao: true, dof: true, blur: true, bloom: true, lens: true, shadows: 2048, shadowRange: 1, farEvery: false,
   mirrors: true, haze: true, particles: true, trees: true, trackside: true, carDetail: 1};
 // Each drops what costs most for what it gives. G cycles them
 export const PRESETS = [
