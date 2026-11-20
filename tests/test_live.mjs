@@ -90,3 +90,23 @@ for (let k = 1; k <= 12 && moved === null; k++) if (!shown(stableOrder(busy, cyc
 assert.ok(moved !== null && moved <= 1200, `reshuffling field shown after ${moved} ms`);
 assert.equal(shown(stableOrder(st, B('C', 'A', 'B'), 1100, true)), '1C 2A 3B');
 console.log('tower order ok');
+
+// modernize phase 4: the push stream parses each event and falls back once on an error
+{
+  const {streamLive} = await import('../src/static/live.js');
+  let made;
+  globalThis.EventSource = class { constructor(url) { made = this; this.url = url; this.closed = false; } close() { this.closed = true; } };
+  const got = [];
+  let fails = 0;
+  const es = await streamLive(b => got.push(b), () => fails++);
+  assert.equal(es, made);
+  assert.equal(es.url, '/api/live/stream');  // no F1 TV token: no ticket asked for
+  es.onmessage({data: '{"topics":{"LapCount":{"CurrentLap":2}},"auth":false}'});
+  assert.deepEqual(got, [{topics: {LapCount: {CurrentLap: 2}}, auth: false}]);
+  es.onerror();
+  assert.ok(es.closed && fails === 1);
+  globalThis.sessionStorage = {getItem: () => 'tok'};
+  globalThis.fetch = async (url, o) => ({json: async () => ({ticket: o.headers['X-F1-Token'] === 'tok' && url === '/api/live/ticket' ? 'a b' : null})});
+  assert.equal((await streamLive(() => {}, () => {})).url, '/api/live/stream?ticket=a%20b');
+  console.log('live stream ok');
+}

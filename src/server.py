@@ -3,11 +3,13 @@ import os
 # Before numpy loads (radio's transcriber): OpenBLAS commits a buffer per CPU thread, ~740 MB on a 32-thread CPU, and
 # nothing here does matrix maths
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+import asyncio
 import gzip
 import ipaddress
 import json
 import mimetypes
 import re
+import secrets
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -21,7 +23,7 @@ import uvicorn
 from fastapi import FastAPI, Header, HTTPException, Path as PathParam, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from starlette.middleware.gzip import DEFAULT_EXCLUDED_CONTENT_TYPES, GZipMiddleware
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 import assets
@@ -530,7 +532,48 @@ def f1tv_videos(year: int, round: int):
 @app.get("/api/live")
 def live_state(x_f1_token: str | None = Header(None)):
     """Current state of the live (or most recent) session from F1's free live timing feed."""
-    return raw_json(live.snapshot(f1auth.valid(x_f1_token)))  # polled every second
+    return raw_json(live.snapshot(f1auth.valid(x_f1_token)))  # the stream's fallback: polled every second
+
+
+_tickets: dict = {}  # one-time ticket -> (F1 TV token, expiry), in memory only: EventSource can't send X-F1-Token
+
+
+@app.post("/api/live/ticket")
+def live_ticket(x_f1_token: str | None = Header(None)):
+    """{ticket}: lets /api/live/stream use the caller's F1 TV token without it ever going in a URL. Single use, 30 s."""
+    t = f1auth.valid(x_f1_token)
+    now = time.time()
+    for k in [k for k, (_, exp) in _tickets.items() if exp < now]:
+        _tickets.pop(k, None)
+    if not t:
+        return {"ticket": None}
+    ticket = secrets.token_urlsafe(16)
+    _tickets[ticket] = (t, now + 30)
+    return {"ticket": ticket}
+
+
+async def live_events(token: str | None, wait: float = 0.5, keepalive: float = 15):
+    """Server-sent events: one /api/live snapshot each time the feed changed (checked every `wait` s, so a burst of
+    feed messages is one event), a comment after `keepalive` quiet seconds. Runs until the client goes."""
+    last, quiet = None, time.monotonic()
+    while True:
+        snap = await run_in_threadpool(live.snapshot, token)  # also keeps F1's feed open while someone listens
+        key = (snap["topics"], snap["connected"], snap["error"], snap["auth"], snap["auth_error"])
+        if last is None or key[0] is not last[0] or key[1:] != last[1:]:  # topics: a new copy per feed message
+            last, quiet = key, time.monotonic()
+            yield f"data: {json.dumps(snap, separators=(',', ':'))}\n\n"
+        elif time.monotonic() - quiet > keepalive:
+            quiet = time.monotonic()
+            yield ": keep-alive\n\n"
+        await asyncio.sleep(wait)
+
+
+@app.get("/api/live/stream")
+def live_stream(ticket: str | None = None):
+    """/api/live pushed as server-sent events; `ticket` (from /api/live/ticket) carries an F1 TV token."""
+    token, exp = _tickets.pop(ticket, (None, 0)) if ticket else (None, 0)
+    return StreamingResponse(live_events(token if exp > time.time() else None), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/api/live/status")
@@ -745,4 +788,4 @@ if __name__ == "__main__":
     ip = lan_ip() if LAN else None
     print("Lights Out: open http://127.0.0.1:8086" + (f"  (other devices on this network: http://{ip}:8086)" if ip else
           "  (LIGHTSOUT_LAN=1 opens it to other devices on this network)"), flush=True)
-    uvicorn.run(app, host=HOST, port=8086)
+    uvicorn.run(app, host=HOST, port=8086, timeout_graceful_shutdown=2)  # an open live stream would hold Ctrl+C

@@ -6,8 +6,8 @@ updates "Current state". This is the one handoff file for the whole plan.
 ## Current state
 
 - Branch: `modernize` (from `improve-phase-8`, HEAD `fff158f`, 21 Nov 2026).
-- Done: phase 1, phase 2, phase 3 (21 Nov 2026).
-- Next: **Phase 4** (live feed as SSE). Start a new session and type: *"Do phase 4 of docs/modernize-plan.md."*
+- Done: phase 1, phase 2, phase 3, phase 4 (21 Nov 2026).
+- Next: **Phase 5** (TRAA trial). Start a new session and type: *"Do phase 5 of docs/modernize-plan.md."*
 - Rule: after each phase, stop and wait for the user's go.
 
 ## Before phase 1: watch out
@@ -145,3 +145,36 @@ Watch out:
 - Option if the extra mid-size hitches on the first Replay click matter: prefetch `import('./replay.js')` in idle time once
   a non-replay tab has drawn (costs the ~5 MB JS again, not the textures, which `setupReplay` starts).
 Next: Phase 4
+
+## Phase 4: live feed as a push stream (SSE) (21 Nov 2026)
+Commits: see git log (phase 4 commit on `modernize`)
+Done:
+- `server.py`: `GET /api/live/stream` (`live_stream` → `live_events`): a `StreamingResponse` of `text/event-stream`. It
+  checks `live.snapshot` every 0.5 s and sends one `data:` event when the shared copy changed (identity of `topics`: a new
+  copy per feed message) or connected/error/auth changed, so a burst of feed messages is one event; a `: keep-alive`
+  comment after 15 quiet s. Starlette cancels it when the client goes. Each check refreshes `last_request`, so the feed
+  stays open while someone listens. `/api/live` stays (first state, explorer, fallback).
+- Token: `POST /api/live/ticket` (X-F1-Token → `{ticket}`, `secrets.token_urlsafe`, 30 s, single use, memory only in
+  `_tickets`); the stream takes `?ticket=`. The token is never in a URL; the access log shows only the spent ticket.
+- `server.py` `__main__`: `timeout_graceful_shutdown=2`, else an open stream holds Ctrl+C. desktop.py's server is a daemon thread.
+- `live.js` `streamLive(onData, onFail)`: asks a ticket only with a token, opens `EventSource`, on error closes it and calls
+  onFail once. `replaylive.js` `showLive`: `follow()` opens the stream while the tab is visible and closes it when hidden
+  (as the old poll skipped hidden tabs) or when the view's token changes (rAF loop); on a stream error it falls back to the
+  old 1 s `poll()` for the rest of that live view.
+- Fixture `tests/fixtures/live.jsonl` (subscribe reply + two LapCount updates).
+Measured: live view against the fixture (server on 8099 with `LIGHTSOUT_LIVE_PLAY`, agent-browser headed, window error
+listener): one `/api/live` (first state) + one `/api/live/stream`, no further requests over 20 s (was 1 per second per tab);
+"● LIVE · Test GP · Race", no errors. curl: events stream unbuffered, not gzipped (Starlette excludes text/event-stream).
+Tests: `tests/test_server.py` plays the fixture through `snapshot`'s thread (`LIGHTSOUT_LIVE_PLAY`) and reads
+`live_events` directly: laps 1, 2, 3 in order, none repeated, a keep-alive seen; ticket issue/expiry. `tests/test_live.mjs`:
+`streamLive` parses events, closes and fails over once, puts the ticket in the URL only when a token exists.
+`scripts/test_all.py` all green, tsc included; `trail check` no conflicts.
+Not done or not verified, and why:
+- No real live session or full recording (no `.cache/live` on this machine): the tower/cars comparison against polling used a
+  three-message fixture (one driver, no TimingData/GPS). Record a weekend with `LIGHTSOUT_LIVE_RECORD=1` and replay it to compare.
+- The fallback poll and the hide/show close/reopen were not exercised in the browser (unit-tested for the error path only).
+- The ticket route's single use is tested by the dict pop, not by two stream requests (TestClient can't end an endless stream).
+Watch out:
+- TestClient buffers whole responses, so it hangs on `/api/live/stream`: test `live_events` directly.
+- Each open stream copies nothing extra (`_shared`), but serializes the whole snapshot per event (≤ 2 a second).
+Next: Phase 5
