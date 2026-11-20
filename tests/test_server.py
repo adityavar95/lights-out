@@ -1073,6 +1073,10 @@ assert token_of("") is None and token_of("%7Bbroken") is None
 # the asset scrape finds the sky presets, photo sets and tiles in the real static files
 heavy = _assets._heavy()
 assert any("/HDRIs/" in u for u in heavy) and any("/Textures/" in u for u in heavy)
+# every photo set at both tiers' resolutions (it once listed only gravel at 2k and 1k)
+for _set in ("asphalt_pit_lane", "gravel_floor", "sparse_grass"):
+    for _res in ("4k", "1k"):
+        assert f"{_assets.PH}/Textures/jpg/{_res}/{_set}/{_set}_diff_{_res}.jpg" in heavy, (_set, _res)
 assert any("tiles" in d.parts for d in heavy.values())
 print("asset scrape ok")
 

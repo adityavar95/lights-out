@@ -7,7 +7,7 @@ version**. One phase per session; the handoff doc carries state between sessions
 ## Status
 
 - [x] Phase 1: quick wins and baseline
-- [ ] Phase 2: device tiers (desktop best, mobile light)
+- [x] Phase 2: device tiers (desktop best, mobile light)
 - [ ] Phase 3: load the 3D stage and Stream on demand
 - [ ] Phase 4: live feed as a push stream (SSE)
 - [ ] Phase 5: TRAA trial (ships only if the picture doesn't get worse)

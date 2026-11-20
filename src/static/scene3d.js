@@ -11,7 +11,7 @@ import {brakeStep, brakeGlow} from './telemetry.js';
 import {loadRB22, rb22Ready, STEERING_RATIO} from './rb22.js';
 import {makeMirror, renderMirrors, warmFor, warmMirrors} from './mirror.js';
 import {createPost} from './post.js';
-import {loadGraphics, saveGraphics, nextPreset, presetOf} from './graphics.js';
+import {loadGraphics, saveGraphics, nextPreset, presetOf, deviceTier, defaultsFor} from './graphics.js';
 import {createVfx, haze} from './vfx.js';
 import {textures} from './textures3d.js';
 import {buildCircuit} from './circuit3d.js';
@@ -23,7 +23,7 @@ import {sunElevation, skyFor} from './weather.js';
 const SIZE = 1000;                  // the circuit is scaled to this many scene units across
 const UP = new THREE.Vector3(0, 1, 0);
 const SUN = new THREE.Vector3(0.45, 0.62, 0.3).normalize();  // direction towards the sun; re-aimed at the HDRI's sun
-// photographed HDR sky (CC0, Poly Haven): 4k on every tier once downloaded (assets.py); until then the 1k streams (1.4 MB, not 21)
+// photographed HDR sky (CC0, Poly Haven): 4k once downloaded (assets.py), until then the 1k streams (1.4 MB, not 21); a phone streams 1k first
 const hdri = name => `/static/assets/hdri/${name}_4k.hdr`;
 const streamed = url => `https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/${url.split('/').pop().replace('_4k', '_1k')}`;
 // L cycles them. sun: direct light, env: image-based light, hemi: fill; lamps: the floodlights' glow
@@ -42,7 +42,8 @@ let cloudShadow = null, carsToken = 0, mode = 'overview', chased = null, glide =
 // one reuses (disposing first deleted them, and every race switch recompiled them all: ~0.3 s)
 let stale = null;
 let drawnAt = 0, resized = true, stageW = 0, stageH = 0;  // the stage's CSS size, kept by fit()
-let gfx = loadGraphics(), framesShown = 0, lastFrameAt = 0;
+let gfx = loadGraphics(undefined, defaultsFor(deviceTier())), framesShown = 0, lastFrameAt = 0;
+export let tier = deviceTier();  // graphics.js deviceTier; init3d adds the GPU's name
 let shadowFrame = 0, high = false, autoScale = 1, frameTime = 0, calm = 0, calmNeed = 120, upAt = 0;  // GPU quality tier (init3d) and dynamic resolution (the render loop)
 
 // Canvas pixels per CSS pixel: the high tier renders up to 2x (supersampling on a 1-1.25x display), within a 4K frame's
@@ -77,15 +78,14 @@ const crews = createCrews();  // pit crews, for cars that stop in the pit lane
 
 const rnd = (a, b) => a + Math.random() * (b - a);
 
-// Quality tier from the GPU's name. WebGPU only offers that asynchronously and vaguely, and init3d has to answer now
+// The GPU's name, for the tier. WebGPU only offers that asynchronously and vaguely, and init3d has to answer now
 // (replay.js shows its "no 3D" message from a throw), so a throwaway WebGL2 context asks, then gives its slot back.
 function probeGpu() {
   const gl = document.createElement('canvas').getContext('webgl2');
   if (!gl && !navigator.gpu) throw new Error('neither WebGPU nor WebGL2');
   const info = gl?.getExtension('WEBGL_debug_renderer_info'), gpu = info ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL) : '';
   gl?.getExtension('WEBGL_lose_context')?.loseContext();
-  // software rendering (hardware acceleration off) can't carry supersampling or the sharper satellite ground
-  return !/swiftshader|llvmpipe|software|basic render/i.test(gpu);
+  return gpu;
 }
 
 // Resolves when the GPU device exists; the showroom and anything else needing the renderer waits on it
@@ -110,7 +110,9 @@ const softShadow = ({depthTexture, shadowCoord, shadow}) => {
 
 export function init3d(el) {
   container = el;
-  high = probeGpu();
+  // software rendering or a phone can't carry supersampling, 4k photos or the sharper satellite ground
+  tier = deviceTier(probeGpu());
+  high = tier === 'desktop';
   // Reversed depth instead of the old logarithmic buffer: same range from a car's wing to the far hills, without writing
   // frag depth from every fragment, which disabled early-z across the whole scene.
   renderer = new THREE.WebGPURenderer({antialias: true, powerPreference: 'high-performance', forceWebGL: false, reversedDepthBuffer: true, trackTimestamp: true});
@@ -134,7 +136,7 @@ export function init3d(el) {
   scene = new THREE.Scene();
   // every render() and the label pass would walk all ~2,000 objects again: the loop updates the matrices once per frame
   scene.matrixWorldAutoUpdate = false;
-  tex = textures(high);
+  tex = textures();
   scene.fog = new THREE.Fog(0xc4d3e2, SIZE * 1.3, SIZE * 4);
   camera = new THREE.PerspectiveCamera(42, 1, 0.05, 30000);
   camera.layers.enable(1);  // layer 1: effects and contact shadows (drawn, but left out of the motion-vector pass)
@@ -476,7 +478,8 @@ function loadSky(preset) {
     console.warn('3D: the sky could not be loaded', e);
     stageDone('sky', 'offline: keeping this sky');
   });
-  load(preset.url, streamed(preset.url));
+  if (tier === 'mobile') load(streamed(preset.url), preset.url);
+  else load(preset.url, streamed(preset.url));
 }
 
 // ---------- circuit (circuit3d.js builds it) ----------
@@ -594,8 +597,8 @@ export function setCars(drivers, onSelect, year) {
   warmCockpit(token);
 }
 
-// the ground photos, once: 4k for Ultra (or a tuned Ultra) on the high tier, else 2k
-const loadPhotos = () => tex.load(high && ['Ultra', 'Custom'].includes(presetOf(gfx)));
+// the ground photos, once: 4k on a desktop at any preset, else 1k
+const loadPhotos = () => tex.load(high ? '4k' : '1k');
 
 // one visible mesh per material in the scene: what a warm-up compiles
 function warmable(seen = new Set()) {

@@ -6,8 +6,8 @@ updates "Current state". This is the one handoff file for the whole plan.
 ## Current state
 
 - Branch: `modernize` (from `improve-phase-8`, HEAD `fff158f`, 21 Nov 2026).
-- Done: phase 1 (21 Nov 2026).
-- Next: **Phase 2** (device tiers). Start a new session and type: *"Do phase 2 of docs/modernize-plan.md."*
+- Done: phase 1, phase 2 (21 Nov 2026).
+- Next: **Phase 3** (3D stage and Stream on demand). Start a new session and type: *"Do phase 3 of docs/modernize-plan.md."*
 - Rule: after each phase, stop and wait for the user's go.
 
 ## Before phase 1: watch out
@@ -70,3 +70,35 @@ Watch out:
 - `checkJs` stays false: only files with `// @ts-check` are checked; imported modules are typed from their JSDoc but not
   reported. Modules importing `three` stay unchecked (no types for the import map).
 Next: Phase 2
+
+## Phase 2: device tiers: desktop best, mobile light (21 Nov 2026)
+Commits: see git log (phase 2 commit on `modernize`)
+Done:
+- `graphics.js` `deviceTier(gpu, env)` (pure): `?tier=desktop|mobile|software` forces one; a software renderer name gives
+  `software`; `userAgentData.mobile`, a coarse pointer with a screen under 768 px, or `deviceMemory <= 4` give `mobile`;
+  else `desktop`. `defaultsFor(tier)`: the Low preset on mobile, Ultra elsewhere; `clean`/`loadGraphics` take that base.
+- `scene3d.js`: `export let tier` (module load: no GPU name; `init3d` adds it from `probeGpu`, which now returns the name);
+  `high = tier === 'desktop'` (so a phone no longer supersamples and gets the near car LOD and the 4096 satellite ground);
+  `loadPhotos` loads 4k on desktop at any preset (was: only Ultra/Custom), 1k otherwise (software was 2k/1k); the sky
+  streams 1k first on mobile, local 4k first elsewhere. Settings' Reset uses `defaultsFor(tier)`.
+- `textures3d.js`: `photo` lost its per-set `low` arg; `load(res)` takes '4k' or '1k'.
+- `assets.py` `_heavy`: **bug fixed**: its regex only matched the gravel line, so Download assets listed gravel at 2k/1k
+  and never the 4k sets the desktop loads (asphalt, grass, gravel 4k were on this machine from an earlier fetch). Now every
+  `photo('...')` set at 4k and 1k. 2k is no longer used or downloaded (old 2k folders can be deleted by hand).
+Measured (agent-browser headed, `#2026/1/replay`, 40 s after open, no window errors in either):
+| Tier | Sky | Photo sets | Preset |
+|---|---|---|---|
+| desktop (2040x1000) | local 4k | all nine maps 4k | Ultra |
+| `?tier=mobile` (Pixel 7 emulation) | streamed 1k | all nine maps 1k (asphalt/grass 1k from the CDN: not downloaded here yet) | Low |
+Tests: `tests/test_graphics.mjs` (tier rule with fake navigator/screen/pointer, override, mobile defaults);
+`tests/test_server.py` asserts every set at 4k and 1k in `_heavy`. `scripts/test_all.py` all green, tsc included.
+Not done or not verified, and why:
+- Desktop before/after screenshots and GPU memory not taken: at Ultra on desktop the code path is unchanged (4k photos, 4k sky,
+  `high` true). Desktop on High/Medium/Low now also gets 4k photos (more GPU memory there, ~+0.5 GB vs 2k, arithmetic).
+- No real phone tested. agent-browser `set device` emulates size and UA only (no coarse pointer, no `userAgentData.mobile`),
+  so the natural detection stayed desktop there; the mobile check used `?tier=mobile`.
+- Mobile numbers (Low preset, 1k) are the plan's; not tuned by measuring a phone.
+Watch out:
+- `deviceMemory <= 4` also puts a 4 GB desktop on the mobile tier (as planned).
+- The tier is read on every load; a stored `lo-graphics` still wins over the tier's defaults.
+Next: Phase 3
