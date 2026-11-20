@@ -1,7 +1,9 @@
 // Start reaction game: five red lights, one a second, a random hold, lights out; press as fast as you can. Opened from the palette.
 import {el, count} from './util.js';
+import {play} from './motion.js';
 
 const KEY = 'reactionBest';
+export const lightAt = i => 1000 * (i + 1);  // light i (0-4) comes on this many ms after the start; the fifth at 5 s
 export const holdMs = r => 200 + r * 2800;  // r in [0, 1): the FIA hold is somewhere between 0.2 and 3 s
 export const better = (best, ms) => (best == null || ms < best ? ms : best);
 export const verdict = ms => ms < 100 ? 'Anticipated: under 0.1 s counts as a jump start' : ms < 200 ? 'F1 sharp: drivers usually react in about 0.2 s'
@@ -22,7 +24,10 @@ export function openReaction() {
     lights.forEach(l => l.classList.remove('on'));
     state = 'lights';
     out.textContent = '';
-    lights.forEach((l, i) => timers.push(setTimeout(() => l.classList.add('on'), 1000 * (i + 1))));
+    lights.forEach((l, i) => timers.push(setTimeout(() => {
+      l.classList.add('on');
+      play(l, {scale: [.7, 1], duration: 260, ease: 'outExpo'});  // visual only: the timer above sets the timing
+    }, lightAt(i))));
     timers.push(setTimeout(() => {
       state = 'hold';
       timers.push(setTimeout(() => requestAnimationFrame(t => {  // t0 = the frame the lights go dark on, same clock as event.timeStamp
@@ -30,7 +35,7 @@ export function openReaction() {
         lights.forEach(l => l.classList.remove('on'));
         state = 'out'; t0 = t;
       }), holdMs(Math.random())));
-    }, 5000));
+    }, lightAt(lights.length - 1)));
   };
   const press = e => {
     if (state === 'idle' || state === 'done') return start();

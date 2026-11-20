@@ -15,14 +15,17 @@ export const tileLL = (z, x, y) => [Math.atan(Math.sinh(Math.PI * (1 - 2 * y / 2
 // shortcut: clamped at the antimeridian instead of wrapping, no circuit is within a block of it
 export const tilesRound = (lat, lng, z, n) => mercator([lng, lat], z).map(p => Math.max(0, Math.min(2 ** z - n, Math.round(p / 256 - n / 2))));
 
+// The three timings of a flight at f in 0..1: the turn, the climb and the drop, each 0..1. flight.theatre.json (played by motion.js) authors the same curves.
+export const timing = f => ({turn: ease(Math.min(1, f / 0.4)), climb: ease(Math.min(1, f / 0.15)), drop: ease(Math.max(0, (f - 0.3) / 0.7))});
+
 // The camera's flight between two views {lat, lng, alt} at f in 0..1: it turns the short way round first, then drops
 // straight down, by a constant factor per second (so every height takes as long to cross), since a turn made low
 // down is a blur of ground. From low down (one circuit to the next) it first climbs to about as high as the hop is long.
-export function flight(a, b, f) {
-  const turn = ease(Math.min(1, f / 0.4)), drop = ease(Math.max(0, (f - 0.3) / 0.7)), dl = (b.lng - a.lng + 540) % 360 - 180;
+export function flight(a, b, f, t = timing(f)) {
+  const {turn, climb, drop} = t, dl = (b.lng - a.lng + 540) % 360 - 180;
   const [p, q] = [llToVec(a.lat, a.lng), llToVec(b.lat, b.lng)], hop = Math.acos(Math.min(1, p[0] * q[0] + p[1] * q[1] + p[2] * q[2]));
   const up = Math.max(a.alt, Math.min(2, hop));
-  return {lat: a.lat + (b.lat - a.lat) * turn, lng: a.lng + dl * turn, alt: a.alt * (up / a.alt) ** ease(Math.min(1, f / 0.15)) * (b.alt / up) ** drop};
+  return {lat: a.lat + (b.lat - a.lat) * turn, lng: a.lng + dl * turn, alt: a.alt * (up / a.alt) ** climb * (b.alt / up) ** drop};
 }
 
 // Which pins' names fit on screen: pins are {x, y, w (the name's width), rank}. In order of rank a name (a box beside its dot) is

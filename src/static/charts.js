@@ -4,6 +4,7 @@ import {raceModel} from './whatif.js';
 import {raceTrace, roadVsClassified} from './pace.js';
 import {faces} from './drivers.js';
 import {favourite, favTeam, firstOf} from './favourite.js';
+import {countUp, stagger} from './motion.js';
 
 const tipEl = el('div', {class: 'tooltip', role: 'tooltip', hidden: true});
 document.body.append(tipEl);
@@ -41,6 +42,7 @@ export function renderResults(root, results, sprint, quali, view, onView) {
   const body = el('div'), pick = el('div', {class: 'resviews', role: 'group', 'aria-label': 'Classification'});
   const show = v => {
     body.replaceChildren(v[3]());
+    stagger(body.querySelectorAll('tbody tr'));
     for (const b of pick.children) { b.classList.toggle('on', b.dataset.view === v[0]); b.setAttribute('aria-pressed', b.dataset.view === v[0]); }
   };
   pick.append(...views.map(v => el('button', {class: 'pill', 'data-view': v[0], onclick: () => { show(v); onView?.(v[0]); }}, v[1])));
@@ -284,6 +286,7 @@ export function renderLapChart(root, laps, results, pitstops, why) {
     body.replaceChildren(...traceChart(M, ids, info, refId, pitstops.length > 0, pinned));
   }
   draw();
+  stagger(body.querySelectorAll('.series'));  // the first draw only: the redraws on a pick stay still
   const moved = roadVsClassified(laps, results);
   root.replaceChildren(el('div', {class: 'card'}, el('h2', {}, 'Lap chart'), pick, controls, body, moved.length ? el('p', {class: 'muted small'},
     `This is the order on the road. The classification differs for ${moved.length} drivers, usually through time penalties: `,
@@ -312,4 +315,6 @@ export function renderStandings(root, drivers, constructors, note) {
          r => [r.Constructors?.at(-1)?.constructorId, r.Constructors?.at(-1)?.name], isFav),
     constructors.length ? bars('Constructors', constructors, r => r['Constructor.name'],
                                r => [r['Constructor.constructorId'], r['Constructor.name']], r => !!team && r['Constructor.constructorId'] === team) : null));
+  stagger(root.querySelectorAll('.bars li'));
+  countUp(root.querySelectorAll('.bars .pts'));
 }

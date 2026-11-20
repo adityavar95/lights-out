@@ -1,4 +1,4 @@
-"""What the page used to fetch from CDNs, kept in static/assets (gitignored). `core`: three.js, shaka, fonts and flags, which the
+"""What the page used to fetch from CDNs, kept in static/assets (gitignored). `core`: three.js, shaka, anime.js, theatre.js, fonts and flags, which the
 page can't start without, fetched on the first page load. `start`: skies, textures and satellite tiles for every circuit
 (~600 MB), which the page gets at lower resolution or from Esri until someone chooses to download them (downloads.js, or
 scripts/fetch_assets.py before a build). The page's own modules name what's needed; files already here are skipped."""
@@ -25,6 +25,9 @@ if FROZEN and not (ASSETS / ".bundled").exists():
     shutil.copytree(STATIC / "assets", ASSETS, dirs_exist_ok=True)
     (ASSETS / ".bundled").touch()
 THREE = "https://cdn.jsdelivr.net/npm/three@0.187.0/"
+ANIME = "https://cdn.jsdelivr.net/npm/animejs@4.5.0/dist/bundles/anime.esm.min.js"
+THEATRE = "https://cdn.jsdelivr.net/npm/@theatre/core@0.7.2/+esm"  # ESM: the package's own build is CommonJS
+THEATRE_DATA = "https://cdn.jsdelivr.net/npm/@theatre/dataverse@0.7.2/+esm"  # core imports it by this path (index.html's import map)
 SHAKA = "https://cdn.jsdelivr.net/npm/shaka-player@4.12.6/dist/shaka-player.compiled.js"
 PH = "https://dl.polyhaven.org/file/ph-assets"
 ESRI = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile"
@@ -122,6 +125,9 @@ def core() -> None:
         iso = iso_m.group(1)
         jobs = {f"https://flagcdn.com/w40/{c}.png": ASSETS / "flags" / "w40" / f"{c}.png" for c in set(re.findall(r": '([a-z]{2})'", iso))}
         jobs[SHAKA] = ASSETS / "shaka" / "shaka-player.compiled.js"
+        jobs[ANIME] = ASSETS / "animejs" / "anime.esm.min.js"
+        jobs[THEATRE] = ASSETS / "theatre" / "core.js"
+        jobs[THEATRE_DATA] = ASSETS / "theatre" / "dataverse.js"
         with ThreadPoolExecutor(6) as pool:
             list(pool.map(lambda job: fetch(*job), jobs.items()))
         _core_done = True

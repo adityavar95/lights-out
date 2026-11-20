@@ -8,7 +8,8 @@
 import * as THREE from 'three';
 import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
 import {min, normalView, positionView, smoothstep, uniform, uv} from 'three/tsl';
-import {el} from './util.js';
+import {calm, el} from './util.js';
+import {flightSheet} from './motion.js';
 import {ready, setDeck, shared, warmStage} from './scene3d.js';
 import {TILES, fetchTile} from './satellite.js';
 import {llToVec, vecToLL, tileLL, tilesRound, flight, over, namesFit} from './globemath.js';
@@ -196,9 +197,9 @@ function draw(dt) {
   if (!g.ready) { g.ready = true; g.el.classList.add('ready'); unposter(); }  // the first frame is about to be drawn: fade in over the page's poster
   if (g.size) { g.surface.setSize(g.w, g.h, false); g.size = false; }  // here, not in the observer: showroom.js says why
   if (g.fly) {
-    const {fly} = g, f = Math.min(1, (performance.now() - fly.t0) / fly.ms);
+    const {fly} = g, f = calm() ? 1 : Math.min(1, (performance.now() - fly.t0) / fly.ms);  // reduced motion: at the end at once
     g.controls.update();  // the spin's damped leftover dies out here, under the flight, not as a lurch once it lands
-    place(g, flight(fly.from, fly.to, f));
+    place(g, flight(fly.from, fly.to, f, g.sample?.(f)));
     if (f === 1 && !fly.enter) {  // down: the view is the reader's again, with Play under their hand; back out: the Earth spins again
       g.fly = null;
       g.controls.enabled = true;
@@ -331,7 +332,7 @@ export async function openGlobe(pick, closed) {
   });
   g.ro.observe(g.el);
   build(g);  // before the GPU is there: the tiles are on their way while it starts
-  await ready.catch(() => {});
+  await Promise.all([ready.catch(() => {}), flightSheet().then(s => g.sample = s, () => {})]);  // no sheet: flight's own curves, the same ones
   if (G !== g) return;
   if (!shared().renderer) return closeGlobe();
   setDeck({surface: g.surface, draw});

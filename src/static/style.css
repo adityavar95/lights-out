@@ -165,7 +165,7 @@ html.home .gposter { display: block; position: fixed; inset: 0; z-index: 3; poin
 .toasts:empty { display: none; }
 .notice { pointer-events: auto; display: flex; align-items: center; gap: 8px; padding: 8px 8px 8px 16px;
   max-width: calc(100vw - 24px); border-radius: var(--r-pill); background: var(--lg-glass);
-  border: 1px solid var(--hairline); box-shadow: var(--shadow); animation: introin .6s var(--spring) both; }
+  border: 1px solid var(--hairline); box-shadow: var(--shadow); }
 .noticex { border: 0; background: none; color: var(--muted); cursor: pointer; padding: 4px 8px; }
 body.intro .notice { display: none; }
 .livebtn.on { border-color: var(--dp-color-live); color: var(--dp-color-live); }
