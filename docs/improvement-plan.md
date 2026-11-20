@@ -7,7 +7,7 @@
 - [x] Phase 2: LAN safety and caching (handover: `docs/handover/improve-2.md`)
 - [x] Phase 3: known bugs (frontend) (handover: `docs/handover/improve-3.md`)
 - [x] Phase 4: F1 TV archive spike, go (handover: `docs/handover/improve-4.md`)
-- [ ] Phase 5: archive-backed replays (only on go)
+- [x] Phase 5: archive-backed replays (handover: `docs/handover/improve-5.md`)
 - [ ] Phase 6: drop livef1, trim the exe
 - [ ] Phase 7: dependency refresh and load time
 - [ ] Phase 8: fan features

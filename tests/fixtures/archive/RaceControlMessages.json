@@ -1,0 +1,112 @@
+﻿{
+ "Messages": [
+  {
+   "Utc": "2021-03-28T14:57:06",
+   "Lap": 1,
+   "Category": "Drs",
+   "Status": "DISABLED",
+   "Message": "DRS DISABLED"
+  },
+  {
+   "Utc": "2021-03-28T14:57:40",
+   "Lap": 1,
+   "Category": "Flag",
+   "Flag": "YELLOW",
+   "Scope": "Sector",
+   "Sector": 12,
+   "Message": "YELLOW IN TRACK SECTOR 12"
+  },
+  {
+   "Utc": "2021-03-28T14:57:41",
+   "Lap": 1,
+   "Category": "Flag",
+   "Flag": "CLEAR",
+   "Scope": "Sector",
+   "Sector": 12,
+   "Message": "CLEAR IN TRACK SECTOR 12"
+  },
+  {
+   "Utc": "2021-03-28T15:03:30",
+   "Lap": 1,
+   "Category": "Other",
+   "Message": "START ABORTED - EXTRA FORMATION LAP"
+  },
+  {
+   "Utc": "2021-03-28T15:07:10",
+   "Lap": 1,
+   "Category": "Flag",
+   "Flag": "GREEN",
+   "Scope": "Track",
+   "Message": "GREEN LIGHT - PIT EXIT OPEN"
+  },
+  {
+   "Utc": "2021-03-28T15:07:35",
+   "Lap": 1,
+   "Category": "Flag",
+   "Flag": "YELLOW",
+   "Scope": "Sector",
+   "Sector": 3,
+   "Message": "YELLOW IN TRACK SECTOR 3"
+  },
+  {
+   "Utc": "2021-03-28T15:08:12",
+   "Lap": 1,
+   "Category": "SafetyCar",
+   "Status": "DEPLOYED",
+   "Mode": "SAFETY CAR",
+   "Message": "SAFETY CAR DEPLOYED"
+  },
+  {
+   "Utc": "2021-03-28T15:12:00",
+   "Lap": 3,
+   "Category": "Flag",
+   "Flag": "CLEAR",
+   "Scope": "Sector",
+   "Sector": 3,
+   "Message": "CLEAR IN TRACK SECTOR 3"
+  },
+  {
+   "Utc": "2021-03-28T15:12:15",
+   "Lap": 3,
+   "Category": "SafetyCar",
+   "Status": "IN THIS LAP",
+   "Mode": "SAFETY CAR",
+   "Message": "SAFETY CAR IN THIS LAP"
+  },
+  {
+   "Utc": "2021-03-28T15:13:49",
+   "Lap": 3,
+   "Category": "Flag",
+   "Flag": "CLEAR",
+   "Scope": "Track",
+   "Message": "TRACK CLEAR"
+  },
+  {
+   "Utc": "2021-03-28T15:14:48",
+   "Lap": 4,
+   "Category": "Flag",
+   "Flag": "YELLOW",
+   "Scope": "Sector",
+   "Sector": 4,
+   "Message": "YELLOW IN TRACK SECTOR 4"
+  },
+  {
+   "Utc": "2021-03-28T15:14:48",
+   "Lap": 4,
+   "Category": "Flag",
+   "Flag": "YELLOW",
+   "Scope": "Sector",
+   "Sector": 6,
+   "Message": "YELLOW IN TRACK SECTOR 6"
+  },
+  {
+   "Utc": "2021-03-28T15:14:50",
+   "Lap": 4,
+   "Category": "Flag",
+   "Flag": "CLEAR",
+   "Scope": "Sector",
+   "Sector": 6,
+   "Message": "CLEAR IN TRACK SECTOR 6"
+  }
+ ]
+}

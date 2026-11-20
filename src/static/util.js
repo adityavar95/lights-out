@@ -20,7 +20,9 @@ export async function get(url) {
       if (replay?.key !== key) { replay?.ctl.abort(); replay = {key, ctl: new AbortController()}; }
       signal = replay.ctl.signal;
     }
-    cache.set(url, Object.assign(fetch(url, {signal}).then(async res => {
+    // a replay with the F1 TV token is built from F1's own archive, 2018 on (archive.py)
+    const headers = url.startsWith('/api/replay/') ? tvHeaders() : {};
+    cache.set(url, Object.assign(fetch(url, {signal, headers}).then(async res => {
       const body = await res.json().catch(e => { if (e.name === 'AbortError') throw e; return {}; });  // an aborted body isn't an empty answer
       // FastAPI's validation errors (422) send detail as a list
       if (!res.ok) throw new Error(typeof body.detail === 'string' ? body.detail : `${res.status} ${res.statusText}`);

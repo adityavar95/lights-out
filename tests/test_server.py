@@ -1177,3 +1177,93 @@ finally:
     with live._lock:
         live._state.clear(); live._changed()
 print("live shared copy ok")
+
+# Improvement phase 5: GPS replays from F1's archive with the F1 TV token (archive.py), on a trimmed recording of
+# 2021 Bahrain's race (cars 33, 44, 11; the archive's first ~6 minutes from the start: tests/fixtures/archive)
+import archive
+FIX = Path(__file__).resolve().parent / "fixtures" / "archive"
+fx = {n: (FIX / n).read_text(encoding="utf-8-sig") if (FIX / n).exists() else None for n in archive.NEEDED + archive.EXTRA}
+idx = json.loads((FIX / "Index.json").read_text())
+entry = archive.find(idx, "2021-03-28", "Race")
+assert entry and entry["Path"].endswith("2021-03-28_Race/"), entry
+assert archive.find(idx, "2021-03-29", "race") is entry and archive.find(idx, "2021-04-02", "Race") is None
+assert archive.find(idx, "2021-03-28", "Sprint") is None
+assert archive.local_utc("2021-03-28T18:00:00", "03:00:00").isoformat() == "2021-03-28T15:00:00+00:00"
+assert archive.local_utc("2024-11-23T22:00:00", "-08:00:00").isoformat() == "2024-11-24T06:00:00+00:00"
+assert [archive._gap(v) for v in ("+1.234", "1 L", "2L", "LAP 5", "")] == [1.234, "+1 LAP", "+2 LAPS", None, None]
+d = archive.build(fx, entry, {"11": "Red Bull"})
+assert d["mode"] == "gps" and d["step"] == rp.STEP and d["session"] == "Race"
+# 2021's DriverList names no teams in its first line: they come from Jolpica's results (teams)
+assert {x["id"]: (x["code"], x["team"]) for x in d["drivers"]} == {"33": ("VER", None), "44": ("HAM", None), "11": ("PER", "Red Bull")}, d["drivers"]
+assert [x["num"] for x in d["drivers"]] == [33, 44, 11] and d["drivers"][0]["name"] == "Max VERSTAPPEN"  # DriverList's order
+n = int(d["duration"] / rp.STEP) + 1
+assert set(d["frames"]) == {"33", "44", "11"} and all(len(f["x"]) == n and len(f["y"]) == n for f in d["frames"].values())
+assert d["frames"]["33"]["x"][int(80 / rp.STEP)] == -278  # on the grid before lights out
+ver = [l for l in d["laps"] if l[1] == "33"]
+# lap 1 starts at SessionStatus "Started" (lights out), 90 s into the replay; lap 2 at lap 1's line crossing
+assert ver[0][:3] == [90.0, "33", 1] and ver[1][1:4] == ["33", 2, 142.406] and ver[1][0] == ver[0][0] + 118.5, ver
+assert ver[1][4:] == [45.874, 61.922, 34.61], ver[1]  # the last sector comes in the message that completes the lap
+assert d["total_laps"] == 2 and [p[1:] for p in d["pits"]] == [["11", 2, 23.9]], d["pits"]
+assert all(isinstance(g, float) or g.endswith(("LAP", "LAPS")) for _, _, g in d["intervals"]) and d["intervals"]
+assert d["positions"][0][1:] in (["33", 1], ["44", 2], ["11", 11]) and d["weather"][0][1:] == [20.5, 28.1, 0, 1.3], d["weather"][0]
+assert any(m[2] == "GREEN" for m in d["race_control"]) and d["stints"] and all(len(s) == 5 for s in d["stints"])
+for feed in ("positions", "laps", "intervals", "race_control", "pits", "weather"):
+    assert [e[0] for e in d[feed]] == sorted(e[0] for e in d[feed]), feed
+try:
+    archive.build({**fx, "Position.z.jsonStream": ""}, entry)
+    raise AssertionError("no positions should raise")
+except archive.Missing:
+    pass
+
+# the token travels only in the Authorization header; 401/403/404 raise Missing, whose message doesn't carry it
+real_get = archive.requests.get
+seen = []
+archive.requests.get = lambda url, headers=None, timeout=None: seen.append((url, headers)) or type("R", (), {"status_code": 403})()
+try:
+    archive.fetch("2022/Index.json", "tok.en.x")
+    raise AssertionError("403 should raise")
+except archive.Missing as e:
+    assert "tok.en.x" not in str(e) and "403" in str(e)
+assert seen == [(archive.BASE + "2022/Index.json", {"Authorization": "Bearer tok.en.x", "User-Agent": "Mozilla/5.0"})], seen
+archive.requests.get = real_get
+
+# replay(): with a token the archive is asked first; its 401 falls back to lap times (pre-2023) or OpenF1 (2023+)
+real = (archive.replay, rp.laps_replay, rp.find_session, rp.gps_replay, rp.jolpica_fetch, rp.CACHE)
+import tempfile
+rp.CACHE = Path(tempfile.mkdtemp())
+rp.jolpica_fetch = lambda y, kind, rnd=None: [{"number": "11", "Constructor": {"name": "Red Bull"}}]
+asked = []
+def locked(year, date_, name, token, teams): asked.append((year, token, teams)); raise archive.Missing("F1's archive answered 401")
+archive.replay = locked
+rp.laps_replay = lambda y, r: {"mode": "laps"}
+rp.find_session = lambda y, dt, name: {"session_key": 9999}
+rp.gps_replay = lambda s: {"mode": "gps", "from": "openf1"}
+try:
+    assert rp.replay(2021, {"date": "2021-03-28", "round": "1"}, "Race", "tok") == {"mode": "laps"}
+    assert asked == [(2021, "tok", {"11": "Red Bull"})], asked
+    assert rp.replay(2024, {"date": "2024-03-02", "round": "1"}, "Race", "tok") == {"mode": "gps", "from": "openf1"}
+    asked.clear()
+    assert rp.replay(2021, {"date": "2021-03-28", "round": "1"}, "Race") == {"mode": "laps"} and not asked  # no token, no ask
+    # a finished session's archive build lands on disk, where saved_replay finds it without asking OpenF1
+    archive.replay = lambda *a: (d, datetime(2021, 3, 28, 17, tzinfo=timezone.utc))
+    assert rp.replay(2021, {"date": "2021-03-28", "round": "1"}, "Race", "tok") is d
+    rp.find_session = lambda *a: (_ for _ in ()).throw(AssertionError("asked OpenF1"))
+    assert json.loads(gzip.decompress(rp.saved_replay(2021, "2021-03-28", "Race")))["laps"] == d["laps"]
+finally:
+    archive.replay, rp.laps_replay, rp.find_session, rp.gps_replay, rp.jolpica_fetch, rp.CACHE = real
+print("archive replay ok")
+
+# the replay route hands replay() the caller's token when it's valid, and None when it has expired
+real = (server.race_info, server.saved_replay, server.replay)
+got = []
+server.race_info = lambda y, r: {"round": "1", "date": "2021-03-28"}
+server.saved_replay = lambda *a: None
+server.replay = lambda y, race, s, token=None: got.append(token) or {"mode": "gps"}
+try:
+    assert client.get("/api/replay/2021/1", headers={"X-F1-Token": good}).json() == {"mode": "gps"}
+    client.get("/api/replay/2021/1", headers={"X-F1-Token": _jwt(exp=_time.time() - 10)})
+    client.get("/api/replay/2021/1")
+    assert got == [good, None, None], got
+finally:
+    server.race_info, server.saved_replay, server.replay = real
+print("replay route token ok")

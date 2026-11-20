@@ -331,15 +331,17 @@ def _is_live(race: dict, session: str) -> bool:
 
 
 @app.get("/api/replay/{year}/{round}")
-def race_replay(request: Request, year: int, round: int, session: str = "Race", laps: bool = False):
-    """laps: the lap-timing replay even for a 2023+ race, which the page plays while the GPS one builds."""
+def race_replay(request: Request, year: int, round: int, session: str = "Race", laps: bool = False,
+                x_f1_token: str | None = Header(None)):
+    """laps: the lap-timing replay even for a 2023+ race, which the page plays while the GPS one builds.
+    X-F1-Token: builds the GPS replay from F1's archive, 2018 on (archive.py)."""
     race = race_info(year, round)
     try:
         if laps and session == "Race":
             return raw_json(laps_replay(year, round))
         stored = saved_replay(year, race["date"], session)
         if not stored:
-            return raw_json(replay(year, race, session))
+            return raw_json(replay(year, race, session, f1auth.valid(x_f1_token)))
         if "gzip" not in request.headers.get("accept-encoding", ""):
             return Response(gzip.decompress(stored), media_type="application/json")
         return Response(stored, media_type="application/json", headers={"Content-Encoding": "gzip", "Vary": "Accept-Encoding"})

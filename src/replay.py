@@ -1,6 +1,7 @@
 """Race replay data.
 
-- "gps" mode (2023+): real car positions and timing feeds from OpenF1, resampled to a fixed time grid.
+- "gps" mode: real car positions and timing feeds, resampled to a fixed time grid. From F1's own archive (2018+) when
+  the caller sends an F1 TV token (archive.py), else from OpenF1 (2023+).
 - "laps" mode (1996+ races): Jolpica lap times; the frontend moves cars along the track at each lap's average pace.
 """
 import gzip
@@ -236,8 +237,16 @@ def _sweep_recent():
         _recent.pop(k, None)
 
 
+def _archive_key(year: int, race_date: str, session_name: str) -> str:
+    return f"archive-{year}-{race_date}-{session_name.lower().replace(' ', '-')}"
+
+
 def _built(year: int, race_date: str, session_name: str) -> Path | None:
-    """A session's GPS replay file, when it's built."""
+    """A session's GPS replay file, when it's built: from F1's archive (any season, asked first, without a request)
+    or from OpenF1 (2023+)."""
+    path = CACHE / f"{_archive_key(year, race_date, session_name)}.json"
+    if path.exists():
+        return path
     session = find_session(year, race_date, session_name) if year >= 2023 else None
     path = session and CACHE / f"{session['session_key']}.json"
     return path if path and path.exists() else None
@@ -530,8 +539,36 @@ def laps_replay(year: int, rnd: int) -> dict:
     }
 
 
-def replay(year: int, race: dict, session_name: str) -> dict:
+def archive_replay(year: int, race: dict, session_name: str, token: str) -> dict:
+    """A GPS replay from F1's archive (archive.py), cached like gps_replay's under its own name."""
+    import archive  # here, not at the top: archive.py builds on this module's helpers
+    key = _archive_key(year, race["date"], session_name)
+    with REPLAY_LOCKS.setdefault(key, Lock()):
+        cached = CACHE / f"{key}.json"
+        if cached.exists():
+            return json.loads(cached.read_text())
+        _sweep_recent()
+        if hit := _recent.get(key):
+            return hit[1]
+        teams = {str(r.get("number")): r["Constructor"]["name"] for r in jolpica_fetch(year, "results", int(race["round"]))}
+        data, end = archive.replay(year, race["date"], session_name, token, teams)
+        if end < datetime.now(timezone.utc) - timedelta(hours=2):
+            save(cached, data)
+        else:
+            _recent[key] = (time.time(), data)
+            _sweep_recent()
+        return data
+
+
+def replay(year: int, race: dict, session_name: str, token: str | None = None) -> dict:
+    """token: the caller's F1 TV token, which opens F1's own archive (2018 on); without one, or when the archive
+    can't serve the session, OpenF1 (2023 on) and then Jolpica lap times as before."""
     gps_error = None
+    if token and year >= 2018:
+        try:
+            return archive_replay(year, race, session_name, token)
+        except Exception as e:  # 401/403 (no entitlement, an archive gap), 404, F1 unreachable: fall back
+            print(f"Archive replay of {year} {race['date']} {session_name} unavailable ({e}); trying OpenF1")
     if year >= 2023:
         try:
             session = find_session(year, race["date"], session_name)
