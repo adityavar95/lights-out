@@ -298,7 +298,7 @@ console.log('ok');
   assert.ok(sunElevation(-23.7, -46.7, '2026-11-08T17:00:00Z') > 40, 'São Paulo 14:00 local in November: high sun');
   const abu = sunElevation(24.47, 54.6, '2025-12-07T13:00:00Z');
   assert.ok(abu > -6 && abu < 20, `Abu Dhabi 17:00 local: low sun, got ${abu.toFixed(1)}`);
-  assert.deepEqual([skyFor(45), skyFor(10), skyFor(-10)], [0, 1, 3]);
+  assert.deepEqual([skyFor(45), skyFor(10), skyFor(-10), skyFor(10, true), skyFor(-10, true)], [0, 1, 3, 4, 3]);
   const w = [[0, 20, 25, 0, 2], [600, 19, 22, 1, 3], [1800, 19, 23, 0, 3]];  // rain from 10 to 30 min
   assert.equal(replayWeather(w, 300).wetOff, 0, 'dry before the rain');
   assert.ok(replayWeather(w, 1500).wetOff > 0.85 && replayWeather(w, 1500).rain > 0, 'flooded 15 min into the rain');

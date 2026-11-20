@@ -369,6 +369,7 @@ export function buildCircuit(world, {pts, map, tex, width, startKnown, ann, corn
   };
   const side = buildTrackside({F, runs: cornerRuns(F, map.mps), half, wall, m, armco: ann.preset?.runoff === 'armco'});
   for (const o of side.meshes) world.add(o);
+  for (const l of side.spots) world.add(l, l.target);
   const barrierOffs = [-1, 1].map(s => F.map(() => s * (half + wall)));
   barriers(barrierOffs);
   side.stanchions(world, barrierOffs);

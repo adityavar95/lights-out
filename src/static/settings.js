@@ -24,7 +24,7 @@ const SECTIONS = [
     ['trees', 'Trees'], ['trackside', 'Grandstands and boards'], ['particles', 'Smoke, sparks and spray'], ['haze', 'Exhaust heat haze'], ['mirrors', 'Mirrors in the cockpit'],
   ]],
   ['Picture', [
-    ['sky', 'Sky', [['auto', 'Session time'], [0, 'Midday'], [1, 'Golden hour'], [2, 'Overcast'], [3, 'Night']], 'Session time: the sun as it stood over the circuit at the start'],
+    ['sky', 'Sky', [['auto', 'Session time'], [0, 'Midday'], [4, 'Sunrise'], [1, 'Sunset'], [2, 'Overcast'], [3, 'Night']], 'Session time: the sun as it stood over the circuit at the start'],
     ['exposure', 'Brightness', 'range'], ['contrast', 'Contrast', 'range'], ['saturation', 'Colour', 'range'],
   ]],
   ['On screen', [

@@ -134,7 +134,7 @@ def core() -> None:
 
 
 def _heavy() -> dict[str, Path]:
-    """Sky presets, photo sets at both tiers' resolutions (4k desktop, 1k mobile), and the tiles scripts/tile_list.py listed."""
+    """Day sky presets, photo sets at both tiers' resolutions (4k desktop, 1k mobile), and the tiles scripts/tile_list.py listed."""
     jobs = {}
     hdris = re.findall(r"hdri\('(\w+)'\)", _read("scene3d.js"))
     assert hdris, "no sky presets found in scene3d.js"

@@ -1070,7 +1070,7 @@ assert token_of(quote(json.dumps({"data": {"subscriptionToken": "abc"}}))) == "a
 assert token_of(quote(json.dumps({"data": {}}))) is None  # signed in, no subscription
 assert token_of("") is None and token_of("%7Bbroken") is None
 
-# the asset scrape finds the sky presets, photo sets and tiles in the real static files
+# the asset scrape finds the day sky presets, photo sets and tiles in the real static files
 heavy = _assets._heavy()
 assert any("/HDRIs/" in u for u in heavy) and any("/Textures/" in u for u in heavy)
 # every photo set at both tiers' resolutions (it once listed only gravel at 2k and 1k)

@@ -109,6 +109,7 @@ export function buildTrackside({F, runs, half, wall, m, armco}) {
 
   // floodlight towers beside the track; their lamps stay off until a night sky turns them on
   let lampBeam = null;
+  const spots = [];
   const lamp = new THREE.MeshStandardNodeMaterial({color: 0x20242c, emissive: 0xfff2d8, emissiveIntensity: 0});
   const towers = poles.map((i, k) => ({p: at(F[i], (k % 2 ? 1 : -1) * (half + wall + m(14)), 0), f: F[i]})).filter(t => clear(t.p, m(8)));
   if (towers.length) {
@@ -122,6 +123,14 @@ export function buildTrackside({F, runs, half, wall, m, armco}) {
     cone.layers.set(1);
     made.push(cone);
     lampBeam = beam;
+    // real light: a spot on the road under each tower, off until a night sky lights it (night() below)
+    for (const t of towers) {
+      const spot = new THREE.SpotLight(0xfff0dc, 0, m(90), 0.8, 0.7, 0);
+      spot.position.copy(t.p).addScaledVector(t.f.B, m(26.5));
+      spot.target.position.copy(t.f.P);
+      spot.visible = false;
+      spots.push(spot);
+    }
   }
 
   // marshal posts every ~330 m just behind the barrier, alternate sides: an orange cabin, a roof, a dark light panel facing the track
@@ -229,6 +238,7 @@ export function buildTrackside({F, runs, half, wall, m, armco}) {
   let posts = null;
   return {
     meshes: made,
+    spots,  // the floodlights' spotlights: circuit3d adds them and their targets to the world
     // offs: barrier offset per frame per side, null where it opens; pitLane moves them, so the posts follow
     stanchions(world, offs) {
       if (posts) { world.remove(posts); posts.dispose(); }
@@ -252,8 +262,9 @@ export function buildTrackside({F, runs, half, wall, m, armco}) {
         if (points.some(q => (q.x - p.x) ** 2 + (q.z - p.z) ** 2 < reach)) for (const o of standMeshes) { o.setMatrixAt(i, none); o.instanceMatrix.needsUpdate = true; }
       });
     },
-    night: v => { lamp.emissiveIntensity = v; if (lampBeam) lampBeam.opacity = Math.min(0.12, v * 0.015); },
+    night: v => { lamp.emissiveIntensity = v; if (lampBeam) lampBeam.opacity = Math.min(0.12, v * 0.015); for (const s of spots) { s.visible = v > 0; s.intensity = v * 1.4; } },
     dispose(world) {
+      for (const s of spots) world.remove(s, s.target);
       if (posts) { world.remove(posts); posts.dispose(); }
       stanchionGeo.dispose();
       standGeo.dispose();
