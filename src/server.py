@@ -13,10 +13,11 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timezone
 from functools import lru_cache
 from pathlib import Path
+from typing import Annotated
 from urllib.parse import urlsplit
 
 import uvicorn
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException, Path as PathParam, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from starlette.middleware.gzip import DEFAULT_EXCLUDED_CONTENT_TYPES, GZipMiddleware
 from fastapi.responses import FileResponse, Response
@@ -28,7 +29,7 @@ import f1tv
 import ledgers
 import radio
 from jolpica import JOLPICA, calendar_ics, driver_career, jolpica_fetch, list_seasons, races
-from replay import CACHE, OpenF1Locked, ReplayUnavailable, elevation, find_session, laps_replay, pitlane, replay, save, saved_replay, scheduled_session, session_events, season_session_rows, session_telemetry, telemetry
+from replay import CACHE, OpenF1Locked, background, ReplayUnavailable, elevation, find_session, laps_replay, pitlane, replay, save, saved_replay, scheduled_session, session_events, season_session_rows, session_telemetry, telemetry
 import live
 from tracks import _geo_track, mv_track, track
 
@@ -315,6 +316,11 @@ def _is_live(race: dict, session: str) -> bool:
     # session: so it's opened, but only for a race weekend happening now.
     if abs((date.today() - date.fromisoformat(race["date"])).days) > 3:
         return False
+    try:  # the schedule says first: opening the feed waits up to 5 s, on every "no data yet" 404 of a race weekend
+        if scheduled_session(datetime.now(timezone.utc)) is None:
+            return False
+    except Exception:
+        pass  # schedule unknown: ask the feed as before
     topics = live.snapshot()["topics"]
     info = topics.get("SessionInfo") or {}
     start = (info.get("StartDate") or "")[:10]
@@ -471,7 +477,7 @@ def event_marks(year: int, round: int, session: str = "Race"):
 
 
 @app.get("/api/f1tv/telemetry/{year}/{round}/{driver}")
-def f1tv_telemetry(year: int, round: int, driver: int, session: str = "Race"):
+def f1tv_telemetry(year: int, round: int, driver: Annotated[int, PathParam(ge=1, le=99)], session: str = "Race"):
     """One car's telemetry over a whole session, for the multiviewer's overlay on an F1 TV stream."""
     race = race_info(year, round)
     try:
@@ -488,7 +494,7 @@ def f1tv_telemetry(year: int, round: int, driver: int, session: str = "Race"):
 
 
 @app.get("/api/f1tv/radio/{year}/{round}")
-def f1tv_radio(year: int, round: int, session: str = "Race", driver: int | None = None, x_f1_token: str | None = Header(None)):
+def f1tv_radio(year: int, round: int, session: str = "Race", driver: Annotated[int | None, Query(ge=1, le=99)] = None, x_f1_token: str | None = Header(None)):
     """Team radio as text (radio.py) for the multiviewer's radio panel: every driver's clips so far (or one driver's),
     each with its words once transcribed, and the drivers' codes, team colours and headshots. The caller's F1 TV token
     fetches the audio, which F1 refuses without one."""
@@ -583,7 +589,7 @@ def live_table(topic: str):
 
 
 @app.get("/api/telemetry/{year}/{round}")
-def car_telemetry(year: int, round: int, driver: int, start: str, duration: float, session: str = "Race"):
+def car_telemetry(year: int, round: int, driver: Annotated[int, Query(ge=1, le=99)], start: str, duration: float, session: str = "Race"):
     """start / duration: the GPS replay's, so its time grid is matched without rebuilding the replay."""
     race = race_info(year, round)
     try:
@@ -716,7 +722,11 @@ def warm_up():
         jobs += [lambda: race_track(year, rnd), lambda: race_geo(year, rnd), lambda: race_elevation(year, rnd),
                  lambda: jolpica(year, "results", rnd)]
         if year >= 2023:  # newest first and one at a time: OpenF1 allows ~30 requests a minute, and each is ~30
-            jobs.append(lambda: [quietly(lambda: replay(year, r, "Race")) for r in reversed(last[-3:])])
+            def replays():
+                background.on = True  # replay.py _throttle: these leave the window's last slots to the reader's clicks
+                for r in reversed(last[-3:]):
+                    quietly(lambda: replay(year, r, "Race"))
+            jobs.append(replays)
 
     def quietly(job):
         try:

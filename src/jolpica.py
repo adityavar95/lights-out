@@ -7,6 +7,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from basef1 import BaseF1Client, SQLiteCache
+from basef1.exceptions import JolpicaHTTPError
 
 # Answers about finished races don't change, so they are kept on disk: a race's lap times are ~15 Jolpica pages (~9 s).
 SETTLED = BaseF1Client(cache=SQLiteCache(Path(__file__).resolve().parent.parent / ".cache" / "jolpica.sqlite",
@@ -66,10 +67,25 @@ def jolpica_fetch(year: int, kind: str, round: int | None = None) -> list:
     return _pages(q, method, lambda d: jolpica_rows(d, path))
 
 
+def _page(q, method: str, offset: int):
+    """One page, asked once more after a 429 or 5xx: Jolpica allows 4 a second and 500 an hour, and sends no limit
+    headers, so one busy moment shouldn't fail a whole lap fetch."""
+    try:
+        return getattr(q, method)(limit=100, offset=offset)
+    except JolpicaHTTPError as e:
+        if e.status_code != 429 and e.status_code < 500:
+            raise
+        time.sleep(RETRY_WAIT)
+        return getattr(q, method)(limit=100, offset=offset)
+
+
+RETRY_WAIT = 2  # s
+
+
 def _pages(q, method: str, rows_of) -> list:
     rows, offset = [], 0
     while True:  # Jolpica caps pages at 100 rows (a race has ~1000 lap timings)
-        res = getattr(q, method)(limit=100, offset=offset)
+        res = _page(q, method, offset)
         rows += rows_of(res.data.to_dict())
         offset += 100
         if offset >= int(res.pagination.total):

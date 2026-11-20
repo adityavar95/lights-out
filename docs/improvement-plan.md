@@ -3,7 +3,7 @@
 ## Status
 
 - [x] Phase 0: housekeeping and baseline (handover: `docs/handover/improve-0.md`)
-- [ ] Phase 1: server robustness
+- [x] Phase 1: server robustness (handover: `docs/handover/improve-1.md`)
 - [ ] Phase 2: LAN safety and caching
 - [ ] Phase 3: known bugs (frontend)
 - [ ] Phase 4: F1 TV archive spike

@@ -570,6 +570,25 @@ try:
     assert all(b - a >= 1 / 3 - 1e-9 for a, b in zip(stamps, stamps[1:])), stamps[:5]
     assert all(b - a >= 60 - 1e-9 for a, b in zip(stamps, stamps[30:])), "more than 30 in 60 s"
     assert stamps[29] - stamps[0] < 11  # a burst still goes out fast
+    # nobody sleeps holding the lock: other callers can reserve their slots meanwhile
+    held = []
+    clock.sleep = lambda s: (held.append(rp._sent_lock.locked()), setattr(clock, "t", clock.t + s))
+    for _ in range(40):
+        rp._throttle()
+    assert held and not any(held), held
+    # warm_up's requests wait while fewer than SPARE slots of the window are free, then go
+    rp._sent.clear()
+    for _ in range(25):
+        rp._throttle()
+    rp.background.on = True
+    try:
+        t0 = clock.t
+        rp._throttle()
+        assert clock.t - rp._sent[0] > 0 and clock.t - t0 >= 1, "background request went into a busy window"
+        assert sum(t > clock.t - 60 for t in rp._sent) <= rp._sent.maxlen - rp.SPARE + 1
+    finally:
+        rp.background.on = False
+        del clock.sleep
     class _Ans:
         def __init__(self, code): self.status_code = code
         def raise_for_status(self): pass
@@ -749,6 +768,24 @@ with tempfile.TemporaryDirectory() as tmp:
         raise AssertionError("no saved copy, yet no error")
     except tracks.requests.ConnectionError:
         pass
+    # a url that failed is not asked again for DOWN_FOR: the next request goes straight to the saved copy (or fails fast)
+    calls = []
+    def counted(url, **kw): calls.append(url); raise tracks.requests.ConnectionError("offline")
+    tracks._get = counted
+    tracks._down.clear()
+    for _ in range(3):
+        try:
+            tracks._kept("never2", "https://y/")
+        except tracks.requests.ConnectionError:
+            pass
+    assert calls == ["https://y/"], calls
+    tracks._down["https://y/"] -= tracks.DOWN_FOR
+    try:
+        tracks._kept("never2", "https://y/")
+    except tracks.requests.ConnectionError:
+        pass
+    assert len(calls) == 2, "not asked again after DOWN_FOR"
+    tracks._down.clear()
     tracks.DISK, tracks._get = real_tracks
 
 # the routes, through the app (no upstream call: races and the feed are stubbed)
@@ -852,6 +889,14 @@ try:
     assert not server._is_live({"date": today}, "Race")
     server.live.snapshot = nope
     assert not server._is_live({"date": "2020-03-08"}, "Race")
+    # nothing on the schedule now: the feed isn't opened (that waits up to 5 s) on a race weekend's 404
+    real_sched, server.scheduled_session = server.scheduled_session, lambda now: None
+    assert not server._is_live({"date": today}, "Race")
+    server.scheduled_session = lambda now: "US GP · Race"
+    server.live.snapshot = lambda: topics("Started")
+    assert server._is_live({"date": today}, "Race")
+    server.scheduled_session = real_sched
+    server.live.snapshot = nope
     # the documented flow: OpenF1 locked with the session running -> 409 LIVE_NOW
     def refuse(*a): raise server.ReplayUnavailable("locked")
     server.replay = refuse
@@ -1047,3 +1092,61 @@ assert server.table([{"a": 1, "b": 2}], ["b"]) == {"columns": ["b"], "data": [[2
 r = client.get("/media/lights-out-trailer.mp4", headers={"Range": "bytes=0-99"})
 assert r.status_code == 206 and r.headers["content-type"] == "video/mp4" and len(r.content) == 100, (r.status_code, r.headers)
 assert client.get("/media/../server.py").status_code == 404
+
+# Improvement phase 1 item 3: a driver number outside 1-99 is refused before it costs an OpenF1 request or a cache file
+for url in ["/api/telemetry/2025/1?driver=0&start=2025-03-16T04:00:00&duration=60", "/api/telemetry/2025/1?driver=1000&start=x&duration=1",
+            "/api/f1tv/telemetry/2025/1/100", "/api/f1tv/radio/2025/1?driver=-4"]:
+    assert client.get(url).status_code == 422, url
+print("driver bounds ok")
+
+# Improvement phase 1 item 4: one 429 or 5xx on a Jolpica page is asked again once; a 4xx or a second failure raises
+from basef1.exceptions import JolpicaHTTPError
+class _Res:
+    def __init__(self, rows): self.data, self.pagination = type("D", (), {"to_dict": lambda s: rows})(), type("P", (), {"total": 150})()
+class _Q:
+    def __init__(self, fails): self.fails, self.asked = list(fails), 0
+    def laps(self, limit, offset):
+        self.asked += 1
+        if self.fails:
+            raise JolpicaHTTPError("busy", status_code=self.fails.pop(0))
+        return _Res([offset])
+real_wait, jolpica.RETRY_WAIT = jolpica.RETRY_WAIT, 0
+try:
+    q = _Q([429]); assert jolpica._pages(q, "laps", lambda d: d) == [0, 100] and q.asked == 3
+    q = _Q([503]); assert jolpica._pages(q, "laps", lambda d: d) == [0, 100]
+    for fails in ([400], [429, 429]):
+        try:
+            jolpica._pages(_Q(fails), "laps", lambda d: d)
+            raise AssertionError(f"{fails} should raise")
+        except JolpicaHTTPError:
+            pass
+finally:
+    jolpica.RETRY_WAIT = real_wait
+print("jolpica retry ok")
+
+# Improvement phase 1 item 6: recent (unfinished) builds expire on read too, and at most RECENT_MAX are kept
+rp._recent.clear()
+rp._recent.update({k: (time.time() - k, {"k": k}) for k in range(5)})
+rp._recent[99] = (time.time() - rp.RECENT_TTL - 1, {})
+rp._sweep_recent()
+assert sorted(rp._recent) == [0, 1, 2], sorted(rp._recent)
+rp._recent.clear()
+print("recent builds ok")
+
+# Improvement phase 1 item 7: pollers share one copy of the live state until a feed message changes it
+real_thread = live._thread
+live._thread = type("T", (), {"is_alive": lambda s: True})()
+try:
+    with live._lock:
+        live._state.clear(); live._put("SessionInfo", {"Name": "Race"})
+    a, b = live.snapshot()["topics"], live.snapshot()["topics"]
+    assert a is b and a == {"SessionInfo": {"Name": "Race"}} and a is not live._state
+    with live._lock:
+        live._put("SessionStatus", {"Status": "Started"})
+    c = live.snapshot()["topics"]
+    assert c is not a and c["SessionStatus"] == {"Status": "Started"} and "SessionStatus" not in a
+finally:
+    live._thread = real_thread
+    with live._lock:
+        live._state.clear(); live._changed()
+print("live shared copy ok")

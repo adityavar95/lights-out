@@ -31,6 +31,8 @@ BUFFER = 6  # seconds of GPS / car data samples kept for the browser
 RS = "\x1e"  # SignalR message separator
 
 _state: dict = {}
+_version = 0  # bumped on every change to _state, under _lock
+_shared = (-1, {})  # (_version, deep copy) handed to every poller until the next change
 # token: the last poller's F1 TV token, in memory only; rejected: one F1 refused, so pollers can't resend it every 5 s
 _status = {"connected": False, "error": None, "last_request": 0.0, "auth": False, "token": None, "rejected": None,
            "rejected_at": 0.0, "auth_error": None}
@@ -70,8 +72,14 @@ def _utc(s: str) -> float:
 SAMPLED = {"Position.z": ("Position", "Position", "Timestamp"), "CarData.z": ("CarData", "Entries", "Utc")}
 
 
+def _changed():
+    global _version
+    _version += 1
+
+
 def _put(topic: str, data):
     """Store one topic's data; samples of the compressed topics are appended and trimmed to BUFFER s."""
+    _changed()
     if topic not in SAMPLED:
         _state[topic] = merge(_state[topic], data) if topic in _state else data
         return
@@ -119,6 +127,7 @@ def _handle(msg: dict):
     if msg.get("type") == 3 and isinstance(msg.get("result"), dict):  # Subscribe reply: the full current state
         with _lock:
             _state.clear()
+            _changed()
             for topic, data in msg["result"].items():
                 _put(topic, data)
     elif msg.get("type") == 1 and msg.get("target") == "feed":
@@ -171,6 +180,7 @@ def _run():
             time.sleep(5)
     with _lock:  # the next connection mustn't serve this one's session as current
         _state.clear()
+        _changed()
     _status.update(connected=False, error=None)
 
 
@@ -214,10 +224,13 @@ def snapshot(token: str | None = None) -> dict:
         if _state or _status["error"]:
             break
         time.sleep(0.1)
+    global _shared
     with _lock:
+        if _shared[0] != _version:  # one copy per feed message, not per poll (every tab asks each second)
+            _shared = (_version, copy.deepcopy(_state))
         return {"connected": _status["connected"], "error": _status["error"], "auth": _status["auth"],
                 "auth_error": _status["auth_error"],
-                "topics": copy.deepcopy(_state)}
+                "topics": _shared[1]}  # shared between callers: read it, don't change it
 
 
 def rows(data) -> list:

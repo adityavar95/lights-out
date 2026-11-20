@@ -13,6 +13,7 @@ from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import threading
 from threading import Lock
 
 import requests
@@ -37,21 +38,31 @@ _sent_lock = Lock()
 _http = requests.Session()  # one kept-alive connection: a new one cost ~450 ms of each of a build's ~30 requests
 
 
+background = threading.local()  # warm_up sets .on: its requests leave the window's last slots to the reader's clicks
+SPARE = 10  # slots of the 60 s window background requests leave free
+
+
 def _throttle():
-    """Waits for a slot in OpenF1's free tier: 30 requests in any 60 s, at most 3 a second. The lock stays held while
-    waiting, so callers queue in turn; a short burst still goes out at full speed."""
-    with _sent_lock:
-        now = time.monotonic()
-        wait = max(_sent[-1] + 1 / 3 - now if _sent else 0, _sent[0] + 60 - now if len(_sent) == _sent.maxlen else 0)
-        if wait > 0:
-            time.sleep(wait)
-        _sent.append(time.monotonic())
+    """Waits for a slot in OpenF1's free tier: 30 requests in any 60 s, at most 3 a second. A caller reserves its send
+    time under the lock and sleeps outside it, so callers still go in turn but one long wait doesn't block the others'
+    reservations (holding the lock while sleeping queued every OpenF1 user, for up to 60 s, behind one build)."""
+    while True:
+        with _sent_lock:
+            now = time.monotonic()
+            busy = sum(t > now - 60 for t in _sent)
+            if not (getattr(background, "on", False) and busy > _sent.maxlen - SPARE):
+                at = max(now, _sent[-1] + 1 / 3 if _sent else now, _sent[0] + 60 if len(_sent) == _sent.maxlen else now)
+                _sent.append(at)
+                break
+        time.sleep(1)  # background, window busy: look again
+    if at > now:
+        time.sleep(at - now)
 
 
 def openf1(path: str) -> list:
     for attempt in range(6):
         _throttle()
-        r = _http.get(OPENF1 + path, timeout=120)
+        r = _http.get(OPENF1 + path, timeout=(5, 30))  # connect, then between bytes: a stalled reply fails in 30 s, not 120
         if r.status_code == 429:  # free tier allows ~3 req/s and 30 req/min
             time.sleep(3 * (attempt + 1))
             continue
@@ -210,6 +221,17 @@ def _finished(session: dict) -> bool:
 REPLAY_LOCKS: dict[int, Lock] = {}  # a second request for a session being built waits for its cache, not ~30 more calls
 RECENT_TTL = 300  # s: how long a session too recent for the disk cache keeps its build (OpenF1 is still filling it in)
 _recent: dict = {}  # session_key -> (built at, replay)
+RECENT_MAX = 3  # builds kept: several MB each
+
+
+def _sweep_recent():
+    """Drops expired builds on every read and write (they used to go only when another was added), then the oldest
+    past RECENT_MAX."""
+    for k, (built, _) in list(_recent.items()):
+        if time.time() - built >= RECENT_TTL:
+            _recent.pop(k, None)
+    for k in sorted(_recent, key=lambda k: _recent[k][0])[:-RECENT_MAX]:
+        _recent.pop(k, None)
 
 
 def saved_replay(year: int, race_date: str, session_name: str) -> bytes | None:
@@ -230,8 +252,9 @@ def _gps_replay(session: dict) -> dict:
     cached = CACHE / f"{sk}.json"
     if cached.exists():
         return json.loads(cached.read_text())
+    _sweep_recent()
     hit = _recent.get(sk)
-    if hit and time.time() - hit[0] < RECENT_TTL:
+    if hit:
         return hit[1]
 
     drivers = openf1(f"drivers?session_key={sk}")
@@ -247,7 +270,10 @@ def _gps_replay(session: dict) -> dict:
     window = f"&date>={start.isoformat()[:19]}&date<={end.isoformat()[:19]}"
     rel = lambda d: round((ts(d) - start).total_seconds(), 1)
 
+    bg = getattr(background, "on", False)
+
     def locations(num):
+        background.on = bg  # the pool's threads don't inherit warm_up's thread-local
         return num, openf1(f"location?session_key={sk}&driver_number={num}{window}")
 
     with ThreadPoolExecutor(max_workers=3) as pool:
@@ -288,10 +314,8 @@ def _gps_replay(session: dict) -> dict:
     if _finished(session):
         save(cached, data)
     else:
-        for k, (built, _) in list(_recent.items()):  # these are several MB each
-            if time.time() - built >= RECENT_TTL:
-                _recent.pop(k, None)
         _recent[sk] = (time.time(), data)
+        _sweep_recent()
     return data
 
 
