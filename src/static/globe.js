@@ -246,8 +246,7 @@ function draw(dt) {
     if (on) {
       v.copy(at).project(camera);
       [p.x, p.y] = [(v.x + 1) / 2 * g.w, (1 - v.y) / 2 * g.h];
-      b.style.setProperty('--pin-x', `${p.x.toFixed(1)}px`);
-      b.style.setProperty('--pin-y', `${p.y.toFixed(1)}px`);
+      b.style.translate = `${p.x.toFixed(1)}px ${p.y.toFixed(1)}px`;
       p.rank = (p.c.state === 'shown' ? 4 : p.c.state === 'next' ? 2 : 0) + facing / camera.position.length();
       shown.push(p);
     }

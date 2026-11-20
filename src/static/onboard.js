@@ -88,7 +88,7 @@ export function setCameraUi(mode, showWheel) {
 
 export function setWheelAngle(deg, modelled) {
   if (modelled !== overlay.modelled) { overlay.modelled = modelled; placeWheel(); }
-  w.wheel.style.setProperty('--wheel-rotation', `${-deg}deg`);
+  w.wheel.style.transform = `translateX(-50%) rotate(${-deg}deg)`;  // + = left turn = anticlockwise
 }
 
 // d: {speed, gear, rpm, throttle, brake, drs, lap, total, pos, gap, tyre, status, estimated}
@@ -104,11 +104,11 @@ export function updateWheel(d) {
   w.gap.textContent = d.gap || '–';
   const ty = TYRE[d.tyre];
   w.tyre.textContent = ty ? ty[0] : '–';
-  w.tyre.style.setProperty('--tyre-color', ty ? ty[1] : '');
+  w.tyre.style.color = ty ? ty[1] : '';
   w.drs.className = `drs ${d.drs >= 10 ? 'open' : d.drs === 8 ? 'armed' : ''}`;  // OpenF1: 10/12/14 open, 8 eligible
-  w.thr.style.setProperty('--bar-height', `${d.throttle ?? 0}%`);
-  w.brk.style.setProperty('--bar-height', `${d.brake ? 100 : 0}%`);
+  w.thr.style.height = `${d.throttle ?? 0}%`;
+  w.brk.style.height = `${d.brake ? 100 : 0}%`;
   const lit = ledsLit(d.rpm);
   w.leds.forEach((led, i) => led.classList.toggle('on', i < lit));
-  for (const f of w.flags) f.style.setProperty('--flag-bg', FLAG[d.status] || 'transparent');
+  for (const f of w.flags) f.style.background = FLAG[d.status] || 'transparent';
 }

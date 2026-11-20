@@ -307,9 +307,9 @@ function redraw() {
   drawTrace(M.base.getContext('2d'), w, h, M.view);
   drawCursor(M.over.getContext('2d'), w, h, M.view, M.hover);
   M.head[1].textContent = M.view.nameA;
-  M.head[1].style.setProperty('--head-color', colA);
+  M.head[1].style.color = colA;
   M.head[2].textContent = M.view.nameB;
-  M.head[2].style.setProperty('--head-color', colB);
+  M.head[2].style.color = colB;
   readout();
   // callouts: worth recomputing only when a lap changed, i.e. at most every redraw (O(N) passes, well under 1 ms)
   const notes = A && B ? insights(A, B, {len, a: M.view.nameA, b: M.view.nameB, corner, cuts: check?.cuts}) : [];
