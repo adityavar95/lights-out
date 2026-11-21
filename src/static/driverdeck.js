@@ -15,6 +15,7 @@ const SWITCHES = [
   ['gearbox', 'GEARBOX', [['AUTO', 'AUTO'], ['MANUAL', 'MANUAL']]],
   ['clutch', 'CLUTCH', [['AUTO', 'AUTO'], ['MANUAL', 'MANUAL']]],  // H-pattern eras: clutch to shift, blip to downshift
   ['rules', 'AIDS', [['OPEN', 'ANY'], ['ERA', 'ERA-LEGAL']]],         // TC / launch / ABS only where that season allowed them
+  ['bias', 'BRAKE BIAS F%', [[0.54, '54'], [0.57, '57'], [0.6, '60']]],  // further back: more rotation on the brakes, rear lock-ups
   ['brakeAssist', 'BRAKE ASSIST', [['OFF', 'OFF'], ['LOW', 'LOW'], ['HIGH', 'HIGH']]],
   ['line', 'RACING LINE', [['ON', 'ON'], ['CORNERS', 'CORNERS'], ['OFF', 'OFF']]],
 ];
