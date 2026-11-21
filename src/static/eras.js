@@ -76,7 +76,7 @@ const ERAS = [
   [2017, {aero: {ClA: 6.0, CdA: 1.55}, tyre: {mu: 1.95}, chassis: {wb: 3.6, kz: 1.25}, brakes: {maxG: 6}}],
   [2019, {chassis: {fuel: 110}}],
   [2022, {aero: {ClA: 5.76, CdA: 1.5, ge: 0.35}, tyre: {mu: 1.92, slipPeak: 0.09, shape: 1.7}, chassis: {h0: 0.03, k: 700e3, zeta: 0.25},
-          driver: {vRef: 30}}],                                                        // ground effect, 18" tyres
+          driver: {vRef: 30}, brakes: {maxG: 4.6}}],  // the heavier car: ~5.4 g peak braking from 300 km/h, drag included; ground effect, 18" tyres
   [2023, {chassis: {zeta: 0.5}}],                                                       // floors stiffened: porpoising tamed
   // 2026: ~30 % less downforce in corner mode, ~55 % less drag in straight mode; no MGU-H, so a little lag again
   [2026, {aero: {ClA: 4.4, CdA: 1.35, ge: 0.25, drs: false, active: {xCl: 0.55, xCd: 0.5}}, chassis: {wb: 3.4, fuel: 75},

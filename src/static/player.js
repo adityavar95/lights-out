@@ -8,7 +8,7 @@ import {autoShift, REAR_STIFF} from './vehicle.js';
 // launch control with it, ABS 1992-93). clutch: AUTO clutches and blips for you; MANUAL needs the clutch (X / pad L3) to
 // change gear in an H-pattern car, and a blip of throttle on each downshift or the rear wheels snatch.
 // steer: ASSIST asks for front grip (see steer below); RAW is the wheel angle you ask for, for a pad or wheel that can catch a slide
-export const ASSISTS = {tc: 'MED', abs: true, gearbox: 'AUTO', clutch: 'AUTO', brakeAssist: 'LOW', line: 'ON', rules: 'OPEN', steer: 'ASSIST'};
+export const ASSISTS = {tc: 'MED', abs: true, gearbox: 'AUTO', clutch: 'AUTO', brakeAssist: 'LOW', bias: 0.6, line: 'ON', rules: 'OPEN', steer: 'ASSIST'};
 const MODERN = {maxLock: 0.35, wb: 3.6, driver: {vRef: 30, steerTau: 0.06}};
 
 // Steering. The input (-1..1, + = right) is never applied raw:
@@ -63,6 +63,7 @@ export function playerControls(R, car, h, X, env) {
   // ABS pulses around the lock threshold; TC FULL holds the drive at 97 % of the traction limit, MED at it (a little
   // slip allowed), OFF leaves it to the right foot; launch control, where legal, holds it off the grid
   X.abs = A.abs && !!legal.abs;
+  X.bias = A.bias;  // brake balance, share on the front axle
   X.tc = legal.tc ? {FULL: 0.97, MED: 1.0, OFF: null}[A.tc] : null;
   X.reserve = X.tc == null ? 0.25 : A.tc === 'FULL' ? 0.5 : 0.42;  // grip TC keeps for steering, so a correction holds
   if (X.tc == null && legal.launch && car.lapsDone === 0 && car.s < 30) X.tc = 1;  // the standing start only

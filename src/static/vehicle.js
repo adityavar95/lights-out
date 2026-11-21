@@ -9,7 +9,7 @@
 import {clamp, mgukTaper} from './telemetry.js';
 import {profile} from './eras.js';
 
-const G = 9.81, RHO = 1.225;
+const G = 9.81, RHO = 1.225, DRS_REAR = 0.28;
 export const control = () => ({throttle: 0, brake: 0, clutch: 0, steer: 0, gearShift: 0, aeroMode: 'FIXED', ersMode: 'BALANCED',
                                abs: true, tc: 1, autoBlip: true, autoClutch: true});
 
@@ -147,7 +147,10 @@ export function aero(car, c, ctl, h, env) {
   car.aeroX = c.active ? car.aeroX + clamp(flaps - car.aeroX, -h / 0.25, h / 0.25) : 0;
   const x = car.aeroX, act = c.active;
   const ClAz = c.ClA * (1 + c.ge * clamp(car.z / c.h0, 0, 1.5)) * stall * env.mult * (1 - (c.skirtShare ?? 0) * (1 - (car.seal ?? 1)));
-  const ClA = ClAz * (act ? 1 + (act.xCl - 1) * x : 1);
+  // DRS: the open flap stalls the rear wing, DRS_REAR of the rear's downforce gone (axles moves the balance forward);
+  // once it shuts the flow takes ~0.18 s to reattach, so braking straight from DRS starts with a light rear
+  car.drsX = ctl.aeroMode === 'DRS_OPEN' ? 1 : Math.max(0, (car.drsX ?? 0) - h / 0.18);
+  const ClA = ClAz * (act ? 1 + (act.xCl - 1) * x : 1) * (1 - DRS_REAR * (1 - c.bal) * car.drsX);
   // what a driver counts on: the downforce at the ride height the springs settle at for this speed (z = q ClA / k), not
   // this instant's bounce
   const ClAplan = c.ClA * env.mult * (1 + c.ge * clamp(q * c.ClA * env.mult / c.k / c.h0, 0, 1.5));
@@ -191,18 +194,34 @@ const FRONT = 0.99, REAR = 1.03;
 // Pitch: a passively sprung car dives under braking and squats under power, and the floor and wings tilt with it: the
 // downforce's centre of pressure moves ~1.2 % forward per g of braking (and back under power). Active suspension
 // (1992-93) holds the platform level, so its balance stays put.
+// An open DRS flap sheds DRS_REAR of the rear downforce (aero), so the balance moves forward with it.
 function axles(car, c, N, down) {
-  const a = car.aLong ?? 0, bal = c.activeSusp ? c.bal : clamp(c.bal - 0.012 * a / G, 0.3, 0.6);
+  const a = car.aLong ?? 0, b0 = c.activeSusp ? c.bal : clamp(c.bal - 0.012 * a / G, 0.3, 0.6), cut = DRS_REAR * (car.drsX ?? 0);
+  const bal = b0 / (1 - cut * (1 - b0));
   const Fzf = clamp((N - down) * c.fwd + down * bal - c.mass * a * c.hcg / c.wb, 0.15 * N, 0.85 * N);
   return [Fzf, N - Fzf];
 }
 
+// Lateral load transfer: cornering at aLat moves m aLat h / track of load onto the outside wheels, ROLL_FRONT of it at
+// the front (the stiffer front anti-roll bar). Grip rises slower than load (mu ~ Fz^-loadSens), so an unevenly loaded
+// pair holds less than the two wheels did evenly: the front loses more, which is the car's understeer at the limit.
+// shortcut: one track width for every era (2017+ cars' ~1.6 m); add chassis.track to eras.js if older cars need theirs.
+const TRACK = 1.6, ROLL_FRONT = 0.56;
+const pair = (Fz, dW, ls) => { const x = Math.min(1, dW / Math.max(Fz / 2, 1)); return ((1 + x) ** (1 - ls) + (1 - x) ** (1 - ls)) / 2; };
+function axleGrip(c, mu, Fzf, Fzr, aLat) {
+  const dW = c.mass * Math.abs(aLat) * c.hcg / TRACK;
+  return [mu * FRONT * Fzf * pair(Fzf, ROLL_FRONT * dW, c.loadSens), mu * REAR * Fzr * pair(Fzr, (1 - ROLL_FRONT) * dW, c.loadSens)];
+}
+
 // The cornering acceleration the car can hold: each axle must carry its share of the force (front fwd, rear 1 - fwd),
 // so the axle with less grip for its share sets it (braking moves load forward and makes that the rear). aLong: the
-// longitudinal acceleration to judge the load transfer at (the car's own by default)
+// longitudinal acceleration to judge the load transfer at (the car's own by default). The lateral load transfer depends
+// on the answer, so it is found by a few fixed-point steps (each changes it by under 1 %).
 export function lateralLimit(car, c, mu, N, down, aLong = car.aLong) {
   const [Fzf, Fzr] = axles({aLong}, c, N, down);
-  return Math.min(mu * FRONT * Fzf / c.fwd, mu * REAR * Fzr / (1 - c.fwd)) / c.mass;
+  let ay = Math.min(mu * FRONT * Fzf / c.fwd, mu * REAR * Fzr / (1 - c.fwd)) / c.mass;
+  for (let i = 0; i < 3; i++) { const [Df, Dr] = axleGrip(c, mu, Fzf, Fzr, ay); ay = Math.min(Df / c.fwd, Dr / (1 - c.fwd)) / c.mass; }
+  return ay;
 }
 
 // One step. env: {T, k (track curvature), mu (grip), N (normal load incl. downforce, N), down, drag (N), slope
@@ -227,7 +246,7 @@ export function vehicleStep(R, car, ctl, h, env) {
 
   const ideal = !rail && ctl.kappa != null;  // an AI car (see the lateral section)
   // --- tyre forces along the car: friction ellipse per axle against last step's lateral forces ---
-  const [Fzf, Fzr] = axles(car, c, N, down), Df = mu * FRONT * Fzf, Dr = mu * REAR * Fzr;
+  const [Fzf, Fzr] = axles(car, c, N, down), [Df, Dr] = axleGrip(c, mu, Fzf, Fzr, car.aLat ?? 0);  // last step's cornering
   const lon = (D, Fy, floor) => c.muLong * D * Math.max(floor, Math.sqrt(Math.max(0, 1 - (Fy / D) ** 2)));
   // A controller (ABS, TC, or the AI's feet) keeps back on each axle what the path needs (fyNeed: the cornering force
   // split by the static weight), a sliver more, and at least 25 % of the axle's grip (costing ~3 % of the longitudinal
@@ -243,7 +262,7 @@ export function vehicleStep(R, car, ctl, h, env) {
   // the rear keeps grip in hand to hold the car straight while braking moves the load forward. The AI (whose lane can't
   // spin) brakes at the ideal balance, following the axle loads. ABS holds each axle at ~97 % of its threshold (a 14 Hz pulse); without it a wheel asked for more
   // locks, slides at 80 % of the peak and stops steering (fronts) or holding the rear (a spin)
-  const Fb = ctl.brake * M * c.maxBrakeG * G, bias = ideal ? clamp(Fzf / N, 0.4, 0.8) : 0.6;
+  const Fb = ctl.brake * M * c.maxBrakeG * G, bias = ideal ? clamp(Fzf / N, 0.4, 0.8) : ctl.bias ?? 0.6;  // the player's setting (player.js)
   let Fbf = bias * Fb, Fbr = (1 - bias) * Fb, lockedF = false, lockR = false;
   // the rear also carries the engine braking: ABS (or the AI's foot) brakes it only with what that leaves
   const capRb = ctl.abs ? Math.max(0, capR - overrun) : capR;
@@ -366,5 +385,6 @@ export function vehicleStep(R, car, ctl, h, env) {
     car.damage = Math.min(1, car.damage + hit / 40);
     car.contact = 0.25;
   }
-  return {a: aLong, aLat: (Fyf * Math.cos(delta) + Fyr) / M + G * sinBank, throttle: thr, brake: ctl.brake};
+  car.aLat = (Fyf * Math.cos(delta) + Fyr) / M;  // the tyres' share (not the banking's), for next step's load transfer
+  return {a: aLong, aLat: car.aLat + G * sinBank, throttle: thr, brake: ctl.brake};
 }

@@ -11,6 +11,7 @@ node tests/test_player.mjs                 # player driving (steering, TC/ABS, g
 node tests/test_eras.mjs                   # era profiles: turbo lag, 2026 active aero / MGU-K taper, skirts, lap times by era
 node tests/test_circuits.mjs               # auto aero trim, elevation grade, banking
 node tests/test_trace.mjs                  # distance-resampled lap telemetry, Δt, engineer insights, trace plot smoke test
+node tests/test_vehicle.mjs                # 2025 car benchmarks: 0-100/200/300, 300-100 braking and its taper, lateral g at 75 and 250 km/h, trail braking, DRS reattach, brake bias
 node tests/test_whatif.mjs                 # Strategy Lab what-if model (baseline exactness, optimiser, traffic, SC stops)
 node tests/test_multiviewer.mjs            # F1 TV overlay timing (session names, telemetry lookup, lights-out sync)
 node tests/test_lanes.mjs                  # lap-timing replay lanes (two-column grid, passing without overlap)
