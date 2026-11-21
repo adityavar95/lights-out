@@ -10,9 +10,30 @@ import {MeshoptDecoder} from 'three/addons/libs/meshopt_decoder.module.js';
 import {seatDriver} from './driver.js';
 import {stage, stageDone, progressOf} from './loadstage.js';
 import {brakeMat} from './cars3d.js';
+import {deviceTier} from './graphics.js';
 import {dash, dashCanvas} from './dash.js';
 
-const MODEL = new URL('./models/rb22.glb', import.meta.url).href;
+const url = file => new URL(`./models/${file}.glb`, import.meta.url).href;
+// a team model with its original PNG textures (up to 4096 px): in the exe, or once Download assets has fetched it (assets.py)
+const hires = key => new URL(`./assets/cars/${key}-hires.glb`, import.meta.url).href;
+// Teams with a model of their own (by Tyler_Dave too, CC BY 4.0, adapted by Rayman0106/f1-economics-3d-deck: nose -x,
+// left +z, wheels split into FL/FR/RL/RR_Wheel nodes), in their real liveries: the file's paint, decals and trim, with
+// our race number painted on the nose. Desktop only: a phone keeps the one RB22, repainted, for every team, and so do
+// teams with no model here (Alpine, Racing Bulls: theirs in that repo aren't openly licensed).
+const TEAMS = [[/red bull/, 'redbull-rb22', 'RB22'], [/ferrari/, 'ferrari-sf26', 'SF-26'], [/mclaren/, 'mclaren-mcl40', 'MCL40'],
+               [/mercedes/, 'mercedes-w17', 'W17'], [/aston/, 'aston-martin-amr26', 'AMR26'], [/audi|sauber/, 'audi-r26', 'R26'],
+               [/cadillac/, 'cadillac-mac26', 'MAC-26'], [/williams/, 'williams-fw48', 'FW48'], [/haas/, 'haas-vf26', 'VF-26']];
+const teamModel = team => deviceTier() === 'desktop' ? TEAMS.find(([re]) => re.test((team ?? '').toLowerCase())) : null;
+const keyFor = team => teamModel(team)?.[1] ?? null;
+// the chassis a team's 2026 car is shown as: its own model's, else the RB22 standing in
+export const chassisFor = team => teamModel(team)?.[2] ?? 'RB22';
+// A team model's nose number: this far ahead of its front axle (the RB22's slot), on the bodywork's centreline.
+const NOSE_AHEAD = 0.68;
+// a team model's steering-wheel parts by material; the box round them takes the buttons and lights too
+const SW_MATERIAL = /steeringwheel|(^|_)sw(_|\.|$)|lcd/i;
+// a team model's painted bodywork (Mercedes has two such materials; Williams and Haas share a base car whose are chas(s)is)
+const PAINT = /_paints?\d?(\.\d+)?$|^chass?is\d?(\.\d+)?$/;
+const TYRE = /^(sidewall|tyre_sides|tread|tyre_tread|tire_sides|tire_tread)/i;
 // Model space (as baked below): metres, nose +z, left +x, up +y.
 // All four wheels of each of these materials are one mesh: split per corner at load.
 const WHEEL_MATERIAL = /^(discs|redbull_wheel_hub|sidewall)/;
@@ -25,58 +46,97 @@ const CORNERS = ['front-left', 'front-right', 'rear-left', 'rear-right'];
 const MIRRORS = ['mirror-left', 'mirror-right'];
 export const STEERING_RATIO = 5;  // steering-wheel turn per radian of road-wheel steer
 
-let template = null, loading = null, texels = null;
-export const rb22Ready = () => !!template;
+// key -> {template, slot (the nose number's, as NUMBER), texels, loading, settled}
+const models = {};
+// the RB22 is in, and every team model these teams want has loaded or failed (the RB22 stands in for those)
+export const rb22Ready = (teams = []) => !!models.rb22?.template && teams.every(t => { const k = keyFor(t); return !k || models[k]?.settled; });
 
-// Fetches and bakes the model once. Rejects if it can't be loaded; the procedural car then stays at every distance.
-export function loadRB22() {
-  if (loading) return loading;
-  stage('rb22', 'Car model');
-  return loading = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder).loadAsync(MODEL, e => stage('rb22', 'Car model', progressOf(e))).then(gltf => {
-    template = bake(gltf.scene);
-    stageDone('rb22');
+// Fetches and bakes the RB22 and the given teams' models, each once. Rejects only if the RB22 can't be loaded; the
+// procedural car then stays at every distance.
+export function loadRB22(teams = []) {
+  return Promise.all(['rb22', ...new Set(teams.map(keyFor).filter(Boolean))].map(loadModel)).then(() => {});
+}
+function loadModel(key) {
+  const M = models[key] ??= {};
+  if (M.loading) return M.loading;
+  stage(key, 'Car model');
+  const loader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder), progress = e => stage(key, 'Car model', progressOf(e));
+  const full = key === 'rb22' ? Promise.reject() : loader.loadAsync(hires(key), progress);
+  return M.loading = full.catch(() => loader.loadAsync(url(key), progress)).then(gltf => {
+    Object.assign(M, bake(gltf.scene, key === 'rb22'));
+    stageDone(key);
   }, e => {
-    stageDone('rb22', 'offline: procedural car');
-    throw e;
-  });
+    if (key === 'rb22') { stageDone(key, 'offline: procedural car'); throw e; }
+    stageDone(key, 'offline: the RB22 stands in');
+    console.warn('car model', key, e);
+  }).finally(() => { M.settled = true; });
 }
 
-// Every mesh baked into model space; the merged wheel meshes split per corner, the mirror glass per side.
-function bake(scene) {
+// Every mesh baked into model space; the merged wheel meshes split per corner, the mirror glass per side. rb: the RB22,
+// whose parts are found by its own names and boxes; a team model's by its node and material names.
+function bake(scene, rb) {
+  if (!rb) scene.rotation.y = Math.PI / 2;  // nose -x, left +z -> the RB22's nose +z, left +x
   scene.updateMatrixWorld(true);
   const meshes = []; scene.traverse(o => { if (o.isMesh) meshes.push(o); });
   const out = new THREE.Group(), wheels = CORNERS.map(name => Object.assign(new THREE.Group(), {name}));
   const steering = Object.assign(new THREE.Group(), {name: 'steering'});
+  const baked = new Map(meshes.map(m => [m, toFloat(m.geometry).applyMatrix4(m.matrixWorld)]));
+  const wheelBox = rb ? STEERING_BOX : new THREE.Box3();
+  if (!rb) {
+    for (const [m, g] of baked) if (SW_MATERIAL.test(m.material.name)) { g.computeBoundingBox(); wheelBox.union(g.boundingBox); }
+    wheelBox.expandByScalar(0.005);
+  }
   for (const m of meshes) {
-    const geometry = toFloat(m.geometry).applyMatrix4(m.matrixWorld);
+    const geometry = baked.get(m), name = m.material.name;
+    if (!rb) {  // the files ship nearly every surface at roughness ~0.68: carbon and chrome read as plastic
+      if (/carbon/i.test(name)) m.material.roughness = 0.42;
+      if (/^chrome/.test(name)) Object.assign(m.material, {metalness: 0.8, roughness: 0.3});
+      if (/tread/i.test(name)) m.material.roughness = 0.9;
+      else if (TYRE.test(name)) m.material.roughness = 0.82;
+      // decals lie a fraction of a millimetre off the bodywork: pulled forward in depth so they don't flicker far away
+      if (/decal/.test(name)) Object.assign(m.material, {polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2});
+    }
     // no metallicFactor in the file, so glTF's default 1 made these dark grey parts chrome
     if (m.material.name.startsWith('redbull_detail')) m.material.metalness = 0;
     if (m.material.name.startsWith('redbull_detail')) dropTriangles(geometry, c => NOSE_PLATE.containsPoint(c));
     // the file ships the tyres glossy as plastic with their normal map (moulded lettering, rubber grain) scaled to 0;
     // y is negated as GLTFLoader does for glTF's tangent space
-    if (m.material.name.startsWith('sidewall')) Object.assign(m.material, {roughness: 0.82}).normalScale.set(1, -1);
+    if (rb && m.material.name.startsWith('sidewall')) Object.assign(m.material, {roughness: 0.82}).normalScale.set(1, -1);
+    if (!rb && name.startsWith('rear_light')) {  // a team model's rear light is the tail's alone
+      out.add(Object.assign(new THREE.Mesh(geometry, m.material), {name: 'rain-light'}));
+      continue;
+    }
     if (m.material.name.startsWith('rear_light')) {  // one mesh along the car: the tail's part is the rain light
       const tail = dropTriangles(geometry.clone(), c => c.z > TAIL_Z);
       out.add(Object.assign(new THREE.Mesh(tail, m.material), {name: 'rain-light'}));
       dropTriangles(geometry, c => c.z <= TAIL_Z);
     }
     geometry.computeBoundingBox();
-    if (WHEEL_MATERIAL.test(m.material.name)) {
+    if (rb ? WHEEL_MATERIAL.test(name) : /_Wheel$/.test(m.parent?.name) || /_Wheel$/.test(m.name)) {
       splitCorners(geometry).forEach((g, i) => g && wheels[i].add(new THREE.Mesh(g, m.material)));
       continue;
     }
-    if (m.material.name.startsWith('redbull_mirror')) {  // both mirrors' glass is one mesh: each reflects its own view
+    if (rb && m.material.name.startsWith('redbull_mirror')) {  // both mirrors' glass is one mesh: each reflects its own view
       splitCorners(geometry).slice(0, 2).forEach((g, i) => out.add(Object.assign(new THREE.Mesh(g, m.material), {name: MIRRORS[i]})));
       continue;
     }
-    const onWheel = STEERING_BOX.containsBox(geometry.boundingBox);
-    if (onWheel && m.material.name.startsWith('kers_blue')) continue;  // a fixed bar across the screen
-    if (onWheel && m.material.name.startsWith('gp21_LCD')) screenUv(geometry);
+    const onWheel = wheelBox.containsBox(geometry.boundingBox);
+    if (rb && onWheel && m.material.name.startsWith('kers_blue')) continue;  // a fixed bar across the screen
+    if (onWheel && /lcd/i.test(name)) screenUv(geometry);
     const mesh = new THREE.Mesh(geometry, m.material);
     (onWheel ? steering : out).add(mesh);
   }
   out.add(steering, ...wheels);
-  return out;
+  return {template: out, slot: rb ? NUMBER : noseSlot(out, wheels)};
+}
+
+// A team model's number slot: on the paint straight down from the centreline NOSE_AHEAD ahead of the front axle, facing
+// the surface there. null (no number) if there's no paint there.
+function noseSlot(model, wheels) {
+  const z = wheels.slice(0, 2).reduce((s, w) => s + new THREE.Box3().setFromObject(w).getCenter(new THREE.Vector3()).z, 0) / 2 + NOSE_AHEAD;
+  const paint = []; model.traverse(o => { if (o.isMesh && PAINT.test(o.material.name)) paint.push(o); });
+  const hit = new THREE.Raycaster(new THREE.Vector3(0, 3, z), new THREE.Vector3(0, -1, 0)).intersectObjects(paint, false)[0];
+  return hit ? {...NUMBER, c: hit.point.toArray(), n: hit.face.normal.clone().normalize(), material: hit.object.material.name} : null;
 }
 
 // A copy with float attributes (meshopt quantizes them, which a transform would clip).
@@ -177,13 +237,22 @@ const css = c => `#${new THREE.Color(c).getHexString()}`;
 // light text on dark paint and dark on light
 export const inkFor = paint => { const c = new THREE.Color(paint); return 0.299 * c.r + 0.587 * c.g + 0.114 * c.b > 0.45 ? 0x111418 : 0xf4f4f4; };
 
-// The car's paint texture: transparent (the paint shader draws the livery, cars3d.js), with the race number (if any) baked
-// into the slot's texels in `ink`, its alpha marking where.
-function paintTexture(ink, num, size = PAINT_SIZE) {
+// The car's paint texture: transparent (the paint shader draws the livery, cars3d.js), or a team model's own livery
+// (base, an image) made opaque, so it covers the shader's; with the race number (if any) baked into the slot's texels in
+// `ink`, its alpha marking where.
+function paintTexture(ink, num, slot, texels, base, size = PAINT_SIZE, cache = {}) {
   const canvas = document.createElement('canvas'); canvas.width = canvas.height = size;
   const ctx = canvas.getContext('2d'), accent = ink;
-  if (num !== null && num !== undefined) {
-    const PX = 800, lw = Math.ceil(NUMBER.w * PX), lh = Math.ceil(NUMBER.h * PX), label = document.createElement('canvas');
+  if (base) {  // made opaque once per model (some files keep other data in alpha), then copied per car
+    if (!cache.opaque) {
+      ctx.drawImage(base, 0, 0, size, size);
+      cache.opaque = ctx.getImageData(0, 0, size, size);
+      for (let i = 3; i < cache.opaque.data.length; i += 4) cache.opaque.data[i] = 255;
+    }
+    ctx.putImageData(cache.opaque, 0, 0);
+  }
+  if (num !== null && num !== undefined && slot) {
+    const PX = 800, lw = Math.ceil(slot.w * PX), lh = Math.ceil(slot.h * PX), label = document.createElement('canvas');
     label.width = lw; label.height = lh;
     const l = label.getContext('2d'), font = px => `900 italic ${px}px "Titillium Web", system-ui, sans-serif`;
     let px = lh * 0.8; l.font = font(px);
@@ -191,7 +260,7 @@ function paintTexture(ink, num, size = PAINT_SIZE) {
     l.fillStyle = css(accent); l.textAlign = 'center'; l.textBaseline = 'middle'; l.fillText(String(num), lw / 2, lh / 2);
     const src = l.getImageData(0, 0, lw, lh).data, image = ctx.getImageData(0, 0, size, size), out = image.data, {idx, s, t} = texels;
     for (let i = 0; i < idx.length; i++) {
-      const x = Math.min(lw - 1, Math.floor((s[i] / NUMBER.w + 0.5) * lw)), y = Math.min(lh - 1, Math.floor((0.5 - t[i] / NUMBER.h) * lh));
+      const x = Math.min(lw - 1, Math.floor((s[i] / slot.w + 0.5) * lw)), y = Math.min(lh - 1, Math.floor((0.5 - t[i] / slot.h) * lh));
       const q = (y * lw + x) * 4, o = idx[i] * 4;
       for (let k = 0; k < 4; k++) out[o + k] = src[q + k];  // ink, and its coverage as alpha
     }
@@ -264,39 +333,50 @@ function tyreMat(base, stripe) {
   return m;
 }
 
+// team: picks the team's own model if it has one and it has loaded, else the RB22.
 // paint: the car's own paint material (cars3d.js's livery paint; this adds the race number as its map);
 // accent: the livery's accent (trim, helmet band); ink: the number's colour; helmet: colour; num: race number or null;
 // stripe / light: materials shared with the far LOD level (tyre compound colour, rear light). Call only once rb22Ready().
 // Returns {group, body, halo, paintMesh, wheels: [{pivot, spin, front}], steeringWheel, mirrors, discs (brake-glow
 // materials), tyre: [r, w], len, wb, width, eye, look, tcam, tcamLook, exhaust, plank, fronts, hubs, pose (the driver's
 // arms to the steering wheel's angle), dispose}.
-export function buildRB22({paint, accent, ink, helmet, num, stripe, light}) {
-  const car = new THREE.Group(), root = template.clone(true), own = [];
+export function buildRB22({paint, accent, ink, helmet, num, stripe, light, team}) {
+  const key = models[keyFor(team)]?.template ? keyFor(team) : 'rb22', M = models[key], rb = key === 'rb22';
+  const car = new THREE.Group(), root = M.template.clone(true), own = [];
   root.rotation.y = Math.PI / 2;  // model nose +z, left +x -> car nose +x, right +z
   car.add(root);
   root.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
 
-  let paintMesh; root.traverse(o => { if (o.isMesh && o.material.name.startsWith('redbull_paint')) paintMesh = o; });
-  texels ??= slotTexels(paintMesh, NUMBER);
-  Object.assign(paint, {map: paintTexture(ink, num), side: THREE.DoubleSide});
-  own.push(paint, paint.map);
+  // the paint mesh: the RB22's, or the team model's that carries the number slot. A team model's other paint keeps its file's.
+  const painted = o => rb ? o.material.name.startsWith('redbull_paint') : PAINT.test(o.material.name);
+  let paintMesh; root.traverse(o => { if (o.isMesh && painted(o) && (!paintMesh || o.material.name === M.slot?.material)) paintMesh = o; });
+  // a team model's livery at its own texture size (2048 px in the full-size files)
+  const size = !rb && paintMesh.material.map?.image?.width || PAINT_SIZE;
+  if (M.slot) M.texels ??= slotTexels(paintMesh, M.slot, size);
+  Object.assign(paint, {map: paintTexture(ink, num, M.slot, M.texels, !rb && paintMesh.material.map?.image, size, M), side: THREE.DoubleSide});
+  // a second paint material (Mercedes) has its own UVs: the same livery, without the number texture
+  const ud = paint.userData; paint.userData = {};
+  const plain = Object.assign(paint.clone(), {map: null});
+  paint.userData = plain.userData = ud;
+  own.push(paint, paint.map, plain);
   const accentMats = new Map(), discMats = new Map(), tyreMats = new Map();
   root.traverse(o => {
     if (!o.isMesh) return;
     const name = o.material.name;
-    if (name.startsWith('redbull_paint')) o.material = paint;
-    else if (name.startsWith('redbull_decals') || name.startsWith('redbull_number')) o.visible = false;  // Red Bull's logos, #1
-    else if (name.startsWith('redbull_color')) {  // the yellow trim takes the accent colour, matte like the paint
+    if (o === paintMesh) o.material = paint;
+    else if (rb && painted(o)) o.material = plain;
+    else if (rb ? name.startsWith('redbull_decals') || name.startsWith('redbull_number') : /number/.test(name)) o.visible = false;  // Red Bull's logos on a repaint; the file's own number
+    else if (rb && name.startsWith('redbull_color')) {  // the yellow trim takes the accent colour, matte like the paint
       if (!accentMats.has(o.material)) accentMats.set(o.material, Object.assign(o.material.clone(), {color: new THREE.Color(accent), metalness: 0, roughness: 0.45}));
       o.material = accentMats.get(o.material);
     } else if (name.startsWith('discs')) {  // the model's disc texture, glowing per car under braking
       if (!discMats.has(o.material)) discMats.set(o.material, brakeMat(o.material));
       o.material = discMats.get(o.material);
-    } else if (name.startsWith('sidewall')) {
+    } else if (TYRE.test(name)) {
       if (!tyreMats.has(o.material)) tyreMats.set(o.material, tyreMat(o.material, stripe));
       o.material = tyreMats.get(o.material);
     } else if (o.name === 'rain-light') o.material = light;  // flashes with ERS harvesting and in the wet
-    else if (name.startsWith('sw_decals')) o.material = decalMaterial(o.material);
+    else if (rb && name.startsWith('sw_decals')) o.material = decalMaterial(o.material);  // a team model's are its own
     else if (name.startsWith('gp21_LCD')) o.material = screenMaterial();
     if (o.name.startsWith('mirror-')) o.geometry = o.geometry.clone();  // the mirror stretches its glass per car
   });
@@ -350,7 +430,7 @@ export function buildRB22({paint, accent, ink, helmet, num, stripe, light}) {
       if (o.isMesh && o.name.startsWith('mirror-')) o.geometry.dispose();  // clones
     });
   };
-  return {group: car, body, halo: new THREE.Group(), paintMesh, wheels, steeringWheel, mirrors: MIRRORS.map(n => root.getObjectByName(n)), discs: [...discMats.values()],
+  return {model: key, group: car, body, halo: new THREE.Group(), paintMesh, wheels, steeringWheel, mirrors: rb ? MIRRORS.map(n => root.getObjectByName(n)) : null, discs: [...discMats.values()],
           tyre: [hubs[0][2], hubs[0][3]], len: all.max.x - all.min.x, wb: fx - rx, width: all.max.z - all.min.z, hubs,
           eye, look: new THREE.Vector3(eye.x + 15, 0.55, 0), tcam, tcamLook: new THREE.Vector3(tcam.x + 15, 0.4, 0),
           exhaust: new THREE.Vector3(lamp + 0.1, 0.42, 0), plank: [rx + 0.2, fx - 1.0],

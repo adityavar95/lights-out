@@ -250,6 +250,12 @@ function setSection(section, round = null) {
   syncTitle();
   syncHash();
   if (section === 'analytics') { if (active === 'replay') loadStage(); return; }
+  // the 3D stage (GPU device, textures, cars, ~5 MB of modules) can't be unloaded: a fresh page at #stream never loads it
+  // shortcut: the reload drops the weekend to scroll to and a Play race in progress; a real stage teardown if that matters
+  if (stageP) {
+    if (location.hash !== '#stream') history.pushState(null, '', '#stream');
+    return location.reload();
+  }
   count('stream_open');
   if (A.races.length) showStream(A.year, A.races, round);
 }

@@ -20,7 +20,7 @@ from paths import DATA, FROZEN
 STATIC = Path(__file__).parent / "static"
 ASSETS = DATA / "assets" if FROZEN else STATIC / "assets"  # the exe's own folder may not be writable (paths.py)
 if FROZEN and not (ASSETS / ".bundled").exists():
-    # shortcut: the exe's assets (core + skies, ~85 MB) are copied out once so downloads have one folder to add to; served
+    # shortcut: the exe's assets (core, skies and the full-size team cars, ~310 MB) are copied out once so downloads have one folder to add to; served
     # from both folders instead if the copy ever matters
     shutil.copytree(STATIC / "assets", ASSETS, dirs_exist_ok=True)
     (ASSETS / ".bundled").touch()
@@ -31,6 +31,8 @@ THEATRE_DATA = "https://cdn.jsdelivr.net/npm/@theatre/dataverse@0.7.2/+esm"  # c
 SHAKA = "https://cdn.jsdelivr.net/npm/shaka-player@4.12.6/dist/shaka-player.compiled.js"
 PH = "https://dl.polyhaven.org/file/ph-assets"
 ESRI = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile"
+# the 2026 team cars at full texture size (PNG, up to 4096 px; CC BY 4.0, static/models/CREDITS.md), pinned to a commit
+CARS = "https://raw.githubusercontent.com/Rayman0106/f1-economics-3d-deck/c821c8e42c41c6234ece0288b860fe2f5e1f5551/assets/cars/2026"
 FONTS = ["family=Geist:wght@400;500&family=Geist+Mono:wght@400;500&family=Titillium+Web:ital,wght@1,900",
          "family=Titillium+Web:ital,wght@0,400;0,600;0,700;1,900"]
 CHROME = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130.0 Safari/537.36"}  # Google sends others no woff2
@@ -147,6 +149,10 @@ def _heavy() -> dict[str, Path]:
             for kind in ("diff", "nor_gl", "rough"):
                 file = f"{res}/{name}/{name}_{kind}_{res}.jpg"
                 jobs[f"{PH}/Textures/jpg/{file}"] = ASSETS / "textures" / file
+    cars = re.findall(r"\[/[^/]+/, '([\w-]+)'", _read("rb22.js"))
+    assert cars, "no team models found in rb22.js"
+    for key in cars:
+        jobs[f"{CARS}/{key}-hires.glb"] = ASSETS / "cars" / f"{key}-hires.glb"
     for path in json.loads(_read("tile_list.json")):
         z, y, x = path.split("/")
         jobs[f"{ESRI}/{path}"] = ASSETS / "tiles" / z / y / f"{x}.jpg"

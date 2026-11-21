@@ -2,9 +2,11 @@
 // to the circuit's real shape (GeoJSON, local metres), and Esri World Imagery tiles for the area round it are stitched on
 // a canvas. No three.js or DOM here, so groundwork.js's worker runs it: fitGeo is pure (tests/test_circuits.mjs).
 export const TILES = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile';
+// AWS Terrain Tiles (open data, no key, to zoom 15): heights in terrarium PNGs, metres = R * 256 + G + B / 256 - 32768
+export const fetchDem = (z, y, x) => fetch(`https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${z}/${x}/${y}.png`);
 
 // closed polyline -> n points evenly spaced along it
-function resample(pts, n) {
+export function resample(pts, n) {
   const cum = [0];
   for (let i = 1; i <= pts.length; i++) {
     const p = pts[i - 1], q = pts[i % pts.length];
@@ -64,6 +66,36 @@ export function fitGeo(pts, geo) {
   return {map: ([x, y]) => f([x, best.mirror * y]), rms: Math.sqrt(err(f, zz, pairs) / zz.length)};
 }
 
+// The small correction to the fitted outline (pts, local metres) that puts the most of it on asphalt: road(e, n) is 1 on a
+// grey road-coloured pixel of the imagery, 0 off it. The GeoJSON outline the fit follows is hand-drawn, so the imagery can
+// sit metres off the photographed road. Hill-climbs a shift (up to ±reach m), a turn and a scale about the outline's
+// centre; returns ([e, n]) => [e, n] corrected, or null when no correction beats the plain fit by a clear margin.
+export function snapToRoad(pts, road, reach = 40) {
+  const n = pts.length, c = pts.reduce((s, p) => [s[0] + p[0] / n, s[1] + p[1] / n], [0, 0]);
+  const R = Math.sqrt(pts.reduce((s, p) => s + (p[0] - c[0]) ** 2 + (p[1] - c[1]) ** 2, 0) / n);  // ~the circuit's radius
+  // x = [east, north, turn, scale - 1]; turn and scale move the outline's rim by R * x metres
+  const warp = ([de, dn, t, k]) => ([e, nn]) => {
+    const x = e - c[0], y = nn - c[1], s = 1 + k, cs = Math.cos(t) * s, sn = Math.sin(t) * s;
+    return [c[0] + cs * x - sn * y + de, c[1] + sn * x + cs * y + dn];
+  };
+  const score = x => { const f = warp(x); return pts.reduce((s, p) => s + road(...f(p)), 0) / n; };
+  let x = [0, 0, 0, 0], best = score(x);
+  const base = best, limit = [reach, reach, reach / R, reach / R];
+  for (let step = 8; step >= 0.5; step /= 2) {  // metres at the rim, coarse to fine
+    for (let moved = true; moved;) {
+      moved = false;
+      for (let i = 0; i < 4; i++) for (const sign of [-1, 1]) {
+        const y = [...x];
+        y[i] += sign * (i < 2 ? step : step / R);
+        if (Math.abs(y[i]) > limit[i]) continue;
+        const s = score(y);
+        if (s > best) { best = s; x = y; moved = true; }
+      }
+    }
+  }
+  return best > base + 0.03 ? Object.assign(warp(x), {x, base, best}) : null;
+}
+
 // Web Mercator pixel of [lon, lat] at zoom z (256 px tiles)
 export const mercator = ([lon, lat], z) => {
   const s = 256 * 2 ** z, r = lat * Math.PI / 180;
@@ -76,9 +108,9 @@ export const fetchTile = async (z, y, x) => {
   return local.ok ? local : fetch(`${TILES}/${z}/${y}/${x}`);
 };
 
-// The sharpest zoom (up to 18, ~0.6 m per pixel) whose tiles round [lon, lat] points fit in maxPx square, and their range
-export function tileRange(corners, maxPx) {
-  let z = 18, a, b;
+// The sharpest zoom (up to top, 18 ~0.6 m per pixel) whose tiles round [lon, lat] points fit in maxPx square, and their range
+export function tileRange(corners, maxPx, top = 18) {
+  let z = top, a, b;
   for (; z > 10; z--) {
     const px = corners.map(c => mercator(c, z));
     a = [Math.min(...px.map(p => p[0])), Math.min(...px.map(p => p[1]))].map(v => Math.floor(v / 256));
@@ -90,9 +122,10 @@ export function tileRange(corners, maxPx) {
 
 // Imagery covering [lon, lat] points at tileRange's zoom.
 // Resolves {canvas (an OffscreenCanvas), z, x0, y0} (x0, y0: the canvas's top-left Mercator pixel); tiles that fail to
-// load stay black. Called in groundwork.js's worker, which also fetches and decodes the tiles off the main thread.
-export async function satellite(corners, maxPx, onProgress = () => {}) {
-  const {z, a, b} = tileRange(corners, maxPx);
+// load stay transparent. Called in groundwork.js's worker, which also fetches and decodes the tiles off the main thread.
+// get, top: another tile set (fetchDem, 15); raw: decode without colour management, for data such as heights.
+export async function satellite(corners, maxPx, onProgress = () => {}, {get: fetchOne = fetchTile, top = 18, raw = false} = {}) {
+  const {z, a, b} = tileRange(corners, maxPx, top);
   // willReadFrequently: a CPU canvas. A GPU one's ImageBitmap belongs to the worker's GPU context and went invalid when the
   // worker ended (black ground, 'invalid mailbox name' GL errors)
   const canvas = new OffscreenCanvas((b[0] - a[0] + 1) * 256, (b[1] - a[1] + 1) * 256), g = canvas.getContext('2d', {willReadFrequently: true});
@@ -102,7 +135,7 @@ export async function satellite(corners, maxPx, onProgress = () => {}) {
   const get = async (x, y, tries = 3) => {
     for (let i = 0; ; i++) {
       try {
-        const r = await fetchTile(z, y, x);
+        const r = await fetchOne(z, y, x);
         if (r.ok || r.status < 500 || i >= tries) return r;
       } catch (e) {
         if (i >= tries) throw e;
@@ -112,7 +145,7 @@ export async function satellite(corners, maxPx, onProgress = () => {}) {
   };
   const jobs = [];
   for (let x = a[0]; x <= b[0]; x++) for (let y = a[1]; y <= b[1]; y++) {
-    jobs.push(() => get(x, y).then(r => (r.ok ? r.blob() : null)).then(blob => blob && createImageBitmap(blob))
+    jobs.push(() => get(x, y).then(r => (r.ok ? r.blob() : null)).then(blob => blob && createImageBitmap(blob, raw ? {colorSpaceConversion: 'none', premultiplyAlpha: 'none'} : {}))
       .then(img => { if (img) { g.drawImage(img, (x - a[0]) * 256, (y - a[1]) * 256); img.close(); } }, () => {}));
   }
   let next = 0, finished = 0;

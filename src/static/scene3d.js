@@ -404,7 +404,8 @@ function onCameraModeChanged(m) {
 }
 
 // Orbit target: over the circuit (panning stops at its edge) and, in the overview, on the ground, so panning over a
-// hill carries the camera up with it; the camera stays 2 m above the terrain.
+// hill carries the camera up with it; the camera stays 2 m above the terrain, and high enough that the ground between it
+// and the target (the real hills round Spa or Interlagos) never hides the target.
 function keepInBounds() {
   if (!circuit) return;
   const t = controls.target, lim = SIZE * 0.7, shift = new THREE.Vector3(
@@ -412,7 +413,11 @@ function keepInBounds() {
   if (mode === 'overview' && !fly) shift.y = circuit.groundAt(t.x + shift.x, t.z + shift.z) - t.y;
   t.add(shift);
   camera.position.add(shift);
-  camera.position.y = Math.max(camera.position.y, circuit.groundAt(camera.position.x, camera.position.z) + m(2));
+  const c = camera.position;
+  let y = Math.max(c.y, circuit.groundAt(c.x, c.z) + m(2));
+  // the sight line at f of the way to the target, c.y (1 - f) + t.y f, stays over the ground there
+  for (let k = 1; k < 8; k++) { const f = k / 8; y = Math.max(y, (circuit.groundAt(c.x + (t.x - c.x) * f, c.z + (t.z - c.z) * f) - t.y * f) / (1 - f)); }
+  c.y = y;
 }
 
 // L: the next time of day. The old sky stays up until the new one has loaded.
@@ -581,7 +586,8 @@ export function setCars(drivers, onSelect, year) {
   disposeCars();
   const token = ++carsToken;
   // 2026+ cars use the RB22 model up close; until it has loaded they are procedural, then the grid is rebuilt once
-  if (year >= 2026 && !rb22Ready()) loadRB22().then(() => token === carsToken && setCars(drivers, onSelect, year), e => console.warn('RB22 model', e));
+  const teams = drivers.map(d => d.team);
+  if (year >= 2026 && !rb22Ready(teams)) loadRB22(teams).then(() => token === carsToken && setCars(drivers, onSelect, year), e => console.warn('RB22 model', e));
   for (const d of drivers) {
     const car = ownLods(buildCar(d.color, d.num, year, tex.blob, map ? m(high ? 60 : 40) : Infinity, d.team));  // the detailed car is 57 draws: past 60 m it is under ~50 px wide (Settings' car detail doubles the range)
     const num = document.createElement('b');
@@ -758,7 +764,7 @@ function maxTexture() {
   return b.device?.limits.maxTextureDimension2D ?? b.gl?.getParameter(b.gl.MAX_TEXTURE_SIZE) ?? 4096;
 }
 
-export async function setGround(year, round, maxPx = 2048) {
+export async function setGround(year, round, maxPx = 2048, dem = true) {
   cancelGround?.();
   const c = circuit, full = Math.min(high ? 8192 : 4096, maxTexture());  // high tier: one zoom level sharper (~0.5 m a pixel)
   if (!c) return;
@@ -775,7 +781,7 @@ export async function setGround(year, round, maxPx = 2048) {
     stage('ground', 'Satellite ground');
     w.postMessage({url: `/api/geo/${year}/${round}`, pts: c.pts, map: {k: map.k, cx: map.cx, cy: map.cy}, L: SIZE / 2,
       box: [Math.min(...xs) - pad, Math.max(...xs) + pad, Math.min(...zs) - pad, Math.max(...zs) + pad],
-      maxPx: Math.min(maxPx, full)});
+      maxPx: Math.min(maxPx, full), dem});
   });
   if (circuit !== c || !g?.image) {  // another circuit since, or no ground to show
     g?.image?.close();
@@ -793,8 +799,17 @@ export async function setGround(year, round, maxPx = 2048) {
     const u = a * X + b * Z + u0, v = d * X + e * Z + v0;
     return u < 0 || u >= 1 || v < 0 || v >= 1 || data[Math.floor(v * h) * w + Math.floor(u * w)] === 1;
   };
+  if (g.dem) {  // the real ground's heights (metres, NaN where no tile): bilinear through their affine, as the image
+    const {m: [p, q, s, t, r, o], w: dw, h: dh, data: hd} = g.dem;
+    c.elevation((X, Z) => {
+      const u = (p * X + q * Z + s) * dw - 0.5, v = (t * X + r * Z + o) * dh - 0.5, i = Math.floor(u), j = Math.floor(v), fu = u - i, fv = v - j;
+      if (i < 0 || j < 0 || i >= dw - 1 || j >= dh - 1) return NaN;
+      const k = j * dw + i;
+      return (hd[k] * (1 - fu) + hd[k + 1] * fu) * (1 - fv) + (hd[k + dw] * (1 - fu) + hd[k + dw + 1] * fu) * fv;
+    });
+  }
   c.satellite(texture, new THREE.Matrix3().set(...g.m, 0, 0, 1), green, new THREE.Color().setRGB(...g.mean, THREE.SRGBColorSpace), g.mask);
-  if (maxPx < full) setGround(year, round, full);
+  if (maxPx < full) setGround(year, round, full, false);  // the heights are in already
 }
 
 // Pit lane (map points of its centre line): the simulation's, entry road to exit road, or a replay's real one from GPS.

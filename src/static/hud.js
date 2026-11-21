@@ -194,8 +194,8 @@ export function renderFocus(f) {
   if (f.lap) {
     const lapT = s => `${Math.floor(s / 60)}:${(s % 60).toFixed(3).padStart(6, '0')}`, dt = f.lap.delta;
     setText(h.lapT, f.lap.time === null ? '–:––.–––' : lapT(f.lap.time));
-    setText(h.lapD, dt === null ? '' : `${dt < 0 ? '−' : '+'}${Math.abs(dt).toFixed(3)}`);
-    setAttr(h.lapD, 'data-s', dt < 0 ? '-' : '+');
+    setText(h.lapD, f.lap.deleted ? 'DELETED' : dt === null ? '' : `${dt < 0 ? '−' : '+'}${Math.abs(dt).toFixed(3)}`);
+    setAttr(h.lapD, 'data-s', dt < 0 && !f.lap.deleted ? '-' : '+');
     setText(h.lapB, f.lap.best ? `BEST ${lapT(f.lap.best)}` : '');
   }
   h.thr.style.height = `${f.throttle ?? 0}%`;

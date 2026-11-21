@@ -1085,9 +1085,19 @@ _saved_mv, _saved_geo = tracks.mv_track, tracks._geo_track
 def _mv_down(*a, **k): raise tracks.requests.RequestException("down")
 tracks.mv_track = _mv_down
 assert tracks.track("spa", 2026, 50.44, 5.97, lambda: lap)["source"] == "openf1"
-tracks._geo_track = lambda lat, lng: {"source": "geojson", "x": [], "y": []}
+tracks._geo_track = lambda lat, lng, year: {"source": "geojson", "x": [], "y": []}
 assert tracks.track("spa", 2026, 50.44, 5.97)["source"] == "geojson"
 tracks.mv_track, tracks._geo_track = _saved_mv, _saved_geo
+# /api/geo (the satellite ground's fit) passes the race's year on: without it every circuit's ground stayed procedural
+_saved_sg, server._geo_track = server._geo_track, lambda lat, lng, year: {"year": year}
+assert server._geo(1.5, 2.5, 1999) == {"year": 1999}
+server._geo_track = _saved_sg
+# a circuit opened after the race is no stand-in: Zeltweg 1964 sits 2.4 km from the Red Bull Ring (opened 1969)
+_saved_gj = tracks._geojson
+_ring = {"properties": {"opened": 1969}, "geometry": {"coordinates": [[14.765, 47.22], [14.77, 47.22], [14.765, 47.225]]}}
+tracks._geojson = lambda: [_ring]
+assert tracks._geo_track(47.2039, 14.7478, 1964) is None and tracks._geo_track(47.2197, 14.7647, 2020)["source"] == "geojson"
+tracks._geojson = _saved_gj
 print("track fallbacks ok")
 
 # a three.js download is kept only when it hashes to its recorded sha256; a mismatch leaves nothing behind

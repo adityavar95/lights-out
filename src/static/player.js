@@ -75,12 +75,15 @@ export function playerControls(R, car, h, X, env) {
 }
 
 // What a gamepad should feel, 0..1 each: the strong (low-frequency) motor for kerbs, the grass and contact; the weak one for
-// the tyres, a front lock-up or ABS, wheelspin and the stability control stepping in. off: the player's `dirt` (sim.js) is 1
+// the tyres, a front lock-up or ABS, wheelspin and the stability control stepping in; on impulse triggers a lock-up or ABS
+// also buzzes the brake trigger (left) and wheelspin the throttle trigger (right). off: the player's `dirt` (sim.js) is 1
 // only while the car is off the track.
 export function rumbleFor(car) {
   const kerb = car.kerb > 0 ? (car.sausage ? 0.9 : 0.5) : 0, off = car.dirt === 1 ? 0.7 * Math.min(1, car.v / 60) : 0;
   return {
     strong: Math.max(kerb, off, car.contact > 0 ? 1 : 0),
     weak: Math.max(car.absOn || car.locked ? 0.6 : 0, Math.min(1, car.spin ?? 0), car.escOn ? 0.3 : 0),
+    left: car.locked ? 0.9 : car.absOn ? 0.5 : 0,
+    right: Math.min(1, 0.8 * (car.spin ?? 0)),
   };
 }

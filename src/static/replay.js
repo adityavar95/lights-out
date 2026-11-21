@@ -13,6 +13,7 @@ import {liveInfo, liveStatus, liveClock} from './live.js';
 import {setupLive} from './replaylive.js';
 import {setupDrawer, toggleDrawer, updateDrawer} from './teledrawer.js';
 import {toggleCars} from './carsdeck.js';
+import {loadRB22} from './rb22.js';
 import {setupHud, setRadar, renderRadar, renderFocus, renderFeed, STATUS} from './hud.js';
 import {SIM, simSession, simState, realPitLane, entries} from './simmode.js';
 import {setupCard, resultsCard, pauseCard, saveBest, ghostAt, PACE} from './playsetup.js';
@@ -206,6 +207,8 @@ export async function showRace(year, round, sessions, sim = false) {
   ui.session.value = sim ? SIM : sessions.includes('Race') ? 'Race' : sessions.at(-1) ?? '';
   const token = S.token;
   setOverlay('Loading track…');
+  // the 2026 team cars (~25 MB each at full size), fetched and baked while the reader looks at the circuit, not after ▶ or Start
+  if (ui.has3d && year >= 2026) entries(year, round).then(l => token === S.token && loadRB22(l.map(e => e.team))).catch(() => {});
   try {
     S.track = await fetchCircuit(year, round);  // with heights
   } catch (e) {
@@ -222,7 +225,17 @@ export async function showRace(year, round, sessions, sim = false) {
   daylight();
   if (sim) return showSetup();  // Play: the setup card, then the race
   idleHint();
+  // ▶ and H's replay, fetched ahead (get() keeps the promise, loadData picks it up). An unbuilt GPS replay is ~30 OpenF1
+  // requests, so only for a race the reader stays on, not each one clicked past
+  setTimeout(() => {
+    if (token !== S.token || S.loading || S.data || ahead()) return;
+    const url = replayUrl(ui.session.value);
+    if (ui.session.value === 'Race' && S.year >= 2023) get(`${url}&laps=1`).catch(() => {});
+    get(url).catch(() => {});
+  }, 1500);
 }
+
+const replayUrl = session => `/api/replay/${S.year}/${S.round}?session=${encodeURIComponent(session)}`;
 
 // the sky's sun: a GPS replay's clock start, else Jolpica's session time (the Simulation's: the race's; before 2005 Jolpica
 // has no times, and sessionStart's midnight stand-in would make night of every old race), else midday
@@ -240,6 +253,7 @@ async function showSetup() {
   halt();
   ui.session.value = SIM;
   ui.play.disabled = true;  // ▶ would start a race nobody set up
+  if (S.proj) realPitLane(S.year, S.round, S.proj).catch(() => {});  // Start's other wait, fetched while the card shows (get() caches it)
   const list = await entries(S.year, S.round).catch(() => []);
   if (token !== S.token) return;
   setOverlay(setupCard({year: S.year, race: S.race, list, onStart: startPlay}));
@@ -410,7 +424,7 @@ async function loadData(autoplay) {
   setOverlay(`Loading ${session} replay…${standIn || session === SIM ? '' : " The first load of a session fetches every car's GPS trace and can take up to a minute."}`, true);
   try {
     const sim = session === SIM && await simSession(S.year, S.round, S.proj, S.track, {laps: S.setup?.laps, solo: S.setup?.mode === 'trial' && S.setup.driver});
-    const url = `/api/replay/${S.year}/${S.round}?session=${encodeURIComponent(session)}`, gps = !sim && get(url);
+    const url = replayUrl(session), gps = !sim && get(url);
     // A GPS replay the server hasn't built yet takes ~40 s. A race's lap-timing replay (Jolpica: ~10 s uncached, then on disk) plays
     // meanwhile and the GPS one takes over when it lands (swapToGps); without Jolpica laps yet, it just waits for GPS.
     // (a GPS request that fails fast, OpenF1 unreachable, is no answer either: the lap replay still plays)

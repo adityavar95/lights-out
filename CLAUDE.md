@@ -8,12 +8,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 uv sync                                    # install deps (fastapi, uvicorn, basef1, onnx-asr, av, pywebview; dev: pyinstaller)
 .venv/Scripts/python src/server.py         # run app at http://127.0.0.1:8086 (LIGHTSOUT_LAN=1 opens http://<computer-ip>:8086 to the network)
 .venv/Scripts/python src/desktop.py        # desktop launcher (pywebview/WebView2); reuses a running server.py; LIGHTSOUT_PORT overrides 8086
-.venv/Scripts/python scripts/build_exe.py  # PyInstaller: dist/LightsOut/LightsOut.exe (folder build, ~290 MB: core assets + skies; writes to %LOCALAPPDATA%\LightsOut, src/paths.py)
+.venv/Scripts/python scripts/build_exe.py  # PyInstaller: dist/LightsOut/LightsOut.exe (folder build, ~520 MB: core assets, skies, full-size team cars; writes to %LOCALAPPDATA%\LightsOut, src/paths.py)
 .venv/Scripts/python tests/test_server.py  # plain asserts, no pytest
 .venv/Scripts/python scripts/test_all.py        # every suite (JS and tests/test_server.py), first failure stops; CI runs it on Windows
 for f in tests/test_*.mjs; do node "$f"; done   # JS tests, one file per module (what each covers: docs/architecture/testing.md)
 npx -y -p typescript@7.0.2 tsc -p jsconfig.json  # type check the // @ts-check modules listed in jsconfig.json (test_all runs it)
-.venv/Scripts/python scripts/fetch_assets.py    # all assets into src/static/assets (gitignored, 610 MB, ~45 min, resumes); build_exe.py fetches only core + skies
+.venv/Scripts/python scripts/fetch_assets.py    # all assets into src/static/assets (gitignored, 610 MB, ~45 min, resumes); build_exe.py fetches only core, skies and the team cars
 .venv/Scripts/python scripts/tile_list.py       # regenerate static/tile_list.json when a circuit joins the calendar (needs node); build_exe.py runs it first
 ```
 

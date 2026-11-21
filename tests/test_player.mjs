@@ -137,11 +137,23 @@ assert.ok(rear.damage > 0.3 && front.damage === 0, `damage ${rear.damage} / ${fr
 }
 
 // gamepad rumble: nothing on a clean straight; kerbs and the grass shake the strong motor, slides and lock-ups the weak one
-assert.deepEqual(rumbleFor({v: 80, kerb: 0, d: 0, contact: 0, spin: 0}), {strong: 0, weak: 0});
+assert.deepEqual(rumbleFor({v: 80, kerb: 0, d: 0, contact: 0, spin: 0}), {strong: 0, weak: 0, left: 0, right: 0});
 assert.equal(rumbleFor({v: 80, kerb: 0.012, contact: 0}).strong, 0.5);
 assert.equal(rumbleFor({v: 80, kerb: 0.05, sausage: true, contact: 0}).strong, 0.9);
 assert.ok(rumbleFor({v: 60, dirt: 1, contact: 0}).strong > 0.6 && rumbleFor({v: 0, dirt: 1, contact: 0}).strong === 0, 'grass: only while moving');
 assert.equal(rumbleFor({v: 50, contact: 0.2}).strong, 1);
 assert.ok(rumbleFor({v: 50, absOn: true}).weak > 0.5 && rumbleFor({v: 50, spin: 0.4}).weak === 0.4 && rumbleFor({v: 50, escOn: true}).weak > 0);
 
+assert.ok(rumbleFor({v: 50, locked: true}).left > 0.8 && rumbleFor({v: 50, spin: 0.5}).right === 0.4, 'impulse triggers: lock-up left, wheelspin right');
+
+// track limits: a lap with all four wheels past the white line counts but never becomes the best lap
+{
+  const R = race(['A']), car = R.cars[0];
+  until(R, () => car.lapsDone >= 1, 300);
+  const best = car.best, lap = car.lapsDone;
+  car.cut = true;
+  until(R, () => car.lapsDone > lap, 300);
+  assert.ok(car.lapsDone > lap && car.best === best, `a cut lap is never the best: ${best} -> ${car.best}`);
+  assert.equal(car.cut, false, 'the next lap starts clean');
+}
 console.log('ok');

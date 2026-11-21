@@ -34,6 +34,29 @@ function colored(g, color) {
 // scene units per metre's inverse, from the circuit's m()
 const METRES = m => 1 / m(1);
 
+// a trackside video screen's picture: the broadcast's running order over a dark ground, team-colour bars, a brand strip
+function screenTexture() {
+  const c = Object.assign(document.createElement('canvas'), {width: 512, height: 288}), g = c.getContext('2d');
+  const sky = g.createLinearGradient(0, 0, 0, 288);
+  sky.addColorStop(0, '#0d1b33'); sky.addColorStop(1, '#03060c');
+  g.fillStyle = sky; g.fillRect(0, 0, 512, 288);
+  const teams = ['#3671c6', '#ff8000', '#e8002d', '#27f4d2', '#229971', '#00a1e8', '#6692ff', '#b6babd', '#52e252', '#64c4ff'];
+  g.font = '700 19px system-ui, sans-serif'; g.textBaseline = 'middle';
+  teams.forEach((t, i) => {
+    const y = 22 + i * 24;
+    g.fillStyle = 'rgba(255,255,255,.08)'; g.fillRect(16, y - 10, 230, 21);
+    g.fillStyle = t; g.fillRect(16, y - 10, 6, 21);
+    g.fillStyle = '#f2f2f2'; g.fillText(String(i + 1), 30, y + 1); g.fillText(['VER', 'NOR', 'LEC', 'RUS', 'ALO', 'GAS', 'TSU', 'HAM', 'HUL', 'ALB'][i], 62, y + 1);
+  });
+  const glow = g.createRadialGradient(390, 130, 10, 390, 130, 150);
+  glow.addColorStop(0, '#2b5fb8'); glow.addColorStop(1, 'rgba(10,20,40,0)');
+  g.fillStyle = glow; g.fillRect(260, 0, 252, 260);
+  g.fillStyle = '#e10600'; g.fillRect(0, 258, 512, 30);
+  g.fillStyle = '#fff'; g.font = '800 22px system-ui, sans-serif'; g.textAlign = 'center';
+  g.fillText('LIGHTS OUT  ·  LIVE', 256, 274); g.font = '800 54px system-ui, sans-serif'; g.fillText('LAP', 390, 105); g.fillText('LIVE', 390, 165);
+  return Object.assign(new THREE.CanvasTexture(c), {colorSpace: THREE.SRGBColorSpace, anisotropy: 16});
+}
+
 function boardTexture(text) {
   const c = Object.assign(document.createElement('canvas'), {width: 256, height: 256}), g = c.getContext('2d');
   g.scale(2, 2);
@@ -231,8 +254,43 @@ export function buildTrackside({F, runs, half, wall, m, armco}) {
     addStand(F[i], -1);
   }
   runs.forEach((run, r) => { if (r % 2 === 0 && run.length > 3) { const f = run[run.length >> 1]; addStand(f, -Math.sign(f.P.clone().sub(run[0].P).dot(run[0].N)) || 1); } });
+  // a video screen beside every other stand: a 12 x 6.75 m panel 9 m up on two legs, facing the track from its end
+  const shown = stands.filter((_, k) => k % 2 === 0).map(({p, f}) => ({p: p.clone().addScaledVector(f.N, m(WIDE / 2 + 5)), f})).filter(s => clear(s.p, wall + m(3)));
+  const screenFrame = mergeGeometries([new THREE.BoxGeometry(12.6, 7.3, 0.6).translate(0, 12.4, -0.35),
+    ...[-4, 4].map(x => new THREE.BoxGeometry(0.5, 9, 0.5).translate(x, 4.5, -0.6))]).scale(1 / METRES(m), 1 / METRES(m), 1 / METRES(m));
+  const screenFace = new THREE.PlaneGeometry(12, 6.75).translate(0, 12.4, 0.02).scale(1 / METRES(m), 1 / METRES(m), 1 / METRES(m));
+  const screenMat = new THREE.MeshStandardNodeMaterial({color: 0x000000, roughness: 0.35, emissiveMap: screenTexture(), emissive: 0xffffff, emissiveIntensity: 1.4});
+  const screenMeshes = shown.length ? [instanced(screenFrame, steel, shown), instanced(screenFace, screenMat, shown, {shadow: false})] : [];
+  // an advertising bridge over the middle of the longest straight that isn't the start's (the gantry stands there):
+  // legs behind each barrier, a box girder across, a board on each face
+  const bridges = [];
+  {
+    let best = null;
+    for (let r = 0; r < runs.length; r++) {
+      const a = F.indexOf(runs[(r - 1 + runs.length) % runs.length].at(-1)), b = F.indexOf(runs[r][0]);
+      const len = (dist[b] - dist[a] + dist[n - 1]) % dist[n - 1], mid = (dist[a] + len / 2) % dist[n - 1];
+      if (b < a || a === -1 || b === -1) continue;  // the straight over the line: the gantry's
+      if (len > m(350) && (!best || len > best.len)) best = {len, mid};
+    }
+    if (best) { let i = 0; while (i < n - 1 && dist[i] < best.mid) i++; bridges.push({p: F[i].P.clone(), f: F[i]}); }
+  }
+  const span = 2 * (half + wall) + m(3), M1 = m(1);
+  const bridgeGeo = bridges.length ? mergeGeometries([new THREE.BoxGeometry(span + M1, m(2.2), m(1.6)).translate(0, m(7.6), 0),
+    ...[-1, 1].map(s => new THREE.BoxGeometry(m(1), m(8.7), m(1.4)).translate(s * span / 2, m(4.35), 0))]) : null;
+  const bridgeBoard = new THREE.PlaneGeometry(span - m(2), m(1.9));
+  const boards = bridges.length ? mergeGeometries([-1, 1].map(s => bridgeBoard.clone().rotateY(s < 0 ? Math.PI : 0).translate(0, m(7.6), s * m(0.82)))) : null;
+  bridgeBoard.dispose();
+  const brandMat = new THREE.MeshStandardNodeMaterial({map: (() => {
+    const c = Object.assign(document.createElement('canvas'), {width: 1024, height: 64}), g = c.getContext('2d');
+    g.fillStyle = '#0c0d10'; g.fillRect(0, 0, 1024, 64);
+    g.fillStyle = '#e10600'; g.fillRect(0, 0, 1024, 6); g.fillRect(0, 58, 1024, 6);
+    g.fillStyle = '#fff'; g.font = 'italic 900 40px system-ui, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    for (let k = 0; k < 4; k++) g.fillText('LIGHTS OUT', 128 + k * 256, 33);
+    return Object.assign(new THREE.CanvasTexture(c), {colorSpace: THREE.SRGBColorSpace, anisotropy: 16});
+  })(), roughness: 0.55});
+  const bridgeMeshes = bridges.length ? [instanced(bridgeGeo, steel, bridges), instanced(boards, brandMat, bridges, {shadow: false})] : [];
   const standMeshes = stands.length ? [instanced(standGeo, crowd, stands), instanced(roofGeo, roofMat, stands), instanced(peopleGeo, peopleMat, stands, {shadow: false})] : [];
-  made.push(...standMeshes);
+  made.push(...standMeshes, ...screenMeshes, ...bridgeMeshes);
 
   const stanchionGeo = new THREE.CylinderGeometry(m(0.05), m(0.05), m(4.1), 6).translate(0, m(2.05), 0);
   let posts = null;
@@ -261,6 +319,9 @@ export function buildTrackside({F, runs, half, wall, m, armco}) {
       stands.forEach(({p}, i) => {
         if (points.some(q => (q.x - p.x) ** 2 + (q.z - p.z) ** 2 < reach)) for (const o of standMeshes) { o.setMatrixAt(i, none); o.instanceMatrix.needsUpdate = true; }
       });
+      for (const [list, meshes] of [[shown, screenMeshes], [bridges, bridgeMeshes]]) list.forEach(({p}, i) => {
+        if (points.some(q => (q.x - p.x) ** 2 + (q.z - p.z) ** 2 < reach)) for (const o of meshes) { o.setMatrixAt(i, none); o.instanceMatrix.needsUpdate = true; }
+      });
     },
     night: v => { lamp.emissiveIntensity = v; if (lampBeam) lampBeam.opacity = Math.min(0.12, v * 0.015); for (const s of spots) { s.visible = v > 0; s.intensity = v * 1.4; } },
     dispose(world) {
@@ -272,6 +333,7 @@ export function buildTrackside({F, runs, half, wall, m, armco}) {
       roofMat.dispose();
       for (const o of made) { world.remove(o); o.geometry.dispose(); o.dispose(); }
       for (const mat of boardMats) { mat.map.dispose(); mat.dispose(); }
+      screenMat.emissiveMap.dispose(); screenMat.dispose(); brandMat.map.dispose(); brandMat.dispose();
       steel.dispose(); lamp.dispose(); crowd.dispose(); peopleMat.dispose(); postMat.dispose();
     },
   };

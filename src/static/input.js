@@ -14,6 +14,7 @@ const held = new Set(), fired = new Set(), padWas = {};
 let activePad = null, rumbledAt = 0;
 export const input = {throttle: 0, brake: 0, steer: 0, clutch: 0, pad: null, deadzone: 0.08};
 let enabled = false;
+const key = {throttle: 0, brake: 0, steer: 0};  // the keyboard's own ramps, kept apart so a pad never resets them
 
 const owns = code => Object.values(KEYS).some(list => list.includes(code));
 const typing = e => ['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName);
@@ -48,22 +49,24 @@ const dead = (x, dz) => (Math.abs(x) < dz ? 0 : Math.sign(x) * (Math.abs(x) - dz
 // centre at 8/s when the opposite key is pressed (counter-steer). An active gamepad's analogue values replace them.
 // Returns {throttle, brake, steer, actions: Set of one-shot names}.
 export function pollInput(dt) {
-  input.throttle = toward(input.throttle, down('throttle') ? 1 : 0, down('throttle') ? 6 : 8, dt);
-  input.brake = toward(input.brake, down('brake') ? 1 : 0, down('brake') ? 10 : 8, dt);
+  key.throttle = toward(key.throttle, down('throttle') ? 1 : 0, down('throttle') ? 6 : 8, dt);
+  key.brake = toward(key.brake, down('brake') ? 1 : 0, down('brake') ? 10 : 8, dt);
   input.clutch = toward(input.clutch, down('clutch') ? 1 : 0, 10, dt);
   const want = (down('right') ? 1 : 0) - (down('left') ? 1 : 0);
-  const rate = want === 0 ? 6 : Math.sign(want) !== Math.sign(input.steer) && input.steer !== 0 ? 8 : 5;
-  input.steer = toward(input.steer, want, rate, dt);
-  const pad = [...(navigator.getGamepads?.() ?? [])].find(p => p?.connected);
+  const rate = want === 0 ? 6 : Math.sign(want) !== Math.sign(key.steer) && key.steer !== 0 ? 8 : 5;
+  key.steer = toward(key.steer, want, rate, dt);
+  Object.assign(input, key);
+  // only the W3C standard layout: a wheel or pad with its own layout would read the wrong axes and buttons
+  const pad = [...(navigator.getGamepads?.() ?? [])].find(p => p?.connected && p.mapping === 'standard');
   input.pad = pad ? pad.id : null;
   activePad = pad ?? null;
   if (pad) {
-    const rt = pad.buttons[7]?.value ?? 0, lt = pad.buttons[6]?.value ?? 0, stick = dead(pad.axes[0] ?? 0, input.deadzone);
-    if (rt > 0.02 || lt > 0.02 || stick !== 0) {  // the pad is being used: analogue values win
-      input.throttle = rt;
-      input.brake = lt;
-      input.steer = stick;
-    }
+    // keyboard and pad together: the larger pedal wins, a held steering key beats the stick. Triggers get the deadzone
+    // too (a worn trigger resting at 3 % used to take over from the keyboard); the stick a 1.5 power curve, finer near centre
+    const stick = dead(pad.axes[0] ?? 0, input.deadzone);
+    input.throttle = Math.max(key.throttle, dead(pad.buttons[7]?.value ?? 0, input.deadzone));
+    input.brake = Math.max(key.brake, dead(pad.buttons[6]?.value ?? 0, input.deadzone));
+    if (key.steer === 0) input.steer = Math.sign(stick) * Math.abs(stick) ** 1.5;
     if (pad.buttons[10]?.pressed) input.clutch = 1;  // L3: the clutch
     for (const [name, b] of Object.entries(PAD)) {
       const now = !!pad.buttons[b]?.pressed;
@@ -77,9 +80,12 @@ export function pollInput(dt) {
 }
 
 // Force feedback: a 100 ms dual-rumble effect, renewed at most every 80 ms (so a steady kerb or slide is continuous and
-// silence needs nothing sent). {strong, weak} 0..1 from player.js rumbleFor. A keyboard, or a pad with no actuator, does nothing.
-export function rumble({strong, weak}, now = performance.now()) {
-  if (!activePad?.vibrationActuator || now - rumbledAt < 80 || (strong < 0.02 && weak < 0.02)) return;
+// silence needs nothing sent). {strong, weak, left, right} 0..1 from player.js rumbleFor; left/right are the impulse triggers. A keyboard, or a pad with no actuator, does nothing.
+export function rumble({strong, weak, left = 0, right = 0}, now = performance.now()) {
+  const a = activePad?.vibrationActuator;
+  if (!a || now - rumbledAt < 80 || Math.max(strong, weak, left, right) < 0.02) return;
   rumbledAt = now;
-  activePad.vibrationActuator.playEffect('dual-rumble', {startDelay: 0, duration: 100, strongMagnitude: strong, weakMagnitude: weak}).catch(() => {});
+  const fx = {startDelay: 0, duration: 100, strongMagnitude: strong, weakMagnitude: weak};
+  if (a.effects?.includes('trigger-rumble')) a.playEffect('trigger-rumble', {...fx, leftTrigger: left, rightTrigger: right}).catch(() => {});
+  else a.playEffect('dual-rumble', fx).catch(() => {});
 }

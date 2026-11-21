@@ -124,19 +124,22 @@ def _geojson() -> list:
     return _kept("geojson", GEOJSON_URL)["features"]
 
 
-def _geo_track(lat: float, lng: float) -> dict | None:
-    """Nearest GeoJSON circuit within 5 km, projected to local metres (x east, y north)."""
+def _geo_track(lat: float, lng: float, year: int) -> dict | None:
+    """Nearest GeoJSON circuit within 5 km that had opened by the race's year, projected to local metres (x east, y north).
+    The year keeps a newer circuit beside an old one off it: Zeltweg's airfield (1964) by the Red Bull Ring (1969), Caesars
+    Palace (1981) by the Strip circuit (2023)."""
     def dist_km(f):
         pts = f["geometry"]["coordinates"]
         clng, clat = sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts)
         return math.hypot((clng - lng) * 111.32 * math.cos(math.radians(lat)), (clat - lat) * 110.57)
 
-    best = min(_geojson(), key=dist_km, default=None)
+    best = min((f for f in _geojson() if f["properties"].get("opened", 0) <= year), key=dist_km, default=None)
     if best is None or dist_km(best) > 5:
         return None
     pts = best["geometry"]["coordinates"]
     kx = 111320 * math.cos(math.radians(lat))
-    # shortcut: GeoJSON gives no start line or driving direction, so lap-based replays may run the wrong way round
+    # shortcut: no start line (the outlines begin 0-2.8 km from it); drawn the driving way round (all but Marina Bay's of the
+    # 27 checked against MultiViewer in Nov 2026), but a reversed one would make lap-based replays run backwards
     return {"source": "geojson", "x": [(p[0] - lng) * kx for p in pts], "y": [(p[1] - lat) * 110570 for p in pts],
             "rotation": 0, "corners": []}
 
@@ -166,5 +169,5 @@ def track(circuit_id: str, year: int, lat: float, lng: float, lap=lambda: None) 
         t = None
     if t is None and (positions := lap()):
         t = lap_track(positions["x"], positions["y"])
-    t = t or _geo_track(lat, lng)
+    t = t or _geo_track(lat, lng, year)
     return t and {**t, "width": WIDTHS.get(circuit_id, DEFAULT_WIDTH), "circuitId": circuit_id}
