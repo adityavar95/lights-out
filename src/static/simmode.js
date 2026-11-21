@@ -91,7 +91,7 @@ export function simFocus(race, id) {
           ers: {soc: e.soc, mode: state, user: e.user, plan: e.mode, harvested: e.harvested / 1e6, deployed: e.deployed / 1e6, kw: c.spec.pK / 1000}, g: {gLat: c.gLat, gLong: c.gLong},
           tyres: {temps: c.tyre.ts, core: c.tyre.tc, wear: c.tyre.health.map(h => 100 - h), compound: c.tyre.compound}, sim: true,
           damage: c.damage, radar: proximity(race, c),
-          lap: {time: c.s < 0 ? null : race.t - c.lapStart, delta: c.lapDelta, best: c.best < Infinity ? c.best : null},
+          lap: {time: c.s < 0 ? null : race.t - c.lapStart, delta: c.lapDelta, best: c.best < Infinity ? c.best : null, deleted: !!c.cut},
           // 2026 active aero: the flaps' mode in the DRS slot (the override still shows as open / detected)
           ...(c.spec.overtake ? {drsName: c.aeroX > 0.5 ? 'X-MODE' : 'Z-MODE'} : {})};
 }

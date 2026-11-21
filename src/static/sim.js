@@ -9,7 +9,7 @@ import {COMPOUNDS, thermalGrip, wearGrip, surfaceGrip, aquaplaneSpeed} from './t
 import {createWeather, weatherStep, setWetness, wetAt, trackWetness} from './weather.js';
 import {createControl, controlStep, deploy, neutralised, vscDelta, safetyCar} from './racecontrol.js';
 import {createPit, pitControl, inPitLane, aiStrategy, aiPace, predictRejoin, PACE, pitLayout, lanePath, lanePos, pitPath, laneFor, ease, PIT_LIMIT} from './strategy.js';
-import {racecraft, resolveContacts, blocker} from './racecraft.js';
+import {racecraft, resolveContacts, blocker, CAR_W} from './racecraft.js';
 import {playerControls, ASSISTS} from './player.js';
 import {carSpec, gearUp, aero as aeroStep, vehicleStep, lateralLimit, autoShift, control} from './vehicle.js';
 
@@ -233,6 +233,7 @@ export function createRace({year, mapPts, mpu, width, drivers, laps, compounds, 
     const trap = car.player && off && R.gravel && Math.abs(ks) > 1 / 150 && car.d * ks < 0;
     if (car.player) {
       car.dirt = off ? 1 : Math.max(0, (car.dirt ?? 0) - v * h / 1500);
+      if (!pit && Math.abs(car.d) > T.half + CAR_W / 2) car.cut = true;  // track limits: all four wheels past the white line deletes the lap
       if (off) offMu = trap ? 0.5 : 0.45 * (1 - 0.3 * trackWetness(R.W));
       if (kerb && !sausage) ripple = 1 + 0.08 * Math.sin(car.s * 6.9) * Math.sin(car.s * 2.3 + 1);
       if (sausage && !(car.slide > 0)) car.slide = 0.15;
@@ -386,7 +387,7 @@ export function createRace({year, mapPts, mpu, width, drivers, laps, compounds, 
       if (car.lapsDone >= 0 && car.secs.length >= 2) {
         car.secs.push(R.t - car.secStart);
         R.laps[car.id].push([car.lapStart, car.lapsDone + 1, R.t - car.lapStart, ...car.secs.slice(0, 3)]);
-        if (R.t - car.lapStart < car.best) {
+        if (R.t - car.lapStart < car.best && !car.cut) {
           car.best = R.t - car.lapStart;
           [car.bestTrace, car.lapTrace] = [car.lapTrace, car.bestTrace ?? new Float32Array(T.n)];
         }
@@ -395,6 +396,7 @@ export function createRace({year, mapPts, mpu, width, drivers, laps, compounds, 
       car.attackLaps = car.gapSec < 1.2 ? car.attackLaps + 1 : 0;  // laps spent stuck behind a car (undercut trigger)
       car.lapStart = car.secStart = R.t;
       car.secs = [];
+      car.cut = false;
       // the chequered flag: the winner after `total` laps, then every car the next time it crosses the line, lapped or not
       if ((lapsDone >= total || R.winner) && !car.finished) {
         car.finished = true;

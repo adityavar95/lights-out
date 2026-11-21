@@ -9,6 +9,7 @@ import {asphalt, noise} from './track3d.js';
 import {racingLine} from './sim.js';
 import {garages} from './pit3d.js';
 import {buildTrackside} from './trackside.js';
+import {buildCity} from './city.js';
 import {GRID} from './lanes.js';
 
 const UP = new THREE.Vector3(0, 1, 0);
@@ -169,12 +170,14 @@ export function buildCircuit(world, {pts, map, tex, width, startKnown, ann, corn
   // --- terrain: a grid whose height is the inverse-distance-weighted (w = 1 / d^2) height of the track, so the land
   // rises and falls with the circuit; taken from under the lowest edge of the banked cross-section (h - reach |sin
   // phi|) and 0.4 m lower again, so grass never pokes through a cambered road. Away from the track (150-600 m) it
-  // turns into rolling countryside, up to ~25 m of low-frequency hills. ---
+  // turns into the land far(): rolling countryside, up to ~25 m of low-frequency hills, until elevation() brings the
+  // real ground. ---
   const reach = half + wall + m(3), floor = F.map(f => [f.P.x, f.P.z, f.P.y - reach * Math.abs(f.N.y) - m(0.4)]);
   // x, z, h of every 4th point, flat: ~58,000 grid vertices x ~1,000 points, ~20x faster than destructuring [x, z, h]s
   const ref = Float64Array.from(floor.filter((_, i) => i % (4 * every) === 0).flat());
   const hills = (x, z) => m(25) * (0.5 * Math.sin(x / m(310) + 1.3) * Math.cos(z / m(270)) + 0.3 * Math.sin((x + z) / m(170))
                                    + 0.2 * Math.cos((x - 2 * z) / m(120)));
+  let far = (x, z, idw) => idw + hills(x, z);
   const terrainH = (x, z) => {
     let sw = 0, sh = 0, near = Infinity;
     for (let k = 0; k < ref.length; k += 3) {
@@ -182,7 +185,8 @@ export function buildCircuit(world, {pts, map, tex, width, startKnown, ann, corn
       sw += q; sh += q * ref[k + 2];
       if (d2 < near) near = d2;
     }
-    return sh / sw + THREE.MathUtils.smoothstep(Math.sqrt(near), m(150), m(600)) * hills(x, z);
+    const idw = sh / sw;
+    return idw + THREE.MathUtils.smoothstep(Math.sqrt(near), m(150), m(600)) * (far(x, z, idw) - idw);
   };
   // S x S cells over +-3 SIZE: a uniform core of ~8-unit cells over the circuit (|x| < 0.7 SIZE), growing quadratically
   // out to the horizon. warp maps grid coordinate u in [-1, 1] to scene units, unwarp is its inverse.
@@ -213,11 +217,16 @@ export function buildCircuit(world, {pts, map, tex, width, startKnown, ann, corn
   const H = new Float32Array(gp.count);
   for (let i = 0; i < gp.count; i++) {
     const x = warp(gp.getX(i)), z = warp(gp.getZ(i));
-    gp.setXYZ(i, x, H[i] = clampH(x, z, terrainH(x, z)), z);
+    gp.setXYZ(i, x, 0, z);
     guv.setXY(i, x / (2 * EDGE) + 0.5, 0.5 - z / (2 * EDGE));
   }
-  ground.computeVertexNormals();
-  ground.computeBoundingSphere();
+  const shape = () => {  // the grid's heights, again when elevation() changes far()
+    for (let i = 0; i < gp.count; i++) gp.setY(i, H[i] = clampH(gp.getX(i), gp.getZ(i), terrainH(gp.getX(i), gp.getZ(i))));
+    gp.needsUpdate = true;
+    ground.computeVertexNormals();
+    ground.computeBoundingSphere();
+  };
+  shape();
   tex.grass.repeat.set(EDGE * 2 * map.mps / 50, EDGE * 2 * map.mps / 50);  // one 50 m tile
   for (const k of ['normalMap', 'roughnessMap']) tex.ground[k].repeat.setScalar(EDGE * 2 * map.mps / 3);  // the photo is 3 m across
   // the 50 m tile alone is one flat green from any height: world-space noise at ~160 m and ~40 m adds lush and dry
@@ -251,7 +260,9 @@ export function buildCircuit(world, {pts, map, tex, width, startKnown, ann, corn
     // little greyed, so the land past the square reads as more of the same at a distance instead of a new landscape
     const out = max(max(suv.x.negate(), suv.x.sub(1)), max(suv.y.negate(), suv.y.sub(1))).max(0);
     const far = mix(satBlur.rgb, satMean, smoothstep(0, 0.15, out)), muted = mix(far, vec3(dot(far, vec3(0.2126, 0.7152, 0.0722))), 0.2);
-    const around = mix(tile.rgb, muted.mul(grain), satOn).mul(patchTint);
+    // a street circuit's city stands on paving, not lawn (the satellite image, once it lands, shows the real ground)
+    const lawn = mix(tile.rgb, muted.mul(grain), satOn).mul(patchTint);
+    const around = ann.urban ? mix(lawn, vec3(0.27, 0.27, 0.26).mul(noise(gm.div(30)).mul(0.3).add(0.8)).mul(grain), satOn.oneMinus()) : lawn;
     // the imagery is ~1 m a pixel: from close by, ground grain at 1.5 and 6 m, and a photo's own grain at its 3 m scale:
     // the grass tile's speckle on vegetation, the gravel photo's stones elsewhere, each over its own mean (a top mip level)
     const near = noise(gm.div(1.5).add(3)).mul(0.14).add(noise(gm.div(6)).mul(0.14)).add(0.86);
@@ -264,13 +275,14 @@ export function buildCircuit(world, {pts, map, tex, width, startKnown, ann, corn
     return mix(around, satNode.rgb.mul(detail).mul(near), cover).mul(shade).mul(wetDark);
   })();
   add(new THREE.Mesh(ground, grass)).receiveShadow = true;
-  // height of the terrain mesh under scene (x, z): bilinear between the grid vertices (row j = z, column i = x)
-  const groundAt = (x, z) => {
+  // height of the terrain mesh A (heights) under scene (x, z): bilinear between the grid vertices (row j = z, column i = x)
+  const heightIn = (A, x, z) => {
     const fx = (unwarp(x) + 1) / 2 * S, fz = (unwarp(z) + 1) / 2 * S;
     const i = Math.min(S - 1, Math.max(0, Math.floor(fx))), j = Math.min(S - 1, Math.max(0, Math.floor(fz))), u = fx - i, v = fz - j;
-    const at = (a, b) => H[(j + b) * (S + 1) + i + a];
+    const at = (a, b) => A[(j + b) * (S + 1) + i + a];
     return (at(0, 0) * (1 - u) + at(1, 0) * u) * (1 - v) + (at(0, 1) * (1 - u) + at(1, 1) * u) * v;
   };
+  const groundAt = (x, z) => heightIn(H, x, z);
 
   // --- asphalt, run-off, lines, kerbs, gravel, barriers ---
   const runoff = Math.min(m(1.6), wall);  // a narrow asphalt apron; the run-off proper is on the corners' outsides, below
@@ -297,7 +309,8 @@ export function buildCircuit(world, {pts, map, tex, width, startKnown, ann, corn
   // photo's tufts as a detail normal, and over its outer half a ragged blend into the satellite image under it, so the
   // verge ends in the land rather than on a line.
   let vergeSat = null;
-  if (wall > runoff + m(1)) {
+  if (ann.urban && wall > runoff + m(1)) for (const s of [-1, 1]) add(strip(F, s * (half + runoff), s * (half + wall), 0.008, paved, true, 4, map.mps));
+  else if (wall > runoff + m(1)) {
     const verge = mat(null), wide = (wall - runoff) * map.mps;  // metres
     const vp = positionGeometry.xz, gm = vp.mul(map.mps);
     vergeSat = texture(BLANK, satM.mul(vec3(vp, 1)).xy);
@@ -369,6 +382,7 @@ export function buildCircuit(world, {pts, map, tex, width, startKnown, ann, corn
   };
   const side = buildTrackside({F, runs: cornerRuns(F, map.mps), half, wall, m, armco: ann.preset?.runoff === 'armco'});
   for (const o of side.meshes) world.add(o);
+  for (const l of side.spots) world.add(l, l.target);
   const barrierOffs = [-1, 1].map(s => F.map(() => s * (half + wall)));
   barriers(barrierOffs);
   side.stanchions(world, barrierOffs);
@@ -415,7 +429,7 @@ export function buildCircuit(world, {pts, map, tex, width, startKnown, ann, corn
                         : new THREE.CylinderGeometry(m(0.22), m(0.42), m(7), 7).translate(0, m(3.5), 0);
   seed = 11;
   const coneGeo = palm ? palmTree(m) : conifer(m), leafGeo = broadleaf(m);
-  const N = arid ? 500 : palm ? 900 : 1500, mtx = new THREE.Matrix4();
+  const N = ann.urban ? 300 : arid ? 500 : palm ? 900 : 1500, mtx = new THREE.Matrix4();
   const trunks = new THREE.InstancedMesh(trunkGeo, new THREE.MeshStandardMaterial({color: 0x4a3a2a, roughness: 1}), N);
   const crownMat = new THREE.MeshStandardNodeMaterial({map: tex.foliageOf(palm ? 'palm' : arid ? 'arid' : 'lush'), alphaTest: 0.5, alphaToCoverage: true, side: THREE.DoubleSide,
                                                    roughness: 0.8, vertexColors: true});
@@ -453,6 +467,10 @@ export function buildCircuit(world, {pts, map, tex, width, startKnown, ann, corn
   }
   trunks.count = k;
   for (const t of [trunks, cones, leaves]) add(t).castShadow = true;
+  seed = 23;
+  const city = ann.urban ? buildCity({p3, m, mps: map.mps, rand, groundAt, tall: ann.urban === 'tall',
+    far: (x, z, r) => !sample.some(q => (q.x - x) ** 2 + (q.z - z) ** 2 < (half + wall + m(8) + r) ** 2)}) : null;
+  if (city) add(city.mesh);
 
   const start = startKnown && F.length > 1 ? add(gantry(F[0], w, m, tex, map.mps)) : null;
   for (const [x, y, num] of corners) {
@@ -505,14 +523,16 @@ export function buildCircuit(world, {pts, map, tex, width, startKnown, ann, corn
       mesh.instanceMatrix.needsUpdate = true;
     }
   };
+  if (city) fell((x, z) => !city.inside(x, z));
   let laneMeshes = [], laneMat, laneLine;
 
   return {
-    trackMat, cloud: cloudAmt, wetDark, wettable, surface, groundAt, pts, half, night: side.night,
+    trackMat, cloud: cloudAmt, wetDark, wettable, surface, groundAt, pts, half, night: v => { side.night(v); city?.night(v); },
     // graphics.js settings; hiding also spares them their draw calls in every shadow cascade
     show({trees, trackside}) {
       for (const o of [trunks, cones, leaves]) o.visible = trees;
       for (const o of side.meshes) o.visible = trackside;
+      if (city) city.mesh.visible = trackside;
     },
     lights: n => start?.userData.lights(n),  // the start gantry's red lamps lit, 0-5
     // Pit lane (map points of its centre line, entry road to exit road): a strip on the ground beside the track,
@@ -571,6 +591,7 @@ export function buildCircuit(world, {pts, map, tex, width, startKnown, ann, corn
       fell((x, z) => !lp.some(q => (q.x - x) ** 2 + (q.z - z) ** 2 < (laneHalf + m(6)) ** 2)
                      && !sheds.some(q => (q.x - x) ** 2 + (q.z - z) ** 2 < m(14) ** 2));
       side.clearOf([...lp, ...sheds]);
+      city?.clearOf((x, z, r) => [...lp, ...sheds].some(q => (q.x - x) ** 2 + (q.z - z) ** 2 < (r + laneHalf + m(8)) ** 2));
     },
     // satellite ground: texture, uv = M (scene x, z, 1) over the terrain, keep(x, z): whether a tree there stands on
     // vegetation in the image (the others go), mean: the image's mean colour, for the land beyond it
@@ -587,6 +608,25 @@ export function buildCircuit(world, {pts, map, tex, width, startKnown, ann, corn
       grass.userData.satM.value.copy(M);
       grass.userData.satOn.value = 1;
       fell(keep);
+    },
+    // Real ground (AWS Terrain Tiles, groundwork.js): demAt(x, z) is metres above sea level, NaN where no tile loaded. The
+    // track's heights are relative, so the two are lined up by their median difference round the lap; the DEM's sea bed
+    // is held flat 2 m under sea level (or under the lap's lowest ground: Baku is below it), as water. The land past ~150 m
+    // and the trees and city on it follow.
+    elevation(demAt) {
+      const d = F.filter((_, i) => i % every === 0).map(f => [demAt(f.P.x, f.P.z), f.P.y * map.mps]).filter(([h]) => !Number.isNaN(h));
+      if (d.length < 10) return;
+      const off = d.map(([h, y]) => h - y).sort((a, b) => a - b)[d.length >> 1], lo = Math.min(0, ...d.map(([h]) => h)) - 2;
+      far = (x, z, idw) => { const h = demAt(x, z); return Number.isNaN(h) ? idw + hills(x, z) : m(Math.max(h, lo) - off); };
+      const before = H.slice();
+      shape();
+      for (const mesh of [trunks, cones, leaves, city?.mesh]) {
+        if (!mesh) continue;
+        const t = mesh.instanceMatrix.array;
+        for (let j = 0, o = 0; j < mesh.count; j++, o += 16) t[o + 13] += groundAt(t[o + 12], t[o + 14]) - heightIn(before, t[o + 12], t[o + 14]);
+        mesh.instanceMatrix.needsUpdate = true;
+        mesh.boundingSphere = null;  // recomputed on the next frustum test
+      }
     },
     // is a scene position inside the tunnel? (for the audio's enclosed reverb)
     inTunnel: v => !!tunnelPts?.some(q => (q.x - v.x) ** 2 + (q.z - v.z) ** 2 < (half + m(2)) ** 2 && v.y < q.y + m(6.5)),
@@ -734,7 +774,8 @@ function gantry(f, w, m, tex, mps) {
   const panelMat = new THREE.MeshStandardMaterial({color: 0x08090a, roughness: 0.6}), lamps = [], lampGeo = new THREE.CircleGeometry(m(0.17), 20).rotateY(-Math.PI / 2);
   for (let i = -2; i <= 2; i++) {
     add(new THREE.BoxGeometry(m(0.16), m(1.75), m(0.56)), panelMat, X - m(0.48), low - m(0.4), i * m(0.95));
-    lamps.push([0.25, -0.25].map(dy => add(lampGeo, off, X - m(0.565), low - m(0.4) + m(dy), i * m(0.95))));
+    // no shadow: flush on the panel, whose own shadow covers theirs (10 draws in each cascade)
+    lamps.push([0.25, -0.25].map(dy => Object.assign(add(lampGeo, off, X - m(0.565), low - m(0.4) + m(dy), i * m(0.95)), {castShadow: false})));
   }
   g.userData.lights = n => lamps.forEach((pair, i) => pair.forEach(l => { l.material = i < n ? on : off; }));
   g.userData.mats = [on, off];  // dispose() frees both: the traversal only sees the ones in use

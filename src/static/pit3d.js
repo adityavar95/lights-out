@@ -30,8 +30,12 @@ export function garages(boxes, mps, laneHalf) {
     put(parts.shell, box(BAY, DOOR, 0.3, 0, DOOR / 2, z0 + DEEP));                    // back wall
     for (const x of [-BAY / 2, BAY / 2]) put(parts.shell, box(0.6, DOOR, DEEP, x, DOOR / 2, z0 + DEEP / 2));  // partitions
     put(parts.upper, box(BAY, 4, DEEP + 1.5, 0, DOOR + 2.6, z0 + DEEP / 2 - 0.75));   // upper floor, overhanging the doors
-    put(parts.upper, box(BAY, 0.35, DEEP + 3, 0, DOOR + 4.8, z0 + DEEP / 2 - 1.5));   // the roof, its edge shading the windows
+    put(parts.upper, box(BAY, 0.35, DEEP + 1.5, 0, DOOR + 4.8, z0 + DEEP / 2 - 0.75)); // slab between the two hospitality floors
+    put(parts.upper, box(BAY, 3.6, DEEP - 1, 0, DOOR + 6.8, z0 + DEEP / 2 + 0.5));     // paddock club, set back over a terrace
+    put(parts.upper, box(BAY, 0.35, DEEP + 2, 0, DOOR + 8.8, z0 + DEEP / 2 - 0.5));     // the roof, its edge shading the windows
+    put(parts.upper, box(BAY, 1.05, 0.12, 0, DOOR + 5.5, z0 - 1.45));                   // the terrace's balustrade
     put(parts.glass, box(BAY - 0.5, 2.4, 0.08, 0, DOOR + 2.7, z0 - 1.54));            // the hospitality floor's window band
+    put(parts.glass, box(BAY - 0.5, 3.0, 0.08, 0, DOOR + 6.9, z0 + 0.96));            // the paddock club's glazing
     put(parts.band, tint(box(BAY - 0.6, 0.6, 0.2, 0, DOOR + 0.3, z0 - 0.75), color));
     put(parts.light, new THREE.PlaneGeometry(BAY - 2, DEEP - 2).rotateX(Math.PI / 2).translate(0, DOOR - 0.02, z0 + DEEP / 2));
     // the box: a team-colour rectangle where the car stops, 6.4 x 2.6 m

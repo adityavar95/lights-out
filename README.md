@@ -646,7 +646,7 @@ Lights Out runs on your computer and keeps what's yours on it.
 
 Lights Out is open source under the [MIT License](LICENSE): free to use, copy, modify and share, for anyone.
 
-The 2026 car model is "2026 Redbull RB22" by Tyler_Dave, licensed [CC BY 4.0](http://creativecommons.org/licenses/by/4.0/) (see [`src/static/models/CREDITS.md`](src/static/models/CREDITS.md)). Data, imagery and video come from the [sources above](#%EF%B8%8F-data-sources) under their own terms. Driver portraits in the screenshots are loaded from Wikipedia and belong to their photographers.
+The 2026 car model is "2026 Redbull RB22" by Tyler_Dave, licensed [CC BY 4.0](http://creativecommons.org/licenses/by/4.0/) (see [`src/static/models/CREDITS.md`](src/static/models/CREDITS.md)). The tyre textures are from "Ferrari F1-75" by Sketcher, licensed [CC BY-NC 4.0](http://creativecommons.org/licenses/by-nc/4.0/): non-commercial use only, so a commercial fork must replace `src/static/models/pirelli_tread*`. Data, imagery and video come from the [sources above](#%EF%B8%8F-data-sources) under their own terms. Driver portraits in the screenshots are loaded from Wikipedia and belong to their photographers.
 
 ## 🏳️ Disclaimer
 

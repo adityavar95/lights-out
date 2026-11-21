@@ -28,7 +28,7 @@ delete DEFAULTS.name;
 // what a fresh device starts on (users can still raise it): Low on a phone
 export const defaultsFor = tier => tier === 'mobile' ? (({name, ...low}) => ({...DEFAULTS, ...low}))(PRESETS.at(-1)) : DEFAULTS;
 
-const CHOICES = {res: ['auto', 0.5, 0.75, 1, 1.5, 2], fps: [0, 120, 60, 30], shadows: [0, 1024, 2048, 4096], shadowRange: [0.5, 1, 1.5], carDetail: [0.5, 1, 2], sky: ['auto', 0, 1, 2, 3]};
+const CHOICES = {res: ['auto', 0.5, 0.75, 1, 1.5, 2], fps: [0, 120, 60, 30], shadows: [0, 1024, 2048, 4096], shadowRange: [0.5, 1, 1.5], carDetail: [0.5, 1, 2], sky: ['auto', 0, 1, 2, 3, 4]};
 export const RANGES = {exposure: [0.5, 2], contrast: [0.8, 2], saturation: [0, 2]};
 
 // a preset's name, or Custom once any quality setting differs from all of them

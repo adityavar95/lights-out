@@ -8,7 +8,7 @@ import {get, rows, el, teamColor, led, skeleton} from './util.js';
 import {panelFocus} from './circuitdeck.js';
 import {engine} from './telemetry.js';
 import {spec} from './cars3d.js';
-import {loadRB22} from './rb22.js';
+import {loadRB22, chassisFor} from './rb22.js';
 import {openShowroom, closeShowroom, showCar} from './showroom.js';
 
 const ERAS = [['V10', 1996, 2005], ['V8', 2006, 2013], ['Turbo hybrid', 2014, 2021], ['Ground effect', 2022, 2025], ['Active aero', 2026, 2026]];
@@ -133,5 +133,6 @@ function showTeam() {
       el('div', {class: 'csdrivers'}, names.join(' · ')));
   }
   const year = D.year;
-  opening.then(() => showCar(teamColor(id), year, c?.['Constructor.name'] ?? id, year >= 2026 ? () => loadRB22().catch(() => {}) : null));  // the procedural 2026 car if the model can't load
+  if (year >= 2026) D.title.firstChild.textContent = chassisFor(c?.['Constructor.name'] ?? id);  // the team's own model, or the RB22
+  opening.then(() => showCar(teamColor(id), year, c?.['Constructor.name'] ?? id, year >= 2026 ? () => loadRB22([c?.['Constructor.name'] ?? id]).catch(() => {}) : null));  // the procedural 2026 car if the model can't load
 }

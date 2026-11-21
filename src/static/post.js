@@ -139,7 +139,7 @@ export function createPost(renderer, scene, camera, options) {
     }
     if (tier.dof) sharp = target(dofOf(sharp));
     const blurred = tier.blur ? target(blurOf(sharp)) : sharp;
-    // threshold in linear HDR: 2.5 rather than a display-range 0.85, or every pixel of the photographed sky would bloom.
+    // threshold in linear HDR: 2.5 rather than a display-range 0.85, or every pixel of a bright sky would bloom.
     // Only sun glints, sparks, hot brakes and rain lights get there, and emissive is lifted so they always do.
     if (tier.bloom) bloomNode = bloom(blurred.rgb.add(glow.rgb.mul(1.5)), 0.32, 0.45, 2.5);
     // lateral chromatic aberration: red and blue land at slightly different magnifications, ~1 px at a 1080p corner

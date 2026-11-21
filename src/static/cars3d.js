@@ -1,9 +1,10 @@
 // Procedural F1 cars in real metres (+x forward, y up, wheels on y = 0), shaped after each era's regulations.
 import * as THREE from 'three';
-import {Fn, attribute, uniform, texture, uv, vec2, vec3, vec4, float, fract as nFract, floor, sin, dot, mix, smoothstep as nSmooth, fwidth, abs, max, length, normalize, mod,
+import {Fn, attribute, uniform, texture, uv, vec2, vec3, vec4, float, fract as nFract, floor, sin, dot, mix, smoothstep as nSmooth, fwidth, abs, min, max, length, normalize, mod,
         positionGeometry, normalGeometry, normalViewGeometry} from 'three/tsl';
 import {mergeGeometries, toCreasedNormals} from 'three/addons/utils/BufferGeometryUtils.js';
 import {noise} from './track3d.js';
+import {deviceTier} from './graphics.js';
 import {buildRB22, rb22Ready, inkFor} from './rb22.js';
 import {helmetGeometry, helmetMaterial, GEAR, VISOR} from './driver.js';
 
@@ -105,18 +106,54 @@ carbonNormal.repeat.set(40, 40);
 // From 2016 the finish is satin, no flakes: teams went matte to save the gloss's few hundred grams (Red Bull 2016,
 // Ferrari 2019, McLaren 2020). bare (2022+ procedural cars): below 0.24 m the bodywork is unpainted carbon, as teams
 // leave it to get down to the minimum weight; the RB22's model space is offset, so not there.
+// Full side-view liveries (2026+) for the teams with no model of their own (rb22.js TEAMS), drawn once on a 4096 x 1024
+// canvas in livery space (x: u, 0 rear to 1 nose; y: v, 1 at the top), seen through both flanks and from above. No logos.
+const ART = {}, ART_W = 4096, ART_H = 1024;
+function art(key, draw) {
+  if (ART[key] || typeof document === 'undefined') return ART[key] ?? null;
+  const c = Object.assign(document.createElement('canvas'), {width: ART_W, height: ART_H}), g = c.getContext('2d');
+  g.setTransform(ART_W, 0, 0, -ART_H, 0, ART_H);  // draw in (u, v)
+  draw(g);
+  const t = Object.assign(new THREE.CanvasTexture(c), {colorSpace: THREE.SRGBColorSpace, anisotropy: 16});
+  t.onUpdate = () => { c.width = c.height = 0; };  // uploaded once: the canvas can go
+  return ART[key] = t;
+}
+const poly = (g, fill, ...pts) => { g.fillStyle = fill; g.beginPath(); pts.forEach(([u, v], i) => i ? g.lineTo(u, v) : g.moveTo(u, v)); g.fill(); };
+// Alpine A526: gloss blue, deeper low down, pink flashes along the sidepod tops and the cockpit rim, a pink nose tip and rear wing
+function alpineArt(g) {
+  const fade = g.createLinearGradient(0, 0, 0, 1);
+  fade.addColorStop(0, '#0a3f8c'); fade.addColorStop(0.45, '#0a62c0'); fade.addColorStop(1, '#0b74d8');
+  g.fillStyle = fade; g.fillRect(0, 0, 1, 1);
+  poly(g, '#ff7eb6', [0.18, 0.4], [0.56, 0.52], [0.56, 0.555], [0.18, 0.43]);
+  poly(g, '#ff7eb6', [0.56, 0.6], [0.74, 0.5], [0.74, 0.52], [0.56, 0.625]);
+  poly(g, '#ff7eb6', [0.93, 0], [1, 0], [1, 1], [0.93, 1]);
+  poly(g, '#ff7eb6', [0, 0.55], [0.075, 0.55], [0.075, 1], [0, 1]);
+  poly(g, '#ff7eb6', [0.36, 0.94], [0.52, 0.94], [0.52, 1], [0.36, 1]);
+}
+// Racing Bulls VCARB 03: all white, blue tracing the chassis from the nose back over the sidepods to the floor, a blue lower
+// rear, fin edge and rear wing
+function rbArt(g) {
+  g.fillStyle = '#f2f3f5'; g.fillRect(0, 0, 1, 1);
+  const blue = '#1638c8', sweep = [[0.99, 0.3], [0.62, 0.42], [0.42, 0.34], [0.1, 0.14]];
+  const curve = (dv) => { g.moveTo(sweep[0][0], sweep[0][1] + dv); g.bezierCurveTo(sweep[1][0], sweep[1][1] + dv, sweep[2][0], sweep[2][1] + dv, sweep[3][0], sweep[3][1] + dv); };
+  g.fillStyle = blue; g.beginPath(); curve(0); g.lineTo(0, 0.14); g.lineTo(0, 0); g.lineTo(0.99, 0); g.closePath(); g.fill();
+  g.strokeStyle = blue; g.lineWidth = 0.012; g.beginPath(); curve(0.045); g.stroke();
+  poly(g, blue, [0.2, 0.9], [0.5, 0.97], [0.5, 1], [0.2, 1]);
+  poly(g, blue, [0, 0.55], [0.075, 0.55], [0.075, 1], [0, 1]);
+}
+
 // Team liveries (2022+ cars; colour schemes only, no logos), in livery space: u along the car (0 rear, 1 nose tip),
 // v up (0 floor, 1 top of the airbox). base everywhere; second below the line v = low[0] + low[1] u and/or behind u = rear;
 // an accent band of half-width stripe[2] round v = stripe[0] + stripe[1] u, from u = stripe[3] for half the car's
 // length; nose: the tip's colour forward of u = 0.9. Matched on the team's name, first match wins.
 const LIVERIES = [
-  [/racing bulls|visa|^rb\b|rb f1|alphatauri|toro rosso/, {base: 0xf2f3f5, second: 0x1638c8, accent: 0xe4002b, rear: 0.52, stripe: [0.42, 0, 0.035, 0.12]}],
+  [/racing bulls|visa|^rb\b|rb f1|alphatauri|toro rosso/, {base: 0xf2f3f5, second: 0x1638c8, accent: 0xe4002b, rear: 0.52, stripe: [0.42, 0, 0.035, 0.12], art: rbArt}],
   [/red bull/, {base: 0x1b2550, second: 0x0d1430, accent: 0xe4002b, low: [0.3, 0], stripe: [0.4, 0.06, 0.05, 0.22], nose: 0xffc906}],
   [/mclaren/, {base: 0xff8000, second: 0x16181c, accent: 0x47c7fc, low: [0.32, 0], rear: 0.3, stripe: [0.6, -0.1, 0.012, 0.35]}],
   [/ferrari/, {base: 0xd8000e, second: 0x111111, accent: 0xf6f6f6, low: [0.24, 0], stripe: [0.58, -0.18, 0.03, 0.25]}],
   [/mercedes/, {base: 0xc5c9cd, second: 0x0d0e10, accent: 0x00d2be, low: [0.62, -0.5], stripe: [0.34, 0.12, 0.022, 0.3]}],
   [/aston/, {base: 0x00594f, second: 0x033a32, accent: 0xcedc00, low: [0.28, 0], stripe: [0.44, 0.06, 0.03, 0.28]}],
-  [/alpine|renault/, {base: 0x0a6fd0, second: 0xff7eb6, accent: 0xf6f6f6, rear: 0.42, stripe: [0.5, -0.05, 0.02, 0.45], nose: 0xff7eb6}],
+  [/alpine|renault/, {base: 0x0a6fd0, second: 0xff7eb6, accent: 0xf6f6f6, rear: 0.42, stripe: [0.5, -0.05, 0.02, 0.45], nose: 0xff7eb6, art: alpineArt}],
   [/williams/, {base: 0x0b2b6e, second: 0x061c4a, accent: 0x00a3e0, low: [0.3, 0], stripe: [0.48, 0, 0.04, 0.2]}],
   [/haas/, {base: 0xf0f1f2, second: 0x17181b, accent: 0xe10600, low: [0.45, -0.15], stripe: [0.45, -0.15, 0.03, 0.15], nose: 0xe10600}],
   [/audi/, {base: 0xb6bbc0, second: 0x141517, accent: 0xe3000f, rear: 0.45, stripe: [0.4, 0, 0.03, 0.12], nose: 0xe3000f}],
@@ -133,7 +170,7 @@ export function livery(team, color, year) {
   const c = x => new THREE.Color(x);
   return {base: c(L.base), second: c(L.second), accent: c(L.accent), nose: c(L.nose ?? L.base),
           split: new THREE.Vector4(...(L.low ?? [-1, 0]), L.rear ?? -1, 0), stripe: new THREE.Vector4(...(L.stripe ?? [0, 0, 0, 0])),
-          noseAt: L.nose ? 0.9 : 2};
+          noseAt: L.nose ? 0.9 : 2, art: year >= 2026 && L.art ? art(L.art.name, L.art) : null};
 }
 
 // mesh-local position -> livery space; box: the paint's bounds in the car's frame (x forward, y up, z across, metres),
@@ -173,7 +210,7 @@ function paintMat(color, year, bare = year >= 2022, liv = livery(null, color, ye
     const live = mix(u.uBase, u.uSecond, max(nSmooth(aa, aa.negate(), lp.y.sub(u.uSplit.x).sub(u.uSplit.y.mul(lp.x))), nSmooth(aa, aa.negate(), lp.x.sub(u.uSplit.z))));
     const band = nSmooth(aa, aa.negate(), abs(lp.y.sub(u.uStripe.x).sub(u.uStripe.y.mul(lp.x))).sub(u.uStripe.z))
       .mul(nSmooth(aa.negate(), aa, lp.x.sub(u.uStripe.w))).mul(nSmooth(aa, aa.negate(), lp.x.sub(u.uStripe.w).sub(0.5)));
-    let c = mix(mix(live, u.uAccent, band), u.uNoseCol, nSmooth(aa.negate(), aa, lp.x.sub(u.uNoseAt)));
+    let c = liv.art ? texture(liv.art, lp.xy).rgb : mix(mix(live, u.uAccent, band), u.uNoseCol, nSmooth(aa.negate(), aa, lp.x.sub(u.uNoseAt)));
     if (material.map) {
       const painted = texture(material.map);
       c = mix(c, painted.rgb, painted.a);
@@ -317,8 +354,8 @@ const smoothstep = (a, b, v) => THREE.MathUtils.smoothstep(v, a, b);
 // vertex attributes of a wheel's one merged mesh: base colour, [roughness, metalness], [compound stripe, brake glow, rubber]
 function part(g, color, rough, metal, stripe = 0, glow = 0, rubber = 0) {
   const flat = g.index ? g.toNonIndexed() : g, n = flat.attributes.position.count, c = new THREE.Color(color);
-  flat.deleteAttribute('uv');
   const fill = v => new THREE.Float32BufferAttribute(Array.from({length: n}, () => v).flat(), v.length);
+  if (!g.userData.tread) flat.setAttribute('uv', fill([0, 0]));  // only the Pirelli tyre samples the tread maps
   flat.setAttribute('wcol', fill([c.r, c.g, c.b]));
   flat.setAttribute('wpbr', fill([rough, metal]));
   flat.setAttribute('wmask', fill([stripe, glow, rubber]));
@@ -333,7 +370,9 @@ function corner(s, [r, w], side) {
   for (let i = 0; i <= 5; i++) { const a = i / 5 * Math.PI / 2; prof.push([r - sh + Math.cos(a) * sh, w / 2 - sh + Math.sin(a) * sh]); }
   prof.push([s.rim + (r - s.rim) * 0.5, w / 2 + bulge], [s.rim, w / 2 - 0.012]);
   const tyre = 0x222224, metal = s.era >= 2022 ? 0x24262a : s.era < 1966 ? 0xb9bcc0 : 0x4a4d52, face = side * (w / 2 - 0.03);
-  const parts = [part(new THREE.LatheGeometry(prof.map(([a, b]) => new THREE.Vector2(a, b)), 48), tyre, 0.78, 0, 0, 0, 1),
+  const lathe = new THREE.LatheGeometry(prof.map(([a, b]) => new THREE.Vector2(a, b)), 48);
+  if (TYRES) treadUv(lathe, r, w, sh);
+  const parts = [part(lathe, tyre, 0.78, 0, 0, 0, 1),
     part(new THREE.CylinderGeometry(s.rim, s.rim, w * 0.9, 32, 1, true), metal, 0.34, 0.9),
     part(new THREE.CylinderGeometry(s.rim * 0.82, s.rim * 0.82, 0.16, 20, 1, true).translate(0, side * (0.08 - w / 2), 0), 0x0c0c0e, 0.6, 0)];  // brake duct drum
   const spoke = (len, across, k, n) => new THREE.BoxGeometry(len, 0.016, across).translate(s.rim * 0.5, face, 0).rotateY(k * 2 * Math.PI / n);
@@ -349,21 +388,108 @@ function corner(s, [r, w], side) {
   }
   parts.push(part(new THREE.CylinderGeometry(Math.min(s.rim * 0.8, 0.164), Math.min(s.rim * 0.8, 0.164), 0.032, 40).translate(0, side * (w / 2 - 0.12), 0), 0x2b2b2e, 0.55, 0.3, 0, 1));  // 278-328 mm disc
   parts.push(part(new THREE.CylinderGeometry(0.05, 0.05, 0.03, 12).translate(0, face + side * 0.012, 0), s.era < 1966 ? 0xb9a15a : 0x0b0b0d, 0.25, 0.3));  // wheel nut
-  if (s.era >= 2008) for (const sw of [-1, 1])  // compound marking on each sidewall (coloured from 2007, Bridgestone's white stripe)
+  if (s.era >= 2008 && !(TYRES && s.era >= 2011)) for (const sw of [-1, 1])  // compound marking on each sidewall (coloured from 2007, Bridgestone's white stripe)
     parts.push(part(new THREE.TorusGeometry(r - 0.075, 0.009, 6, 48).rotateX(Math.PI / 2).translate(0, sw * (w / 2 + bulge + 0.002), 0), 0xd8d8d8, 0.7, 0, 1));
   if (s.grooves) for (const f of [-0.3, -0.1, 0.1, 0.3]) parts.push(part(new THREE.TorusGeometry(r + 0.0005, 0.006, 4, 48).rotateX(Math.PI / 2).translate(0, f * w, 0), 0x050506, 0.9, 0));
   return mergeGeometries(parts.map(g => g.rotateX(Math.PI / 2)));
 }
 
+// Sidewall print. Pirelli from 2011: the tread maps of "Ferrari F1-75" by Sketcher (CC BY-NC 4.0, models/CREDITS.md), 4096 px,
+// in glTF's UV layout: u twice round the tyre, v across the profile: one sidewall from the rim to 0.12 (the PIRELLI band),
+// the tread to 0.56, the other sidewall to 0.68 (P ZERO). Earlier makers are drawn on a canvas in the same layout
+// (brandMap). Desktop only: a phone keeps the procedural rubber and stripes.
+const TYRES = deviceTier() === 'desktop';
+
+// Each year's tyre maker: the champions' supplier, and Michelin's teams in its 2001-06 tyre war.
+// shortcut: one maker per era (Firestone, Michelin '77-'84 and Pirelli '81-'91 teams get Goodyear); per team if it matters
+const MICHELIN = /williams|mclaren|renault|benetton|jaguar|red bull|toyota|\bbar\b|honda|minardi/;
+export function tyreMaker(year, team = '') {
+  if (year >= 2011) return 'pirelli';
+  if (year >= 2001 && year <= 2006 && MICHELIN.test(team.toLowerCase())) return 'michelin';
+  return year >= 1998 ? 'bridgestone' : year >= 1966 ? 'goodyear' : year >= 1958 ? 'dunlop' : 'stelvio';
+}
+// maker -> [the word on one sidewall, the word on the other, print colour]
+const MAKERS = {stelvio: ['PIRELLI', 'STELVIO', '#e9e4d6'], dunlop: ['DUNLOP', 'RACING', '#ecebe6'], goodyear: ['GOODYEAR', 'EAGLE', '#f2f2ee'],
+                bridgestone: ['BRIDGESTONE', 'POTENZA', '#f2f2f2'], michelin: ['MICHELIN', 'PILOT', '#f2f2f2']};
+
+// a maker's sidewall print on rubber, 2048 px (u half the circumference). The words' tops face the tread on both
+// sidewalls, as in the Pirelli map: there the first band is drawn upside down, the second mirrored.
+const brands = {};
+function brandMap(maker) {
+  if (brands[maker]) return brands[maker];
+  const [a, b, ink] = MAKERS[maker], S = 2048, c = Object.assign(document.createElement('canvas'), {width: S, height: S}), g = c.getContext('2d');
+  const t = brands[maker] = Object.assign(new THREE.CanvasTexture(c), {colorSpace: THREE.SRGBColorSpace, anisotropy: 16, flipY: false,
+                                                                     wrapS: THREE.RepeatWrapping, wrapT: THREE.RepeatWrapping});
+  const font = `italic 900 ${0.055 * S}px "Titillium Web", sans-serif`;
+  const draw = () => {
+    g.fillStyle = '#161616';
+    g.fillRect(0, 0, S, S);
+    Object.assign(g, {font, fillStyle: ink, textAlign: 'center', textBaseline: 'middle'});
+    for (const [y, sx, sy] of [[0.08, 1, -1], [0.6, -1, 1]])
+      for (const [word, u] of [[a, 0.25], [b, 0.75]]) {  // each band: the maker, then its racing range
+        g.save();
+        g.translate(u * S, y * S);
+        g.scale(sx, sy);
+        g.fillText(word, 0, 0);
+        g.restore();
+      }
+    t.needsUpdate = true;
+  };
+  draw();
+  document.fonts?.load(font).then(draw, () => {});  // again once the face is in
+  return t;
+}
+function treadUv(g, r, w, sh) {
+  const P = g.attributes.position, UV = g.attributes.uv;
+  for (let i = 0; i < P.count; i++) {  // the lathe's axis is y; the sidewalls keep the texture's own scale (0.12 of v is 83 mm)
+    const ax = P.getY(i), drop = (r - sh - Math.hypot(P.getX(i), P.getZ(i))) * 1.45;
+    UV.setXY(i, UV.getX(i) * 2, drop > 1e-6 ? (ax < 0 ? Math.max(0, 0.12 - drop) : Math.min(0.68, 0.56 + drop)) : 0.12 + (ax / w + 0.5) * 0.44);
+  }
+  g.userData.tread = true;
+}
+
+// placeholders until the files land, so the material compiles with both maps (textures3d.js photo() does the same)
+let treads = null;
+function treadMaps() {
+  if (treads) return treads;
+  const blank = (fill, colorSpace) => {
+    const c = Object.assign(document.createElement('canvas'), {width: 4, height: 4}), g = c.getContext('2d');
+    g.fillStyle = fill;
+    g.fillRect(0, 0, 4, 4);
+    return Object.assign(new THREE.Texture(c), {colorSpace, anisotropy: 16, flipY: false, wrapS: THREE.RepeatWrapping, wrapT: THREE.RepeatWrapping, needsUpdate: true});
+  };
+  treads = {map: blank('#161616', THREE.SRGBColorSpace), normal: blank('#8080ff', THREE.NoColorSpace)};
+  const loader = new THREE.ImageBitmapLoader().setOptions({premultiplyAlpha: 'none', colorSpaceConversion: 'none'});
+  for (const [k, name] of [['map', 'pirelli_tread.png'], ['normal', 'pirelli_tread_normal.jpg']])
+    loader.load(new URL(`./models/${name}`, import.meta.url).href, img => {
+      const t = treads[k];
+      t.dispose();  // the GPU texture changes size
+      t.image = img;
+      t.needsUpdate = true;
+      t.onUpdate = () => img.close();  // 64 MB decoded each, not needed once on the GPU
+    }, undefined, e => console.warn('tyre texture', name, e));
+  return treads;
+}
+
 // a wheel's one material: colours from the vertices, the compound's colour on the stripes, the brake glow on the disc.
 // The rubber: a satin sidewall with a fine grain, and a matte tread scrubbed grey in rings round the tyre (the wheel's
 // own frame: axle along z, so a sidewall's normal is mostly z and the tread's is in xy)
-function wheelMat(stripe) {
+function wheelMat(stripe, maker) {
   const m = new THREE.MeshPhysicalNodeMaterial(), mask = attribute('wmask', 'vec3'), pbr = attribute('wpbr', 'vec2'), t = uniform(0);
-  const p = positionGeometry, tread = nSmooth(0.7, 0.35, abs(normalGeometry.z));
+  const p = positionGeometry, tread = nSmooth(0.7, 0.35, abs(normalGeometry.z)), sc = uniform(stripe.color);
   const grain = mix(noise(p.xy.mul(380)), noise(vec2(p.z.mul(900), p.x.add(p.y).mul(30))), tread);
-  const rubber = mask.z.mul(mix(mix(0.55, 0.75, grain), mix(1.5, 2.1, grain), tread));
-  m.colorNode = mix(attribute('wcol', 'vec3'), uniform(stripe.color), mask.x).mul(rubber.add(mask.z.oneMinus()));
+  const scrub = mix(mix(0.55, 0.75, grain), mix(1.5, 2.1, grain), tread), base = mix(attribute('wcol', 'vec3'), sc, mask.x);
+  let rubber = base.mul(scrub);
+  if (maker && maker !== 'pirelli') {  // the maker's print as drawn, over the scrubbed rubber
+    const tex = texture(brandMap(maker));
+    rubber = mix(tex.rgb.mul(2).mul(scrub), tex.rgb.mul(0.8), nSmooth(0.1, 0.3, tex.g));
+  } else if (maker) {  // the yellow print (a medium's) takes the compound's colour, its wear kept as brightness
+    const {map, normal} = treadMaps(), tex = texture(map), print = nSmooth(0.1, 0.3, tex.g.sub(tex.b));
+    m.normalMap = normal;
+    m.normalScale.set(1, -1);  // glTF's tangent space, as GLTFLoader reads it
+    rubber = mix(tex.rgb.mul(2).mul(scrub), sc.mul(min(tex.g.div(0.6), 1)), print);
+  }
+  m.colorNode = mix(base, rubber, mask.z);
   m.roughnessNode = mix(pbr.x, mix(0.62, mix(0.88, 0.98, grain), tread), mask.z);
   m.metalnessNode = pbr.y;
   m.specularIntensityNode = mix(1, 0.3, mask.z);  // rubber reflects far less than the 4 % a plain dielectric gets
@@ -657,27 +783,43 @@ function shadowProxy(group, cache, key) {
     }
     o.children.forEach(walk);
   })(group);
-  if (build) cache[key] = Object.assign(new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(out, 3)), {userData: {shared: true}});
+  if (build) cache[key] = Object.assign(new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(clusterTris(out, 0.02), 3)), {userData: {shared: true}});
   const proxy = new THREE.Mesh(cache[key], CASTER);
   proxy.castShadow = true;
   proxy.layers.set(SHADOW_LAYER);
   group.add(proxy);
 }
 const rb22Casters = {};
+// A depth-only caster needs only the silhouette: snap the vertices to a grid of `cell` metres and drop the triangles that
+// collapse or repeat (a team model's 285k triangles were all redrawn in up to four cascades: 10 M a frame in a pack).
+// shortcut: vertex clustering, not an edge-collapse simplifier; moves the outline by up to cell / 2 (1 cm), about a near-cascade texel
+export function clusterTris(p, cell) {
+  const out = [], seen = new Set(), q = v => Math.round(v / cell);
+  for (let i = 0; i < p.length; i += 9) {
+    const k = [0, 3, 6].map(o => `${q(p[i + o])},${q(p[i + o + 1])},${q(p[i + o + 2])}`);
+    if (k[0] === k[1] || k[1] === k[2] || k[0] === k[2]) continue;
+    const id = [...k].sort().join('|');
+    if (seen.has(id)) continue;  // the same triangle from another part, or the back of a double-sided one
+    seen.add(id);
+    for (const o of [0, 3, 6]) out.push(q(p[i + o]) * cell, q(p[i + o + 1]) * cell, q(p[i + o + 2]) * cell);
+  }
+  return out;
+}
 
 // The 2026+ car: the RB22 model (rb22.js) up close, this era's procedural car beyond `far` scene units, as a THREE.LOD
 // that the renderer switches per camera. Both levels share the procedural car's tyre-stripe and rear-light materials,
 // so setTyre and the light flash drive both. The returned parts (body, eye, cameras, effects anchors) are the RB22's,
 // plus wheels / steeringWheel / mirrors for scene3d.js to animate.
-function withRB22(far, color, num, blob, dist, liv) {
-  const near = buildRB22({paint: paintMat(0xffffff, 2026, false, liv), accent: liv.accent, ink: inkFor(liv.nose), num,
+function withRB22(far, color, num, blob, dist, liv, team) {
+  const near = buildRB22({paint: paintMat(0xffffff, 2026, false, liv), accent: liv.accent, ink: inkFor(liv.nose), num, team,
                           stripe: far.stripe, light: far.light, helmet: new THREE.Color(color).lerp(new THREE.Color(0xffffff), 0.55)});
   near.paintMesh.updateWorldMatrix(true, false);  // the car's frame: its group isn't in a scene yet
   near.paintMesh.material.userData.toCar.value.copy(liveryFrame(new THREE.Box3().setFromObject(near.paintMesh), near.paintMesh.matrixWorld));
   const shadow = contactShadows(near.body, blob, near.len, near.width, near.hubs);
   if (dist < Infinity) {  // the race: the showroom's own lamps see no SHADOW_LAYER
-    shadowProxy(near.body, rb22Casters, 'body');
-    near.wheels.forEach((w, i) => shadowProxy(w.spin, rb22Casters, i));
+    const cache = rb22Casters[near.model] ??= {};  // per model: their shapes differ
+    shadowProxy(near.body, cache, 'body');
+    near.wheels.forEach((w, i) => shadowProxy(w.spin, cache, i));
   }
   const lod = new THREE.LOD(), group = new THREE.Group();
   lod.addLevel(near.group, 0);
@@ -703,7 +845,7 @@ export function buildCar(color, num, year, blob, far = Infinity, team = null) {
   const group = new THREE.Group(), body = new THREE.Group(), halo = new THREE.Group();
   const mesh = (geo, mat, shadow = true) => Object.assign(new THREE.Mesh(geo, mat), {castShadow: shadow});
   for (const [k, geo] of Object.entries(t.geo)) (k === 'halo' ? halo : body).add(mesh(geo, own[k] ?? MAT[k === 'halo' ? 'carbon' : k]));
-  own.wheel = wheelMat(own.stripe);
+  own.wheel = wheelMat(own.stripe, TYRES && tyreMaker(year, team ?? ''));
   const wheelSet = new THREE.Group(), wheels = t.wheels.map(w => {
     const pivot = new THREE.Group(), spin = new THREE.Group();
     pivot.position.set(w.x, w.r, w.z);
@@ -747,5 +889,5 @@ export function buildCar(color, num, year, blob, far = Infinity, team = null) {
   };
   const car = {group, body, halo, wheels, tyre: s.tr, stripe: own.stripe, light: own.light, discs: [own.wheel], len: s.len, width: s.width, wb: s.wb, eye: t.eye, look: t.look, tcam: t.tcam,
                tcamLook: t.tcamLook, exhaust: t.exhaust, plank: t.plank, fronts: t.fronts, dispose};
-  return s.era >= 2026 && rb22Ready() ? withRB22(car, color, num, blob, far, liv) : car;
+  return s.era >= 2026 && rb22Ready() ? withRB22(car, color, num, blob, far, liv, team) : car;
 }

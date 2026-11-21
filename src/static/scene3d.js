@@ -22,16 +22,18 @@ import {sunElevation, skyFor} from './weather.js';
 
 const SIZE = 1000;                  // the circuit is scaled to this many scene units across
 const UP = new THREE.Vector3(0, 1, 0);
-const SUN = new THREE.Vector3(0.45, 0.62, 0.3).normalize();  // direction towards the sun; re-aimed at the HDRI's sun
-// photographed HDR sky (CC0, Poly Haven): 4k once downloaded (assets.py), until then the 1k streams (1.4 MB, not 21); a phone streams 1k first
+const SUN = new THREE.Vector3(0.45, 0.62, 0.3).normalize();  // direction towards the sun; re-aimed at the sky's sun
+// day skies are photographed HDRs (CC0, Poly Haven, "puresky": no ground, so no hills): 4k once downloaded (assets.py), until
+// then the 1k streams (1.4 MB, not 21); a phone streams 1k first. Auto picks one by the sun over the circuit (setDaylight).
 const hdri = name => `/static/assets/hdri/${name}_4k.hdr`;
 const streamed = url => `https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/${url.split('/').pop().replace('_4k', '_1k')}`;
 // L cycles them. sun: direct light, env: image-based light, hemi: fill; lamps: the floodlights' glow
 const SKIES = [
   {name: 'Midday', url: hdri('kloofendal_48d_partly_cloudy_puresky'), sun: 3.2, color: 0xfff8ed, env: 0.7, hemi: 0.15, lamps: 0},
-  {name: 'Golden hour', url: hdri('belfast_sunset_puresky'), sun: 2.6, color: 0xffc896, env: 0.8, hemi: 0.1, lamps: 0.5},
+  {name: 'Sunset', url: hdri('belfast_sunset_puresky'), sun: 2.6, color: 0xffc896, env: 0.8, hemi: 0.1, lamps: 0.5},
   {name: 'Overcast', url: hdri('kloofendal_overcast_puresky'), sun: 0.7, color: 0xe9eef5, env: 1, hemi: 0.2, lamps: 0},
-  {name: 'Night', url: hdri('rogland_clear_night'), sun: 0.4, color: 0xbcd0ff, env: 1.8, hemi: 0.12, lamps: 8},
+  {name: 'Night', url: hdri('qwantani_night_puresky'), sun: 0.4, color: 0xbcd0ff, env: 1.8, hemi: 0.12, lamps: 8},
+  {name: 'Sunrise', url: hdri('qwantani_sunrise_puresky'), sun: 2.4, color: 0xffd2a8, env: 0.8, hemi: 0.1, lamps: 0.3},
 ];
 
 // One renderer for the race and the showroom, each with its own CanvasTarget: two WebGPU devices couldn't share pipelines,
@@ -321,7 +323,7 @@ export function init3d(el) {
     scene.environmentIntensity = 0.35;  // the raw sky is HDR-bright and washes colours out
     sky.geometry.dispose();
     sky.material.dispose();
-    // until the photographed sky lands, the fog's colour: drawn, the raw Preetham sky is so bright that its bloom whited out the whole view
+    // until the first sky is baked, the fog's colour: a raw Preetham sky is so bright that its bloom whited out the whole view
     scene.background = scene.fog.color.clone();
     skyAt = skyIndex();
     loadSky(SKIES[skyAt]);
@@ -402,7 +404,8 @@ function onCameraModeChanged(m) {
 }
 
 // Orbit target: over the circuit (panning stops at its edge) and, in the overview, on the ground, so panning over a
-// hill carries the camera up with it; the camera stays 2 m above the terrain.
+// hill carries the camera up with it; the camera stays 2 m above the terrain, and high enough that the ground between it
+// and the target (the real hills round Spa or Interlagos) never hides the target.
 function keepInBounds() {
   if (!circuit) return;
   const t = controls.target, lim = SIZE * 0.7, shift = new THREE.Vector3(
@@ -410,7 +413,11 @@ function keepInBounds() {
   if (mode === 'overview' && !fly) shift.y = circuit.groundAt(t.x + shift.x, t.z + shift.z) - t.y;
   t.add(shift);
   camera.position.add(shift);
-  camera.position.y = Math.max(camera.position.y, circuit.groundAt(camera.position.x, camera.position.z) + m(2));
+  const c = camera.position;
+  let y = Math.max(c.y, circuit.groundAt(c.x, c.z) + m(2));
+  // the sight line at f of the way to the target, c.y (1 - f) + t.y f, stays over the ground there
+  for (let k = 1; k < 8; k++) { const f = k / 8; y = Math.max(y, (circuit.groundAt(c.x + (t.x - c.x) * f, c.z + (t.z - c.z) * f) - t.y * f) / (1 - f)); }
+  c.y = y;
 }
 
 // L: the next time of day. The old sky stays up until the new one has loaded.
@@ -422,19 +429,20 @@ export function nextSky() {
 // The session's own light: the sun's height over the circuit (lat, lon) at its start, when Settings' sky is Auto.
 // Singapore and Las Vegas race at night, Abu Dhabi into dusk. No time known: midday.
 export function setDaylight(lat, lon, at) {
-  autoSky = isFinite(lat) && isFinite(lon) && at && !isNaN(+at) ? skyFor(sunElevation(lat, lon, at)) : 0;
+  const known = isFinite(lat) && isFinite(lon) && at && !isNaN(+at), elev = known && sunElevation(lat, lon, at);
+  autoSky = known ? skyFor(elev, sunElevation(lat, lon, +new Date(at) + 6e5) > elev) : 0;  // rising 10 min on: morning
   if (scene && skyIndex() !== skyAt) loadSky(SKIES[skyAt = skyIndex()]);
 }
 
 
-// The HDR panorama becomes the background and, PMREM-prefiltered (a mip per roughness level), the image-based light for
-// diffuse ambient and reflections. The sun light is aimed at its brightest texel so shadows agree with the sky: texel
-// (x, y) with row 0 at the top is longitude 2 pi (u - 0.5), latitude pi (0.5 - v), as three samples equirect maps.
+// The HDR panorama becomes the background (a cube map) and, PMREM-prefiltered (a mip per roughness level), the image-based
+// light for diffuse ambient and reflections. The sun light is aimed at its brightest texel (the moon at night) so shadows agree.
 function loadSky(preset) {
   const token = ++skyToken;
   stage('sky', `Sky: ${preset.name}`);
   const load = (url, next) => new HDRLoader().load(url, hdr => {
     if (token !== skyToken) { hdr.dispose(); return; }  // pressed L again meanwhile
+    // texel (x, y) with row 0 at the top is longitude 2 pi (u - 0.5), latitude pi (0.5 - v), as three samples equirect maps
     const {data, width: w, height: h} = hdr.image, half = THREE.DataUtils.fromHalfFloat;
     let best = 0, at = 0;
     for (let i = 0; i < w * h / 2; i += 2) {  // upper half: the sun is above the horizon
@@ -444,35 +452,16 @@ function loadSky(preset) {
     const phi = ((at % w + 0.5) / w - 0.5) * 2 * Math.PI;
     const lat = Math.max((0.5 - (Math.floor(at / w) + 0.5) / h) * Math.PI, 0.25);  // >= 14 degrees: no endless shadows
     SUN.set(Math.cos(phi) * Math.cos(lat), Math.sin(lat), Math.sin(phi) * Math.cos(lat));
-    aimSun();
     // fog fades to the horizon's mean radiance (linear HDR; fog is mixed before tone mapping) so the ground meets the sky
     const fog = [0, 0, 0], row = Math.floor(h * 0.49) * w;
     for (let x = 0; x < w; x++) for (let c = 0; c < 3; c++) fog[c] += half(data[(row + x) * 4 + c]) / w;
     scene.fog.color.setRGB(...fog);
     hdr.mapping = THREE.EquirectangularReflectionMapping;
-    // the render targets, not their textures: three frees a target's texture only with the target (texture.dispose() is a
-    // no-op on one), so each change of sky left ~70 MB of cube map and its PMREM on the GPU
-    const old = skyTargets;
     clearWarmTarget();
-    skyTargets = [pmrem.fromEquirectangular(hdr), new THREE.CubeRenderTarget(h / 2).fromEquirectangularTexture(renderer, hdr)];
-    scene.environment = skyTargets[0].texture;
-    scene.environmentIntensity = sky0.env = preset.env;
-    sky0.fog.copy(scene.fog.color);
-    // the background as a GPU cube map (the size three picks itself), so the panorama's pixels (64 MB at 4k) can go:
-    // kept as scene.background they stayed in the JS heap for the page's life
-    scene.background = skyTargets[1].texture;
+    // a cube face of h / 2 keeps every texel of the panorama (4k: 1024 a face, ~11 a degree); as a GPU cube map the
+    // panorama's pixels (64 MB at 4k) can go: kept as scene.background they stayed in the JS heap for the page's life
+    useSky(preset, [pmrem.fromEquirectangular(hdr), new THREE.CubeRenderTarget(h / 2).fromEquirectangularTexture(renderer, hdr)]);
     hdr.dispose();
-    for (const t of old) t.dispose();
-    hemi.intensity = sky0.hemi = preset.hemi;  // the HDRI now supplies the ambient light
-    sky0.sun = preset.sun;
-    sky0.lamps = preset.lamps;
-    sky0.name = preset.name;
-    sun.color.set(preset.color);
-    circuit?.night(sky0.lamps);
-    if (weather) setWeather(weather);
-    else sun.intensity = sky0.sun;
-    resized = true;  // a still frame should show it now
-    stageDone('sky');
   }, e => stage('sky', `Sky: ${preset.name}`, progressOf(e)), e => {
     if (next) return load(next);
     console.warn('3D: the sky could not be loaded', e);
@@ -480,6 +469,29 @@ function loadSky(preset) {
   });
   if (tier === 'mobile') load(streamed(preset.url), preset.url);
   else load(preset.url, streamed(preset.url));
+}
+
+// targets: [PMREM, background cube]. The render targets, not their textures: three frees a target's texture only with the
+// target (texture.dispose() is a no-op on one), so each change of sky left ~70 MB of cube map and its PMREM on the GPU
+function useSky(preset, targets) {
+  aimSun();
+  const old = skyTargets;
+  skyTargets = targets;
+  scene.environment = targets[0].texture;
+  scene.environmentIntensity = sky0.env = preset.env;
+  scene.background = targets[1].texture;
+  sky0.fog.copy(scene.fog.color);
+  for (const t of old) t.dispose();
+  hemi.intensity = sky0.hemi = preset.hemi;  // the sky now supplies the ambient light
+  sky0.sun = preset.sun;
+  sky0.lamps = preset.lamps;
+  sky0.name = preset.name;
+  sun.color.set(preset.color);
+  circuit?.night(sky0.lamps);
+  if (weather) setWeather(weather);
+  else sun.intensity = sky0.sun;
+  resized = true;  // a still frame should show it now
+  stageDone('sky');
 }
 
 // ---------- circuit (circuit3d.js builds it) ----------
@@ -574,7 +586,8 @@ export function setCars(drivers, onSelect, year) {
   disposeCars();
   const token = ++carsToken;
   // 2026+ cars use the RB22 model up close; until it has loaded they are procedural, then the grid is rebuilt once
-  if (year >= 2026 && !rb22Ready()) loadRB22().then(() => token === carsToken && setCars(drivers, onSelect, year), e => console.warn('RB22 model', e));
+  const teams = drivers.map(d => d.team);
+  if (year >= 2026 && !rb22Ready(teams)) loadRB22(teams).then(() => token === carsToken && setCars(drivers, onSelect, year), e => console.warn('RB22 model', e));
   for (const d of drivers) {
     const car = ownLods(buildCar(d.color, d.num, year, tex.blob, map ? m(high ? 60 : 40) : Infinity, d.team));  // the detailed car is 57 draws: past 60 m it is under ~50 px wide (Settings' car detail doubles the range)
     const num = document.createElement('b');
@@ -720,7 +733,7 @@ export function setWeather({cloud, rain, wetLine, wetOff}) {
   if (!scene) return;
   weather = {cloud, rain, wetLine, wetOff};
   if (skyIndex() !== skyAt) loadSky(SKIES[skyAt = skyIndex()]);
-  // the cloud dimming is sized for the sunny skies; the Overcast HDRI, once it is the one up, is already grey and sunless (sun 0.7, not 3.2)
+  // the cloud dimming is sized for the sunny skies; the Overcast sky, once it is the one up, is already grey and sunless (sun 0.7, not 3.2)
   const overcast = Math.max(0, cloud - 0.1) / 0.9 * (sky0.name === 'Overcast' ? 0.3 : 1), wet = (wetLine + wetOff) / 2;
   sun.intensity = sky0.sun * (1 - 0.85 * overcast);
   scene.environmentIntensity = sky0.env * (1 - 0.5 * overcast);
@@ -751,7 +764,7 @@ function maxTexture() {
   return b.device?.limits.maxTextureDimension2D ?? b.gl?.getParameter(b.gl.MAX_TEXTURE_SIZE) ?? 4096;
 }
 
-export async function setGround(year, round, maxPx = 2048) {
+export async function setGround(year, round, maxPx = 2048, dem = true) {
   cancelGround?.();
   const c = circuit, full = Math.min(high ? 8192 : 4096, maxTexture());  // high tier: one zoom level sharper (~0.5 m a pixel)
   if (!c) return;
@@ -768,7 +781,7 @@ export async function setGround(year, round, maxPx = 2048) {
     stage('ground', 'Satellite ground');
     w.postMessage({url: `/api/geo/${year}/${round}`, pts: c.pts, map: {k: map.k, cx: map.cx, cy: map.cy}, L: SIZE / 2,
       box: [Math.min(...xs) - pad, Math.max(...xs) + pad, Math.min(...zs) - pad, Math.max(...zs) + pad],
-      maxPx: Math.min(maxPx, full)});
+      maxPx: Math.min(maxPx, full), dem});
   });
   if (circuit !== c || !g?.image) {  // another circuit since, or no ground to show
     g?.image?.close();
@@ -786,8 +799,17 @@ export async function setGround(year, round, maxPx = 2048) {
     const u = a * X + b * Z + u0, v = d * X + e * Z + v0;
     return u < 0 || u >= 1 || v < 0 || v >= 1 || data[Math.floor(v * h) * w + Math.floor(u * w)] === 1;
   };
+  if (g.dem) {  // the real ground's heights (metres, NaN where no tile): bilinear through their affine, as the image
+    const {m: [p, q, s, t, r, o], w: dw, h: dh, data: hd} = g.dem;
+    c.elevation((X, Z) => {
+      const u = (p * X + q * Z + s) * dw - 0.5, v = (t * X + r * Z + o) * dh - 0.5, i = Math.floor(u), j = Math.floor(v), fu = u - i, fv = v - j;
+      if (i < 0 || j < 0 || i >= dw - 1 || j >= dh - 1) return NaN;
+      const k = j * dw + i;
+      return (hd[k] * (1 - fu) + hd[k + 1] * fu) * (1 - fv) + (hd[k + dw] * (1 - fu) + hd[k + dw + 1] * fu) * fv;
+    });
+  }
   c.satellite(texture, new THREE.Matrix3().set(...g.m, 0, 0, 1), green, new THREE.Color().setRGB(...g.mean, THREE.SRGBColorSpace), g.mask);
-  if (maxPx < full) setGround(year, round, full);
+  if (maxPx < full) setGround(year, round, full, false);  // the heights are in already
 }
 
 // Pit lane (map points of its centre line): the simulation's, entry road to exit road, or a replay's real one from GPS.

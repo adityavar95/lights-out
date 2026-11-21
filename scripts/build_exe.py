@@ -10,9 +10,9 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 import assets  # noqa: E402
 
-assets.core()  # the exe ships core + skies inside static (scripts/fetch_assets.py fetches everything, for a checkout)
+assets.core()  # the exe ships core + skies + the full-size team cars inside static (scripts/fetch_assets.py fetches everything, for a checkout)
 for url, dest in assets._missing().items():
-    if dest.parent.name == "hdri":
+    if dest.parent.name in ("hdri", "cars"):
         assets.fetch(url, dest)
 PyInstaller.__main__.run([
     str(ROOT / "src" / "desktop.py"),
@@ -26,6 +26,6 @@ PyInstaller.__main__.run([
     "--exclude-module", "nvidia",
     "--distpath", str(ROOT / "dist"), "--workpath", str(ROOT / "build"), "--specpath", str(ROOT / "build"),
 ])
-# the exe ships core + skies; textures and satellite tiles (~550 MB) come from the in-app Download assets button
+# the exe ships core, the skies and the full-size team cars; textures and satellite tiles (~550 MB) come from the in-app Download assets button
 for heavy in ("textures", "tiles"):
     shutil.rmtree(ROOT / "dist" / "LightsOut" / "_internal" / "static" / "assets" / heavy, ignore_errors=True)

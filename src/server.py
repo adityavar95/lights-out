@@ -223,8 +223,8 @@ def race_track(year: int, round: int):
 
 
 @lru_cache(maxsize=64)
-def _geo(lat: float, lng: float):
-    return _geo_track(lat, lng)
+def _geo(lat: float, lng: float, year: int):
+    return _geo_track(lat, lng, year)
 
 
 @app.get("/api/geo/{year}/{round}")
@@ -234,7 +234,7 @@ def race_geo(year: int, round: int):
     c = race_info(year, round)["Circuit"]
     lat, lng = float(c["Location"]["lat"]), float(c["Location"]["long"])
     try:
-        g = _geo(lat, lng)
+        g = _geo(lat, lng, year)
     except Exception as e:
         raise HTTPException(502, f"Circuit GeoJSON request failed: {e}")
     if g is None:

@@ -54,8 +54,8 @@ export function sunElevation(lat, lon, date) {
   const hour = (d.getUTCHours() + d.getUTCMinutes() / 60 + lon / 15 - 12) * 15 * rad, phi = lat * rad;
   return Math.asin(Math.sin(phi) * Math.sin(decl) + Math.cos(phi) * Math.cos(decl) * Math.cos(hour)) / rad;
 }
-// scene3d.js's SKIES index for a sun elevation: Midday, Golden hour under 20°, Night past civil twilight (-6°)
-export const skyFor = elev => elev > 20 ? 0 : elev > -6 ? 1 : 3;
+// scene3d.js's SKIES index for a sun elevation: Midday, under 20° Sunrise while the sun climbs else Sunset, Night past civil twilight (-6°)
+export const skyFor = (elev, rising = false) => elev > 20 ? 0 : elev > -6 ? (rising ? 4 : 1) : 3;
 
 // A replay's weather look at t: OpenF1's rows [t, air, track, rainfall, wind] only say whether rain is falling, so water
 // builds while it does (flooded in ~2 min, as the simulation's balance) and drains for ~25 min after; a field mostly on

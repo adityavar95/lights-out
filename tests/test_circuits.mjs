@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {createRace} from '../src/static/sim.js';
 import {buildTrack} from '../src/static/track.js';
 import {autoAero, biome} from '../src/static/circuits.js';
-import {fitGeo} from '../src/static/satellite.js';
+import {fitGeo, snapToRoad} from '../src/static/satellite.js';
 
 // the "stadium" of test_player: two 1.2 km straights joined by 120 m radius right-hand hairpins (clockwise), metres
 const stadium = (straight = 1200, r = 120) => {
@@ -75,4 +75,16 @@ assert.equal(biome('nowhere', 60), 'conifer');
 assert.equal(biome('nowhere', -50), 'conifer');
 assert.equal(biome('nowhere', 30), 'broadleaf');
 assert.equal(biome('nowhere'), 'broadleaf');
+
+// snapToRoad: an outline 9 m west and 6 m south of a 12 m wide photographed road (an ellipse, so a turn shows too) moves onto it
+{
+  const ring = (cx, cy, t) => Array.from({length: 512}, (_, i) => { const a = i / 512 * 2 * Math.PI;
+    return [cx + 600 * Math.cos(a) * Math.cos(t) - 300 * Math.sin(a) * Math.sin(t), cy + 600 * Math.cos(a) * Math.sin(t) + 300 * Math.sin(a) * Math.cos(t)]; });
+  const real = ring(9, 6, 0.01), road = (e, n) => real.some(([x, y]) => (x - e) ** 2 + (y - n) ** 2 < 36) ? 1 : 0;
+  const snap = snapToRoad(ring(0, 0, 0), road);
+  assert.ok(snap && snap.best > 0.95, 'onto the road');
+  const [e, n] = snap([600, 0]);
+  assert.ok(Math.abs(e - real[0][0]) < 6, `the rim follows the turn: ${e}, ${n}`);  // across the road; along it is unobservable
+  assert.equal(snapToRoad(real, road), null, 'already on it: no correction');
+}
 console.log('ok');
