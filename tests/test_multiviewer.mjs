@@ -100,6 +100,21 @@ const tall = arrange(4, 1263, 1213);  // four streams in a tall window: 2 x 2, n
 assert.equal(new Set(tall.map(r => r.y)).size, 2);
 const focus = arrange(4, 1600, 900, 6, 0);  // focus: the main one well over half the width, the others beside it
 assert.ok(focus[0].w > 1100 && focus.slice(1).every(r => r.x > focus[0].x + focus[0].w), JSON.stringify(focus));
+// a dragged Focus: any width from a quarter to 85 % still fits 21 streams (All drivers + the feed) apart, and a wider pull makes it bigger
+for (const [W, H] of [[1600, 900], [1263, 1213], [2560, 1080]]) for (const n of [2, 5, 21]) {
+  let last = 0;
+  for (const s of [0.1, 0.25, 0.5, 0.72, 0.85, 1]) {
+    const rs = arrange(n, W, H, 6, 0, s);
+    assert.ok(rs.length === n && inside(rs, W, H) && apart(rs) && rs.every(r => Math.abs(r.h / r.w - 9 / 16) < 1e-9), `share ${s} ${W}x${H} n${n}`);
+    assert.ok(rs[0].w >= last - 1e-6, `grows ${s} ${W}x${H} n${n}`);
+    last = rs[0].w;
+  }
+}
+// picture in picture: the main one fills the stage, the others inside it and apart from each other
+const pip = arrange(5, 1600, 900, 6, 2, 0.72, true);
+assert.deepEqual(pip[2], {x: 0, y: 0, w: 1600, h: 900});
+const others = pip.filter((_, i) => i !== 2);
+assert.ok(inside(pip, 1600, 900) && apart(others) && others.every(r => r.x > 800 && r.y > 450), JSON.stringify(pip));
 // Stream billboard chips: a weekend's sessions oldest first, short names; shows, highlights and press conferences left out
 const wk = [
   {title: '2026 Mexico City Grand Prix', kind: 'REPLAY', start: 5}, {title: 'Weekend Warm-Up - Mexico', kind: 'REPLAY', start: 0},
