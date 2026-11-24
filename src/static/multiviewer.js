@@ -177,10 +177,13 @@ function setup() {
   M.teamBtn = el('button', {class: 'mvbtn', popovertarget: 'mvteams', title: "Team view: the race feed with a team's two onboards"}, icon('teams'), 'Teams');
   M.more = el('div', {class: 'mvmore mvpop', popover: '', id: 'mvmore', 'aria-label': 'More'});
   M.moreBtn = el('button', {class: 'mvbtn mvicon', popovertarget: 'mvmore', title: 'More', 'aria-label': 'More'}, icon('more'));
-  // Apple's two layouts: every stream the same size, or the selected one big with the others beside it
-  const seg = (name, title, focus) => el('button', {title, 'aria-label': title, 'aria-pressed': String(!focus), onclick: () => setFocus(focus)}, icon(name));
+  // three layouts: every stream the same size, the selected one big with the others beside it (its edge drags to
+  // resize), or the selected one filling the screen with the others small over its corner
+  loadLayout();
+  const seg = (mode, title) => el('button', {title, 'aria-label': title, 'data-mode': mode, 'aria-pressed': String(mode === M.mode), onclick: () => setLayout(mode)}, icon({grid: 'grid', focus: 'spot', pip: 'pip'}[mode]));
   M.layout = el('div', {class: 'mvseg', role: 'group', 'aria-label': 'Layout'},
-    seg('grid', 'Grid: every stream the same size', false), seg('spot', 'Focus: the selected stream big, the others beside it', true));
+    seg('grid', 'Grid: every stream the same size'), seg('focus', 'Focus: the selected stream big, the others beside it; drag its edge to resize'),
+    seg('pip', 'Picture in picture: the selected stream full screen, the others small over its corner'));
 
   // 4K on unless it was switched off here (the decoder check below turns it off where the browser can't play it)
   M.uhd = (() => { try { return localStorage.getItem('f1tv-uhd') !== '0'; } catch (e) { return true; } })();
@@ -380,16 +383,19 @@ function fillPicker() {
   };
   M.picker.replaceChildren(M.pickTitle,
     el('h4', {}, 'Feeds'), el('div', {class: 'mvfeeds'}, feeds.map(s => el('button', {'data-ch': key(s), onclick: pick(s)}, streamName(s)))),
-    drivers.length ? el('h4', {}, 'Driver onboards') : null,
+    drivers.length ? el('h4', {class: 'mvdrvhead'}, 'Driver onboards', el('button', {class: 'mvall', title: 'Every driver onboard at once, each at the quality its tile fits',
+      onclick: () => { M.picker.hidePopover(); for (const s of drivers) if (!M.tiles.some(t => t.pick.value === key(s))) addTile(s, null, undefined, true); }}, 'All drivers')) : null,
     el('div', {class: 'mvdrivers'}, drivers.map(s => el('button', {'data-ch': key(s), style: `--c:${s.hex || '#888'}`, onclick: pick(s), title: `${s.driver ?? s.title} · ${s.team ?? ''}`},
       el('b', {}, s.number ?? ''), el('span', {}, s.title), el('small', {}, s.team ?? '')))));
 }
 
 // at: where it starts (s): a replay resumed from Continue watching
-function addTile(s, prefetch = null, at = undefined) {
+// fit: start on Auto (fits the tile) instead of the top rendition, for All drivers' 20+ small tiles
+function addTile(s, prefetch = null, at = undefined, fit = false) {
   const t = tile(s);
   t.prefetch = prefetch;
   t.startAt = at;
+  t.fit = fit;
   M.tiles.push(t);
   M.grid.append(t.root);
   relayout();
@@ -409,7 +415,10 @@ function removeTile(t) {
 // count that gives the biggest tiles, rows centred (a short last row too). Focus (`main`: its index): it big, the others
 // as thumbnails in a column beside it or a row under it, whichever leaves it bigger. The old CSS grid split the window
 // into equal cells whatever their shape, so a 16:9 picture floated in black bands and a 4th stream sat alone in a row.
-export function arrange(n, W, H, gap = 6, main = -1) {
+// share: the main tile's width as a part of the stage's (dragged on its edge). pip: the main one fills the stage, the
+// others small over its lower right corner.
+export const clampShare = s => Math.min(0.85, Math.max(0.25, s));
+export function arrange(n, W, H, gap = 6, main = -1, share = 0.72, pip = false) {
   const R = 9 / 16, out = [];
   if (!n || W <= 0 || H <= 0) return out;
   if (main < 0 || main >= n || n === 1) {
@@ -425,20 +434,26 @@ export function arrange(n, W, H, gap = 6, main = -1) {
     }
     return out;
   }
-  const k = n - 1;
-  // beside: a column of thumbnails at most a quarter of the width; under: a row of them along the bottom
-  const tA = Math.min(W / 4, (H - (k - 1) * gap) / k / R), mA = Math.min(W - tA - gap, H / R);
-  const tB = Math.min(W / 4, (W - (k - 1) * gap) / k), mB = Math.min((H - tB * R - gap) / R, W);
-  const thumbs = [];
-  let big;
-  if (mA >= mB) {
-    const x0 = (W - mA - gap - tA) / 2, colH = k * tA * R + (k - 1) * gap;
-    big = {x: x0, y: (H - mA * R) / 2, w: mA, h: mA * R};
-    for (let j = 0; j < k; j++) thumbs.push({x: x0 + mA + gap, y: (H - colH) / 2 + j * (tA * R + gap), w: tA, h: tA * R});
+  const k = n - 1, s = clampShare(share);
+  const move = (rs, dx, dy) => rs.map(r => ({x: r.x + dx, y: r.y + dy, w: r.w, h: r.h}));
+  const box = rs => {
+    const x = Math.min(...rs.map(r => r.x)), y = Math.min(...rs.map(r => r.y));
+    return {x, y, w: Math.max(...rs.map(r => r.x + r.w)) - x, h: Math.max(...rs.map(r => r.y + r.h)) - y};
+  };
+  let big, thumbs;
+  if (pip) {
+    big = arrange(1, W, H)[0];
+    // above the big one's control bar (~56 px), inside its picture
+    const g = arrange(k, W * 0.3, H * 0.36, gap), b = box(g);
+    thumbs = move(g, big.x + big.w - 12 - b.x - b.w, big.y + big.h - 64 - b.y - b.h);
   } else {
-    const y0 = (H - mB * R - gap - tB * R) / 2, rowW = k * tB + (k - 1) * gap;
-    big = {x: (W - mB) / 2, y: y0, w: mB, h: mB * R};
-    for (let j = 0; j < k; j++) thumbs.push({x: (W - rowW) / 2 + j * (tB + gap), y: y0 + mB * R + gap, w: tB, h: tB * R});
+    // beside: the others a grid in the column left over; under: a grid in the band below. Whichever covers more of the stage
+    const area = (m, rs) => m.w * m.h + rs.reduce((a, r) => a + r.w * r.h, 0);
+    const wA = Math.min(s * W, H / R), gA = arrange(k, W - wA - gap, H, gap), bA = box(gA), xA = (W - wA - gap - bA.w) / 2;
+    const A = [{x: xA, y: (H - wA * R) / 2, w: wA, h: wA * R}, move(gA, xA + wA + gap - bA.x, 0)];
+    const wB = Math.min(s * W, s * H / R), gB = arrange(k, W, H - wB * R - gap, gap), bB = box(gB), yB = (H - wB * R - gap - bB.h) / 2;
+    const B = [{x: (W - wB) / 2, y: yB, w: wB, h: wB * R}, move(gB, 0, yB + wB * R + gap - bB.y)];
+    [big, thumbs] = area(...A) >= area(...B) ? A : B;
   }
   for (let i = 0; i < n; i++) out.push(i === main ? big : thumbs.shift());
   return out;
@@ -446,31 +461,81 @@ export function arrange(n, W, H, gap = 6, main = -1) {
 
 const PAD = 8, GAP = 6;
 function relayout() {
-  const n = M.tiles.length, main = M.tiles.findIndex(t => t.root.classList.contains('big'));
-  for (const t of M.tiles) t.close.hidden = n === 1;
+  const n = M.tiles.length;
+  // Focus and PiP always have a big one: the selected stream, if none was picked (or it was removed)
+  if (n > 1 && M.mode !== 'grid' && !M.tiles.some(t => t.root.classList.contains('big'))) lead().root.classList.add('big');
+  const main = M.mode === 'grid' ? -1 : M.tiles.findIndex(t => t.root.classList.contains('big'));
+  for (const t of M.tiles) { t.close.hidden = n === 1; t.grip.hidden = n === 1 || M.mode === 'pip'; }
   M.layout.hidden = M.syncBtn.hidden = n < 2;  // a layout and lining streams up mean nothing with one stream
+  M.grid.classList.toggle('pip', M.mode === 'pip' && n > 1);
   showGoLive();
-  for (const b of M.layout.children) b.setAttribute('aria-pressed', String((b === M.layout.lastChild) === (main >= 0 && n > 1)));
+  for (const b of M.layout.children) b.setAttribute('aria-pressed', String(b.dataset.mode === M.mode));
   if (!n) return void M.grid.replaceChildren(el('p', {class: 'empty'}, 'Add a stream to start watching.'));
   M.grid.querySelector(':scope > .empty')?.remove();
   const {width, height} = M.grid.getBoundingClientRect();
-  arrange(n, width - 2 * PAD, height - 2 * PAD, GAP, n > 1 ? main : -1).forEach((r, i) => {
+  arrange(n, width - 2 * PAD, height - 2 * PAD, GAP, n > 1 ? main : -1, M.share, M.mode === 'pip').forEach((r, i) => {
     const st = M.tiles[i].root.style;
     st.left = `${PAD + r.x}px`; st.top = `${PAD + r.y}px`; st.width = `${r.w}px`; st.height = `${r.h}px`;
   });
 }
 
-// focus on a tile: it becomes the big one; again on the big one: back to the grid
+// the layout (Grid, Focus, PiP) and Focus's size stay for the next viewer, in this browser
+const LAYOUT = 'f1tv-layout';
+function loadLayout() {
+  const s = (() => { try { return JSON.parse(localStorage.getItem(LAYOUT)) || {}; } catch (e) { return {}; } })();
+  M.mode = ['grid', 'focus', 'pip'].includes(s.mode) ? s.mode : 'grid';
+  M.share = clampShare(+s.share || 0.72);
+}
+function saveLayout() {
+  try { localStorage.setItem(LAYOUT, JSON.stringify({mode: M.mode, share: M.share})); } catch (e) { /* storage off: lasts this visit */ }
+}
+
+// focus on a tile: it becomes the big one (PiP stays PiP); again on the big one: back to the grid
 function spotlight(t) {
-  const on = !t.root.classList.contains('big');
-  for (const x of M.tiles) x.root.classList.toggle('big', on && x === t);
+  if (M.mode !== 'grid' && t.root.classList.contains('big')) return setLayout('grid');
+  promote(t);
+  relayout();
+}
+function promote(t) {
+  for (const x of M.tiles) x.root.classList.toggle('big', x === t);
+  if (M.mode === 'grid') M.mode = 'focus';
+  saveLayout();
+}
+
+// the header's layout switch: Focus and PiP make the big one the selected stream (the one with the sound), unless one is big already
+function setLayout(mode) {
+  const big = M.tiles.find(t => t.root.classList.contains('big')) ?? lead();
+  M.mode = mode;
+  for (const t of M.tiles) t.root.classList.toggle('big', mode !== 'grid' && t === big);
+  saveLayout();
   relayout();
 }
 
-// the header's layout switch: focus makes the selected stream (the one with the sound) big
-function setFocus(on) {
-  const big = M.tiles.find(t => t.root.classList.contains('big')) ?? lead();
-  for (const t of M.tiles) t.root.classList.toggle('big', on && t === big);
+// a tile's right edge: drag it (or arrow keys on it) and that stream becomes the big one at that width, the others
+// re-flowing into what's left; the tiles follow the pointer without their .45 s glide
+function resizeStart(t, e) {
+  e.preventDefault();
+  e.stopPropagation();  // not a click on the tile: the sound stays where it is
+  const W = M.grid.clientWidth - 2 * PAD, x0 = e.clientX, grip = e.currentTarget;
+  if (M.mode === 'grid' || !t.root.classList.contains('big')) { M.share = clampShare(t.root.offsetWidth / W); promote(t); }
+  const s0 = M.share;
+  M.grid.classList.add('resizing');
+  grip.setPointerCapture(e.pointerId);
+  const move = ev => { M.share = clampShare(s0 + (ev.clientX - x0) / W); relayout(); };
+  const up = () => { grip.removeEventListener('pointermove', move); M.grid.classList.remove('resizing'); saveLayout(); };
+  grip.addEventListener('pointermove', move);
+  grip.addEventListener('pointerup', up, {once: true});
+  grip.addEventListener('pointercancel', up, {once: true});
+  relayout();
+}
+function resizeKey(t, e) {
+  const d = {ArrowRight: 0.05, ArrowUp: 0.05, ArrowLeft: -0.05, ArrowDown: -0.05}[e.key];
+  if (d === undefined) return;
+  e.preventDefault();
+  e.stopPropagation();  // not the video's seek keys
+  if (M.mode === 'grid' || !t.root.classList.contains('big')) promote(t);
+  M.share = clampShare(M.share + d);
+  saveLayout();
   relayout();
 }
 
@@ -481,6 +546,8 @@ function teamView(team) {
   for (const s of want) if (!M.tiles.some(t => t.pick.value === key(s))) addTile(s);
   for (const t of [...M.tiles]) if (!want.some(s => key(s) === t.pick.value)) removeTile(t);
   for (const t of M.tiles) t.root.classList.toggle('big', t.pick.value === key(feed));
+  if (M.mode === 'grid') M.mode = 'focus';
+  saveLayout();
   relayout();
 }
 
@@ -520,7 +587,9 @@ function tile(s) {
           el('label', {hidden: !M.session}, 'Telemetry overlay', drv), t.now)),
       el('button', {class: 'mvibtn', title: 'Focus: this stream big, the others beside it', 'aria-label': 'Focus on this stream',
         onclick: () => spotlight(t)}, icon('focus')), t.close),
-    el('span', {class: 'mvsound', title: 'You hear this stream; Sync lines the others up with it'}, icon('vol')), t.msg);
+    el('span', {class: 'mvsound', title: 'You hear this stream; Sync lines the others up with it'}, icon('vol')), t.msg,
+    t.grip = el('button', {class: 'mvgrip', title: 'Drag to resize this stream; the others make room', 'aria-label': 'Resize this stream (left and right arrow keys)',
+      onpointerdown: e => resizeStart(t, e), onkeydown: e => resizeKey(t, e)}));
   t.ctl = controls(t.video, t.root, () => t.player);
   t.root.append(t.ctl.bar);
   placeMarks(t);
@@ -642,6 +711,7 @@ const hasUhd = s => ['INTERNATIONAL', 'F1 LIVE', 'MAIN'].includes(s?.title);
 function lockTop(t) {
   const top = renditions(t.player.getVariantTracks()).video[0];
   const uhdFeed = hasUhd(M.content.streams.find(x => String(x.channelId ?? '') === t.pick.value));
+  if (t.fit) return applyQuality(t);  // vq '' = Auto: 20 onboards at 1080p50 each would swamp a laptop's decoder
   if (top) {
     t.vq.value = top.id;
     applyQuality(t);

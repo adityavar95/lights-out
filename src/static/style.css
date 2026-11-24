@@ -511,7 +511,16 @@ html:has(dialog.mv[open]) { overflow: hidden; }
 .mvgrid > .loading { position: absolute; inset: 0; justify-content: center; color: var(--mv-dim); }
 .mvtile { position: absolute; container-type: size; overflow: hidden; border-radius: var(--dp-radius-panel); background: #0a0a0c;
   transition: left .45s var(--mv-ease), top .45s var(--mv-ease), width .45s var(--mv-ease), height .45s var(--mv-ease); }
-/* the ring: a hairline on every tile; white round the stream you hear, bright for a moment as it changes */
+.mvgrid.resizing .mvtile { transition: none; }  /* dragging an edge: the tiles follow the pointer */
+.mvgrid.resizing { cursor: ew-resize; user-select: none; }
+/* picture in picture: the others float over the big one's corner, lifted off it */
+.mvgrid.pip .mvtile:not(.big) { z-index: 2; box-shadow: 0 10px 30px rgb(0 0 0 / .6); }
+/* the resize handle: a pill on the tile's right edge, shown with the tile's other controls, never with one stream or in PiP */
+.mvgrip { position: absolute; z-index: 6; top: 50%; right: 2px; width: 14px; height: 56px; translate: 0 -50%; padding: 0; border: 0;
+  background: none; cursor: ew-resize; opacity: 0; transition: opacity .2s var(--mv-ease); touch-action: none; }
+.mvgrip::before { content: ''; position: absolute; inset: 8px 4px; border-radius: var(--r-pill); background: rgb(255 255 255 / .7); box-shadow: 0 0 0 1px rgb(0 0 0 / .4); }
+.mvtile:is(.active, .paused) .mvgrip, .mvgrip:focus-visible, .mvgrid.resizing .mvgrip { opacity: 1; }
+.mvgrip:focus-visible { outline: 2px solid #fff; outline-offset: -2px; border-radius: var(--r-pill); }/* the ring: a hairline on every tile; white round the stream you hear, bright for a moment as it changes */
 .mvtile::after { content: ''; position: absolute; inset: 0; z-index: 4; border-radius: inherit; pointer-events: none;
   box-shadow: inset 0 0 0 1px rgb(255 255 255 / .07); transition: box-shadow .5s var(--mv-ease); }
 .mvgrid:has(.mvtile + .mvtile) .mvtile.audio::after { box-shadow: inset 0 0 0 2px rgb(255 255 255 / .5); }
@@ -630,6 +639,10 @@ summary.mvibtn::-webkit-details-marker { display: none; }
 .mvfeeds { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
 .mvfeeds button { height: 32px; padding: 0 12px; border: 0; border-radius: var(--r-pill); background: rgb(255 255 255 / .08); color: var(--mv-text); font: inherit;
   font-weight: 500; cursor: pointer; }
+.mvpicker h4.mvdrvhead { display: flex; align-items: center; justify-content: space-between; }
+.mvall { height: 28px; padding: 0 12px; border: 0; border-radius: var(--r-pill); background: rgb(255 255 255 / .12); color: var(--mv-text); font: inherit;
+  font-size: 12px; font-weight: 500; letter-spacing: normal; text-transform: none; cursor: pointer; }
+.mvall:hover { background: rgb(255 255 255 / .2); }
 .mvdrivers { display: grid; grid-template-columns: repeat(auto-fill, minmax(124px, 1fr)); gap: 8px; }
 .mvdrivers button { position: relative; display: grid; grid-template-columns: auto 1fr; align-items: center; column-gap: 8px; padding: 8px 8px 8px 12px;
   overflow: hidden; text-align: left; border: 0; border-radius: var(--dp-radius-panel); background: rgb(255 255 255 / .05); color: var(--mv-text); font: inherit; cursor: pointer; }
