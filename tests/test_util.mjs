@@ -1,6 +1,6 @@
 // get()'s cache (current-season TTL, past seasons kept, failures dropped, live URLs not piling up) and plain error words
 import assert from 'node:assert/strict';
-import {get, plain, signed, cellOrder} from '../src/static/util.js';
+import {get, plain, signed, cellOrder, rcIndex, bannerKind} from '../src/static/util.js';
 
 const year = new Date().getFullYear(), calls = {};
 let answer = () => ({ok: true, json: async () => ({rows: 1})});
@@ -100,3 +100,18 @@ const sorted = l => [...l].sort(cellOrder);
 assert.deepEqual(sorted(['+0.5 s', '−1.2 s', '+12.0 s', '-3 s', '±0.0 s']), ['-3 s', '−1.2 s', '±0.0 s', '+0.5 s', '+12.0 s']);
 assert.deepEqual(sorted(['1:31.002', '1:29.990', '1:30.5']), ['1:29.990', '1:30.5', '1:31.002']);
 assert.deepEqual(sorted(['10', '9', '−2.5 %']), ['−2.5 %', '9', '10']);
+
+// race-control calls: the index of the next message to announce (audiodeck.js)
+const rc = [[10, 'Drs', '', 'DRS ENABLED'], [20, '', '', 'A'], [30, '', '', 'B'], [40, '', '', 'C']];
+assert.equal(rcIndex(rc, 0), 0);    // session start: nothing passed
+assert.equal(rcIndex(rc, 25), 2);   // opened mid-session: the first two stay silent
+assert.equal(rcIndex(rc, 10), 1);   // playing past a message moves the index past it
+assert.equal(rcIndex(rc, 45), 4);   // seek forward over three
+assert.equal(rcIndex(rc, 15), 1);   // seek back
+assert.equal(rcIndex([], 99), 0);
+
+assert.equal(bannerKind('CHEQUERED FLAG'), 'chequered');
+assert.equal(bannerKind('RED FLAG'), 'red');
+assert.equal(bannerKind('SAFETY CAR DEPLOYED'), 'yellow');
+assert.equal(bannerKind('DRS ENABLED'), 'green');
+assert.equal(bannerKind('DRS DISABLED'), 'grey');

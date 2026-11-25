@@ -47,7 +47,7 @@ export function setupCard({year, race, list, onStart}) {
   const saved = loadSetup();
   const pick = (label, opts, value) => {
     const s = el('select', {class: 'neu', 'aria-label': label}, opts.map(([v, t]) => new Option(t, v)));
-    s.value = opts.some(([v]) => v === value) ? value : opts[0][0];
+    s.value = opts.some(([v]) => v === value) ? value : opts[0]?.[0] ?? '';
     return {s, row: el('label', {class: 'psrow'}, el('small', {}, label.toUpperCase()), s)};
   };
   const mode = pick('Mode', MODES, saved.mode);

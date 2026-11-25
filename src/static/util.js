@@ -201,6 +201,17 @@ export function cellOrder(x, y) {
 
 export const fmtDate = d => new Date(d + 'T00:00:00').toLocaleDateString(undefined, {day: 'numeric', month: 'short'});
 
+// race-control messages ([t, cat, flag, text], sorted by t) already at or before t: the next one to announce
+export function rcIndex(rc, t) {
+  let i = 0;
+  while (i < rc.length && rc[i][0] <= t) i++;
+  return i;
+}
+
+// a race-control banner's colour. \bRED\b: "CHEQUERED" contains RED
+export const bannerKind = text => (/SAFETY CAR|VSC|YELLOW/.test(text) ? 'yellow' : /CHEQUERED/.test(text) ? 'chequered' : /\bRED\b/.test(text) ? 'red'
+  : /SLIPPERY/.test(text) ? 'amber' : /PIT WINDOW/.test(text) ? 'blue' : /DISABLED/.test(text) ? 'grey' : 'green');
+
 // last item with item[0] <= t in an array sorted by item[0]
 export function lastBefore(arr, t) {
   let lo = 0, hi = arr.length - 1, ans = -1;

@@ -706,8 +706,10 @@ function tick(now) {
   if (covered()) return togglePlay();  // the F1 TV viewer opened over it: pause rather than race on unseen
   // the six seconds of start lights run in real time whatever the speed: at 10x they'd be gone in half a second
   const grid = S.lightsOut && S.t >= S.lightsOut - 6 && S.t < S.lightsOut;
-  const dt = Math.max(0, (now - S.last) / 1000) * (grid ? Math.min(1, S.speed) : S.speed);  // rAF's stamp can predate togglePlay's S.last
-  S.watched = (S.watched ?? 0) + (now - S.last) / 1000;  // real seconds played, once per race or session loaded
+  // rAF's stamp can predate togglePlay's S.last; a hidden tab stops rAF, so a long gap is not time watched
+  const real = Math.min(0.5, Math.max(0, (now - S.last) / 1000));
+  const dt = real * (grid ? Math.min(1, S.speed) : S.speed);
+  S.watched = (S.watched ?? 0) + real;  // real seconds played, once per race or session loaded
   if (S.watched >= 60 && !S.counted) { S.counted = true; count('watched_60s'); }
   let t0 = performance.now();
   if (S.sim) S.sim.advance(Math.min(dt, 2));  // the physics runs in race time; a stalled tab doesn't jump minutes ahead

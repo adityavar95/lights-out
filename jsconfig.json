@@ -18,6 +18,7 @@
     "src/static/sim.js",
     "src/static/vehicle.js",
     "src/static/share.js",
-    "src/static/palette.js"
+    "src/static/palette.js",
+    "src/static/app.js"
   ]
 }

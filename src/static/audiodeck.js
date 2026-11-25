@@ -1,7 +1,7 @@
 // Audio deck: the HUD mixer (sound on/off unlocks Web Audio on the first click; engine / effects / radio levels), the
 // per-frame car states the synthesis needs, and the race engineer's team radio (speech + squelch + banner).
 import * as THREE from 'three';
-import {el, led} from './util.js';
+import {el, led, rcIndex} from './util.js';
 import {audioScene} from './scene3d.js';
 import {startAudio, audioReady, updateAudio, squelch, duck, levels} from './audio.js';
 import {gearbox, engine} from './telemetry.js';
@@ -42,13 +42,14 @@ export function setupAudioDeck(deck, stage, getState) {
 // focus: the focused car's HUD readings (focus.js), used for its engine in replays
 export function updateAudioDeck(S, st, focus) {
   if (!audioReady() || !S?.data) return;
-  if (S !== lastS) { lastS = S; prev = {}; said = {}; rcSeen = (S.data.race_control || []).length; queue = []; }
+  if (S !== lastS) { lastS = S; prev = {}; said = {}; rcSeen = rcIndex(S.data.race_control || [], S.t); queue = []; }
   const sc = audioScene();
   if (!sc) return;
   // physical time step: the race clock's advance (replay speed and pauses included), so speeds and Doppler shifts are
   // the cars' real ones whatever the playback rate
   const dt = S.t - lastT, on = dt > 0 && dt < 5;
   lastT = S.t;
+  if (!on) rcSeen = rcIndex(S.data.race_control || [], S.t);  // a seek or pause: calls already passed stay silent
   // Replay positions are interpolated linearly between 0.5 s samples, so differenced velocities step every half
   // second, and with them the estimated revs and the Doppler pitch. A ~0.2 s low-pass turns the steps into glides.
   // Anything faster than 120 m/s is a camera cut or a data jump, not motion.

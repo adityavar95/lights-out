@@ -180,7 +180,7 @@ function setup() {
   // three layouts: every stream the same size, the selected one big with the others beside it (its edge drags to
   // resize), or the selected one filling the screen with the others small over its corner
   loadLayout();
-  const seg = (mode, title) => el('button', {title, 'aria-label': title, 'data-mode': mode, 'aria-pressed': String(mode === M.mode), onclick: () => setLayout(mode)}, icon({grid: 'grid', focus: 'spot', pip: 'pip'}[mode]));
+  const seg = (mode, title) => el('button', {title, 'aria-label': title, 'data-mode': mode, 'aria-pressed': String(mode === M.mode), onclick: () => setLayout(mode)}, icon({grid: 'grid', focus: 'spot', pip: 'pipmode'}[mode]));
   M.layout = el('div', {class: 'mvseg', role: 'group', 'aria-label': 'Layout'},
     seg('grid', 'Grid: every stream the same size'), seg('focus', 'Focus: the selected stream big, the others beside it; drag its edge to resize'),
     seg('pip', 'Picture in picture: the selected stream full screen, the others small over its corner'));

@@ -1,7 +1,7 @@
 # Audit fix plan (25 Nov 2026)
 
 Every fix from the two audits of 25 Nov 2026: the whole-repo audit (backend read in full) and the follow-up on what it
-skipped (all 92 frontend modules, build scripts, a browser run). Nothing here is implemented yet. One phase per session,
+skipped (all 92 frontend modules, build scripts, a browser run). Progress is in Status below. One phase per session,
 in order; each phase ends with `scripts/test_all.py` green and a short handover in `docs/handover/audit-<n>.md`.
 
 Line numbers are from the working tree on 25 Nov 2026 (branch `multiviewer-layouts`, uncommitted changes included) and
@@ -12,8 +12,8 @@ before changing anything, and drop the item if it doesn't hold.
 
 ## Status
 
-- [ ] Phase 0: baseline
-- [ ] Phase 1: confirmed user-visible bugs (frontend)
+- [x] Phase 0: baseline (25 Nov: test_all green in ~13 s; pending work committed as 81893cc)
+- [x] Phase 1: confirmed user-visible bugs (frontend), see `docs/handover/audit-1.md`
 - [ ] Phase 2: server safety and the F1 TV sign-in cache
 - [ ] Phase 3: stale results after a change (races between async work and the UI)
 - [ ] Phase 4: 3D stage correctness and GPU leaks

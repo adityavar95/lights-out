@@ -1,7 +1,7 @@
 // App shell: the Races / Simulate / Stream switch (Stream is the F1 TV browse page, stream.js), the Watch / Simulate switch, race dropdown, race header and tabs. Watch is the race browser (replays of
 // real sessions, results, standings, live timing); Simulate drops the browser chrome for a full-window physics race
 // on the chosen circuit (circuit and car pickers on the stage, season = the cars' era).
-import {get, rows, el, flag, fmtDate, teamColor, inkOn, count, failed, skeleton, toast, roll, replayKind, REPLAY_KINDS} from './util.js';
+import {get, rows, el, flag, fmtDate, cellOrder, teamColor, inkOn, count, failed, skeleton, toast, roll, replayKind, REPLAY_KINDS} from './util.js';
 import {renderResults, renderLapChart, renderStandings} from './charts.js';
 import {seasonTrends} from './seasonview.js';
 import {setupExplorer} from './explorer.js';
