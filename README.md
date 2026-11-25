@@ -26,7 +26,7 @@
 
 ### 🎬 The trailer
 
-https://github.com/user-attachments/assets/437018d1-d11f-4200-82bf-0fa081b1e8d3
+https://github.com/user-attachments/assets/82218406-cb93-4c18-962b-f75ac5a1c396
 
 <sub><b>▶ 29 seconds, sound on.</b> Five lights, five things it does: replay every race in 3D, timing and strategy, drive any era, every number, 4K HDR multiview. Then lights out. Every shot is the real app. · <a href="docs/media/lights-out-trailer.mp4">Download (mp4)</a> · <a href="docs/media/lights-out-trailer.jpg">poster</a></sub>
 
