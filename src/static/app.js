@@ -41,7 +41,8 @@ const $ = id => document.getElementById(id);
 const A = {year: null, round: null, races: [], mode: 'watch', section: 'analytics', extra: {}};
 const today = () => new Date().toISOString().slice(0, 10);  // read per call: a tab open past midnight or New Year
 const ORDER = ['Practice 1', 'Practice 2', 'Practice 3', 'Sprint Qualifying', 'Sprint Shootout', 'Sprint', 'Qualifying', 'Race'];
-const jol = (kind, round) => get(`/api/jolpica/${A.year}/${kind}${round ? `?round=${round}` : ''}`).then(rows);
+const jol = (kind, round, year = A.year) => get(`/api/jolpica/${year}/${kind}${round ? `?round=${round}` : ''}`).then(rows);
+const jolFor = year => (kind, round) => jol(kind, round, year);  // sections that load on open keep the season they were drawn for
 const ordinal = n => `R${n}`;  // round, as F1's graphics write it
 const race = round => A.races.find(x => x.round === String(round));
 const hasRun = r => at(r, '') <= new Date();  // lights out has gone: a race later today hasn't
@@ -59,8 +60,8 @@ const noLaps = round => {
 // Each tab fetches its data, then returns a function that draws it (skipped if the user moved on meanwhile).
 const TABS = {
   results: async r => {  // Race / Sprint / Qualifying; the one picked last stays picked from race to race
-    const [res, spr, q] = await Promise.all([jol('results', r), jol('sprint', r), jol('qualifying', r)]);
-    return () => { renderResults($('tab-results'), res, spr, q, A.resView, v => { A.resView = v; }); $('tab-results').append(...resultLedgers(A.year, r, res, jol, ORDER.filter(n => ran(race(r), n)))); };
+    const year = A.year, [res, spr, q] = await Promise.all([jol('results', r), jol('sprint', r), jol('qualifying', r)]);
+    return () => { renderResults($('tab-results'), res, spr, q, A.resView, v => { A.resView = v; }); $('tab-results').append(...resultLedgers(year, r, res, jolFor(year), ORDER.filter(n => ran(race(r), n)))); };
   },
   lapchart: async r => {
     const [laps, res, pits] = await Promise.all([jol('laps', r), jol('results', r), jol('pitstops', r)]);
@@ -81,7 +82,7 @@ const TABS = {
       note = `${hasRun(x) ? `No standings after the ${x.raceName} yet` : `The ${x.raceName} hasn't run yet`}. These are the latest ${A.year} standings.`;
     }
     const year = A.year;
-    return () => { renderStandings($('tab-standings'), d, c, note); $('tab-standings').append(seasonTrends(year, jol)); };
+    return () => { renderStandings($('tab-standings'), d, c, note); $('tab-standings').append(seasonTrends(year, jolFor(year))); };
   },
   drivers: async () => {  // the whole season, whichever race is picked
     const [st, res, dr] = await Promise.all([jol('driverstandings'), jol('results'), jol('drivers')]);

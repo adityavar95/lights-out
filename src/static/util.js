@@ -284,3 +284,21 @@ export function roll(node, text) {
 export const REPLAY_KINDS = {gps: ['3D GPS', "Every car's real position on track"], laps: ['Lap replay', 'Positions worked out from lap times'],
   results: ['Results only', 'No lap timing before 1996: results, standings and drivers']};
 export const replayKind = (year, date) => date > new Date().toISOString().slice(0, 10) ? null : year >= 2023 ? 'gps' : year >= 1996 ? 'laps' : 'results';
+
+// Engine voices (audio.js): have is each voice's car id (null: free), want the cars to hear, hero first. Cars keep the
+// voice they have, voice 0 always takes the hero, and a hero taken from another voice frees that one (no car twice).
+/** @param {(string|null)[]} have @param {string[]} want @returns {(string|null)[]} */
+export function voiceIds(have, want) {
+  const next = have.map(id => (id !== null && want.includes(id) ? id : null));
+  if (want.length && next[0] !== want[0]) {
+    const i = next.indexOf(want[0]);
+    if (i > 0) next[i] = null;
+    next[0] = want[0];
+  }
+  for (const id of want.slice(1)) {
+    if (next.includes(id)) continue;
+    const free = next.findIndex((x, i) => i > 0 && x === null);
+    if (free > 0) next[free] = id;
+  }
+  return next;
+}

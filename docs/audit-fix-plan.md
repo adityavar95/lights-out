@@ -15,7 +15,7 @@ before changing anything, and drop the item if it doesn't hold.
 - [x] Phase 0: baseline (25 Nov: test_all green in ~13 s; pending work committed as 81893cc)
 - [x] Phase 1: confirmed user-visible bugs (frontend), see `docs/handover/audit-1.md`
 - [x] Phase 2: server safety and the F1 TV sign-in cache, see `docs/handover/audit-2.md`
-- [ ] Phase 3: stale results after a change (races between async work and the UI)
+- [x] Phase 3: stale results after a change (races between async work and the UI), see `docs/handover/audit-3.md`
 - [ ] Phase 4: 3D stage correctness and GPU leaks
 - [ ] Phase 5: per-frame waste
 - [ ] Phase 6: lean: duplicates, dead code, small leftovers

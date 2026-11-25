@@ -362,6 +362,7 @@ function reset(extra) {
   clearTimeout(ui.hintTimer);
   stopReel();
   S = {t: 0, playing: false, speed: ui.speed, selected: null, data: null, track: null, token: {}, cam: 'overview', tele: {}, ...extra};
+  ui.stage.classList.remove('setup');  // left Play's setup card (for live, say): it hides the HUD
   ui.stage.classList.remove('driving');  // left Play mid-drive: render, which clears it, waits for the next load's data
   enableInput(false);
   for (const c of [ui.session, ui.play, ui.speeds, ui.scrub]) c.hidden = !!S.live;  // live has no playback controls
@@ -560,10 +561,12 @@ function showMarks(marks) {
 }
 
 // one clip, through the server with the reader's F1 TV token (F1 refuses the audio without one)
-let clipAudio = null;
+let clipAudio = null, clipCall = 0;
 async function playClip(url) {
   clipAudio?.pause();
+  const call = ++clipCall;
   const r = await fetch(`/api/f1tv/radio/audio?${new URLSearchParams({u: url})}`, {headers: tvHeaders()}).catch(() => null);
+  if (call !== clipCall) return;  // another pin was clicked meanwhile
   if (!r?.ok) return announce(r?.status === 401 ? 'Connect F1 TV in Stream to hear team radio' : 'That radio message would not play');
   const src = URL.createObjectURL(await r.blob()), a = clipAudio = new Audio(src);
   a.onended = a.onpause = () => URL.revokeObjectURL(src);
@@ -828,6 +831,7 @@ function prepare(data) {
                      : data.mode === 'live' ? ui.mode.textContent
                                             : 'Race · lap-timing replay (approximate positions)';
   S.towerAt = 0;
+  S.momFor = null;  // a new session of the same car: redraw its momentum strip
 }
 
 // Where sectors 2 and 3 start: where the car was when the fastest lap with sector times crossed each sector line

@@ -681,6 +681,7 @@ async function load(t, at) {
     // live: everything follows F1 Live studio, so when it (or any live stream) loads, line the live tiles up with it
     if (t.player.isLive()) sync();
   } catch (e) {
+    if (!M.tiles.includes(t) || t.pick.value !== ch || e.code === 7000) return;  // closed, switched, or LOAD_INTERRUPTED by a newer load
     t.msg.className = 'mvmsg';
     t.msg.textContent = playError(e);
   }

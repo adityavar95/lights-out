@@ -96,6 +96,7 @@ console.log('rcText ok');
 
 // inkOn: dark ink on light team colours, white on dark ones
 import {inkOn} from '../src/static/util.js';
+import {voiceIds} from '../src/static/util.js';
 assert.equal(inkOn('#FFFFFF'), '#000');
 assert.equal(inkOn('#27F4D2'), '#000', 'Mercedes teal');
 assert.equal(inkOn('#FF8000'), '#000', 'McLaren orange');
@@ -126,3 +127,9 @@ assert.equal(bannerKind('RED FLAG'), 'red');
 assert.equal(bannerKind('SAFETY CAR DEPLOYED'), 'yellow');
 assert.equal(bannerKind('DRS ENABLED'), 'green');
 assert.equal(bannerKind('DRS DISABLED'), 'grey');
+
+// engine voices: the focused car never plays on two voices
+assert.deepEqual(voiceIds(['a', 'b', 'c'], ['b', 'a', 'c']), ['b', 'a', 'c']);  // hero taken from an ambient voice, old hero gets the freed one
+assert.deepEqual(voiceIds(['a', 'b', null], ['a', 'c', 'b']), ['a', 'b', 'c']);  // hero unchanged: cars keep their voices
+assert.deepEqual(voiceIds(['a', 'b', 'c'], ['c', 'b']), ['c', 'b', null]);      // hero from voice 2, which is freed
+assert.deepEqual(voiceIds(['a', 'b'], []), [null, null]);                        // hero gone: every voice free

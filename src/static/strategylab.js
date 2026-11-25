@@ -51,7 +51,7 @@ export function renderStrategyLab(root, laps, results, pits, year, why, round, l
   // apply: load the best plan too (the tab opens on it, so the first thing shown is an answer, not "±0.0 s")
   async function findBest(apply = false) {
     best.replaceChildren(el('div', {class: 'loading'}, el('div', {class: 'spinner'}), 'Trying every 1, 2 and 3-stop plan…'));
-    const id = S.id, opts = {pass: PASS[S.pass], minStops: year >= 2007 ? 1 : 0}, n = Math.min(8, navigator.hardwareConcurrency || 2);
+    const id = S.id, pass = S.pass, opts = {pass: PASS[pass], minStops: year >= 2007 ? 1 : 0}, n = Math.min(8, navigator.hardwareConcurrency || 2);
     // the plans split over the CPU's cores (optimiser.js workers): ~0.3 s on this thread froze the page
     const parts = await Promise.all(Array.from({length: n}, (_, k) => new Promise((ok, fail) => {
       const w = new Worker(new URL('./optimiser.js', import.meta.url), {type: 'module'});
@@ -59,7 +59,7 @@ export function renderStrategyLab(root, laps, results, pits, year, why, round, l
       w.onerror = e => { w.terminate(); fail(e); };
       w.postMessage({M, id, opts: {...opts, part: [k, n]}});
     }))).catch(() => [optimise(M, id, opts)]);  // no workers: here, as before
-    if (id !== S.id) return;
+    if (id !== S.id || pass !== S.pass) return;  // another driver or overtaking setting meanwhile
     const plans = ranked(parts.flat()), real = simulate(M, id, M.stops[id], {pass: PASS[S.pass]});
     best.replaceChildren(el('h3', {}, 'Best plans found'), ...plans.map(p => el('button', {
       class: 'labplan', onclick: () => { S.plan = [...p.plan]; change(); }},
