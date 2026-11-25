@@ -524,7 +524,7 @@ export function buildCircuit(world, {pts, map, tex, width, startKnown, ann, corn
     }
   };
   if (city) fell((x, z) => !city.inside(x, z));
-  let laneMeshes = [], laneMat, laneLine;
+  let laneMeshes = [], laneMat, laneLine, lanePath = null;
 
   return {
     trackMat, cloud: cloudAmt, wetDark, wettable, surface, groundAt, pts, half, night: v => { side.night(v); city?.night(v); },
@@ -534,7 +534,18 @@ export function buildCircuit(world, {pts, map, tex, width, startKnown, ann, corn
       for (const o of side.meshes) o.visible = trackside;
       if (city) city.mesh.visible = trackside;
     },
-    lights: n => start?.userData.lights(n),  // the start gantry's red lamps lit, 0-5
+    lights: n => start?.userData.lights(n),
+    // whether scene point p is on the pit lane or its box: within 6 m of the lane's centre line (x, z); null before a lane is set
+    onLane(p) {
+      if (!lanePath) return null;
+      const r2 = m(6) ** 2;
+      for (let k = 1; k < lanePath.length; k++) {
+        const a = lanePath[k - 1], b = lanePath[k], dx = b.x - a.x, dz = b.z - a.z, len2 = dx * dx + dz * dz;
+        const t = len2 ? Math.min(1, Math.max(0, ((p.x - a.x) * dx + (p.z - a.z) * dz) / len2)) : 0;
+        if ((p.x - a.x - t * dx) ** 2 + (p.z - a.z - t * dz) ** 2 < r2) return true;
+      }
+      return false;
+    },  // the start gantry's red lamps lit, 0-5
     // Pit lane (map points of its centre line, entry road to exit road): a strip on the ground beside the track,
     // replacing any earlier one, with a line along each edge. The barrier on its side moves in to become the pit wall
     // 1 m off the lane's edge, or opens where that would leave no room beside the track (the entry and exit roads).
@@ -548,6 +559,7 @@ export function buildCircuit(world, {pts, map, tex, width, startKnown, ann, corn
       let hint;
       const near = lanePts.map(q => { const s = surface(q, hint); hint = s.i; return s; });
       const lp = near.map(s => s.p.clone().setY(s.y)), LF = frames(lp, lp.map(() => 0)), laneHalf = m(2.8);
+      lanePath = lp;
       laneMat ??= mat(tex.asphalt, 0x8c8c8c);
       laneLine ??= new THREE.MeshStandardMaterial({color: 0xf4f4f4, roughness: 0.8, side: THREE.DoubleSide});
       // 12 cm up: the terrain's triangles can stand a little above its bilinear height on a slope
@@ -745,7 +757,7 @@ function gantry(f, w, m, tex, mps) {
   g.position.copy(f.P);
   g.rotation.y = Math.atan2(-f.T.z, f.T.x);
   const add = (geo, mat, x, y, z) => { const o = new THREE.Mesh(geo, mat); o.position.set(x, y, z); o.castShadow = true; g.add(o); return o; };
-  const checker = tex.checker.clone();
+  const checker = tex.checker.clone();  // this gantry's own: dispose() frees it with the lamp materials
   checker.repeat.set(1, w * mps / 8);
   checker.needsUpdate = true;
   const line = add(new THREE.PlaneGeometry(m(1.6), w), new THREE.MeshStandardMaterial({map: checker, roughness: 0.8}), 0, 0.035, 0);
@@ -778,6 +790,6 @@ function gantry(f, w, m, tex, mps) {
     lamps.push([0.25, -0.25].map(dy => Object.assign(add(lampGeo, off, X - m(0.565), low - m(0.4) + m(dy), i * m(0.95)), {castShadow: false})));
   }
   g.userData.lights = n => lamps.forEach((pair, i) => pair.forEach(l => { l.material = i < n ? on : off; }));
-  g.userData.mats = [on, off];  // dispose() frees both: the traversal only sees the ones in use
+  g.userData.mats = [on, off, checker];  // dispose() frees these: the traversal only sees the materials in use, and no map
   return g;
 }

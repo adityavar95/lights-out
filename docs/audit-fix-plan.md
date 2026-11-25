@@ -16,7 +16,7 @@ before changing anything, and drop the item if it doesn't hold.
 - [x] Phase 1: confirmed user-visible bugs (frontend), see `docs/handover/audit-1.md`
 - [x] Phase 2: server safety and the F1 TV sign-in cache, see `docs/handover/audit-2.md`
 - [x] Phase 3: stale results after a change (races between async work and the UI), see `docs/handover/audit-3.md`
-- [ ] Phase 4: 3D stage correctness and GPU leaks
+- [x] Phase 4: 3D stage correctness and GPU leaks, see `docs/handover/audit-4.md`
 - [ ] Phase 5: per-frame waste
 - [ ] Phase 6: lean: duplicates, dead code, small leftovers
 - [ ] Phase 7: optional items (decide, then do or close)

@@ -11,7 +11,7 @@ import {brakeStep, brakeGlow} from './telemetry.js';
 import {loadRB22, rb22Ready, STEERING_RATIO} from './rb22.js';
 import {makeMirror, renderMirrors, warmFor, warmMirrors} from './mirror.js';
 import {createPost} from './post.js';
-import {loadGraphics, saveGraphics, nextPreset, presetOf, deviceTier, defaultsFor} from './graphics.js';
+import {loadGraphics, saveGraphics, nextPreset, presetOf, deviceTier, defaultsFor, setTier} from './graphics.js';
 import {createVfx, haze} from './vfx.js';
 import {textures} from './textures3d.js';
 import {buildCircuit} from './circuit3d.js';
@@ -114,6 +114,7 @@ export function init3d(el) {
   container = el;
   // software rendering or a phone can't carry supersampling, 4k photos or the sharper satellite ground
   tier = deviceTier(probeGpu());
+  setTier(tier);
   high = tier === 'desktop';
   // Reversed depth instead of the old logarithmic buffer: same range from a car's wing to the far hills, without writing
   // frag depth from every fragment, which disabled early-z across the whole scene.
@@ -438,6 +439,7 @@ export function setDaylight(lat, lon, at) {
 // The HDR panorama becomes the background (a cube map) and, PMREM-prefiltered (a mip per roughness level), the image-based
 // light for diffuse ambient and reflections. The sun light is aimed at its brightest texel (the moon at night) so shadows agree.
 function loadSky(preset) {
+  if (!pmrem) return;  // before the device is up (setDaylight, setWeather): init3d's ready loads skyIndex()'s sky itself
   const token = ++skyToken;
   stage('sky', `Sky: ${preset.name}`);
   const load = (url, next) => new HDRLoader().load(url, hdr => {
@@ -981,9 +983,9 @@ export function updateCars(pos, ahead, focus, rate = 1, progress = 1, fx = null)
     c.haze.visible = gfx.haze && away < m(60);  // transmission re-renders the scene: only when it shows
     c.tag.element.classList.toggle('far', away > m(150));  // just the number: a full tag dwarfs a car this far off
     if (next && rate > 0 && dt > 0) effects(c, at, next, dt * rate, dt, fx?.[id]);
-    // standing still off the track (in the pit lane): its crew comes out from the garage side, further from the track
-    // than the car (car frame: +z is its right; lat > 0 is left of the centre line)
-    if (rate > 0 && dt > 0) crews.track(id, c, c.v < 1.5 && Math.abs(road.lat) > circuit.half + m(3), road.lat > 0 ? -1 : 1, c.color, dt * rate);
+    // standing still in the pit lane (not stuck in a run-off): its crew comes out from the garage side, further from the
+    // track than the car (car frame: +z is its right; lat > 0 is left of the centre line). No lane yet: 3 m clear of the track
+    if (rate > 0 && dt > 0) crews.track(id, c, c.v < 1.5 && (circuit.onLane(at) ?? Math.abs(road.lat) > circuit.half + m(3)), road.lat > 0 ? -1 : 1, c.color, dt * rate);
     if (c.wheels) chassis(c, turn, moved, fx?.[id]);
     // 4 Hz flash while harvesting (or derating), and in the rain, as the FIA rain light
     c.light.emissiveIntensity = (fx?.[id]?.light || vfx.rain > 0.1) && now % 250 < 125 ? 0.15 : 2;

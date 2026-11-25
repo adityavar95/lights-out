@@ -74,6 +74,7 @@ function photo(name, metres, tile, fallback) {
 // kind 'lush' is that atlas (conifers and broadleaf trees); 'palm' (right half: one frond, trunk end at its left edge) and
 // 'arid' (left half: a sparse olive-grey crown) draw their own, in the same 2:1 layout.
 function foliage(kind = 'lush', S = 2048) {
+  seed = 1 + ['lush', 'palm', 'arid'].indexOf(kind);  // the same trees whichever circuit is opened first
   const c = document.createElement('canvas');
   c.width = 2 * S;
   c.height = S;
