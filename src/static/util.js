@@ -186,6 +186,12 @@ export function fmtClock(s) {
   return `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
 }
 
+// NaN when empty
+export const median = a => {
+  const s = [...a].sort((x, y) => x - y), m = s.length >> 1;
+  return s.length ? (s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2) : NaN;
+};
+
 export function fmtLap(s) {
   if (s === null || s === undefined) return '';
   s = Math.round(s * 1000) / 1000;  // else 119.9997 (a simulated lap) prints as 1:60.000

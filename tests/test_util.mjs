@@ -1,6 +1,13 @@
 // get()'s cache (current-season TTL, past seasons kept, failures dropped, live URLs not piling up) and plain error words
 import assert from 'node:assert/strict';
-import {get, plain, signed, cellOrder, rcIndex, bannerKind, forgetReplays} from '../src/static/util.js';
+import {get, plain, signed, cellOrder, rcIndex, bannerKind, forgetReplays, median, fmtLap} from '../src/static/util.js';
+
+assert.equal(fmtLap(119.9996), '2:00.000');
+assert.equal(fmtLap(83.4), '1:23.400');
+assert.equal(fmtLap(null), '');
+assert.ok(Number.isNaN(median([])));
+assert.equal(median([3, 1, 2]), 2);
+assert.equal(median([1, 2, 3, 10]), 2.5);
 
 const year = new Date().getFullYear(), calls = {};
 let answer = () => ({ok: true, json: async () => ({rows: 1})});

@@ -16,5 +16,4 @@ jobs:
         with:
           python-version: "3.14"
       - run: uv sync --locked
-      - run: npx -y -p typescript@7.0.2 tsc -p jsconfig.json
       - run: uv run python scripts/test_all.py

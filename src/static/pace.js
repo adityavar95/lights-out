@@ -2,10 +2,8 @@
 // All of it reads the real lap times (M.times, M.cum). M.cum ends at a driver's first missing lap, so a hole or a
 // retirement ends a line, a stint and a ledger window without any special case here.
 
-const median = a => {
-  const s = [...a].sort((x, y) => x - y), m = s.length >> 1;
-  return s.length ? (s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2) : NaN;
-};
+import {median} from './util.js';
+
 
 const S_PER_KG = 0.03, FUEL_KG = 110;  // lap time per kg of fuel; the load today's cars start on (estimates, both)
 const OFF = 2;                         // s from the stint median: traffic, a mistake, damage, not the tyres

@@ -1,6 +1,6 @@
 // Broadcast / pit-wall HUD: glass panels laid round the edge of the 3D view (bento layout, the centre stays clear),
 // with the telemetry cluster, g-force friction circle, tyre thermal matrix and circuit radar.
-import {el, svg, fmtClock, lastBefore, led, rcText, setAttr, setText} from './util.js';
+import {el, svg, fmtClock, fmtLap, lastBefore, led, rcText, setAttr, setText} from './util.js';
 import {CORNERS, tyreColor} from './telemetry.js';
 import {nearestPoint} from './pitdata.js';
 
@@ -192,11 +192,11 @@ export function renderFocus(f) {
   }
   if (h.lap.hidden !== !f.lap) h.lap.hidden = !f.lap;
   if (f.lap) {
-    const lapT = s => `${Math.floor(s / 60)}:${(s % 60).toFixed(3).padStart(6, '0')}`, dt = f.lap.delta;
-    setText(h.lapT, f.lap.time === null ? '–:––.–––' : lapT(f.lap.time));
+    const dt = f.lap.delta;
+    setText(h.lapT, f.lap.time === null ? '–:––.–––' : fmtLap(f.lap.time));
     setText(h.lapD, f.lap.deleted ? 'DELETED' : dt === null ? '' : `${dt < 0 ? '−' : '+'}${Math.abs(dt).toFixed(3)}`);
     setAttr(h.lapD, 'data-s', dt < 0 && !f.lap.deleted ? '-' : '+');
-    setText(h.lapB, f.lap.best ? `BEST ${lapT(f.lap.best)}` : '');
+    setText(h.lapB, f.lap.best ? `BEST ${fmtLap(f.lap.best)}` : '');
   }
   h.thr.style.height = `${f.throttle ?? 0}%`;
   h.brk.style.height = `${f.brake ?? 0}%`;

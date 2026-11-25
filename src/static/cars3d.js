@@ -61,7 +61,7 @@ export function spec(year) {
 const fract = x => x - Math.floor(x);
 
 // RGBA data texture from fn(u, v) -> [r, g, b, a] in 0..1. Holds vectors, not colours, so it stays out of sRGB decoding.
-export function dataTex(size, fn, repeat = true) {
+function dataTex(size, fn, repeat = true) {
   const d = new Uint8Array(size * size * 4);
   for (let y = 0; y < size; y++)
     for (let x = 0; x < size; x++)

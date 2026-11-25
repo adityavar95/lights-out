@@ -558,7 +558,7 @@ export function setTrack(pts, span, corners, startKnown, mpu, width = 13, ann = 
   if (mode === 'overview') fly = {from, target, to: camera.position.clone(), aim: controls.target.clone(), t: 0};
 }
 
-export function resetView() {
+function resetView() {
   chased = null;
   controls.target.set(0, 0, 0);
   const fit = THREE.MathUtils.clamp(1.25 / camera.aspect, 1, 1.5);  // portrait stage: the circuit is limited by the width

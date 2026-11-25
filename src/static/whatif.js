@@ -6,12 +6,9 @@
 // shortcut: no tyre cliff, compounds or fuel loads (refuelling era) and other cars don't react; it ranks plans, it
 // doesn't predict a race to the tenth.
 import {clamp} from './telemetry.js';
+import {median} from './util.js';
 
 const secs = s => String(s).split(':').reduce((a, p) => a * 60 + +p, 0);
-const median = a => {
-  const s = [...a].sort((x, y) => x - y), m = s.length >> 1;
-  return s.length ? (s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2) : NaN;
-};
 export const SC_LOSS = 0.5;   // a stop under SC/VSC costs about half: the field laps slowly meanwhile
 const NEUTRAL = 1.1;          // a lap whose field median is 10 % over the race's typical lap is neutralised
 const GAP = 0.3;              // s behind a car the driver can't pass

@@ -1,6 +1,6 @@
 // The Results tab's sections, each fetched when it is opened: the pit-stop league table, the overtake ledger, and from a
 // session's own laps (quali.js) qualifying's evolution and practice's long runs.
-import {el, failed, get, skeleton, teamColor, th, trackStatus, lastBefore, csvButton, fmtLap, fmtClock, signed as sign} from './util.js';
+import {el, failed, get, skeleton, teamColor, th, trackStatus, lastBefore, csvButton, fmtLap, fmtClock, median, signed as sign} from './util.js';
 import {qualiEvolution, longRuns, idealLaps, MIN_RUN, SPREAD, LIMIT} from './quali.js';
 import {raceModel} from './whatif.js';
 import {ratings} from './pace.js';
@@ -14,11 +14,6 @@ export function stopSeconds(s) {
   if (!/^(\d+:){0,2}\d+(\.\d+)?$/.test(s ?? '')) return null;
   return String(s).split(':').reduce((sum, p) => sum * 60 + +p, 0);
 }
-
-const median = xs => {
-  const s = [...xs].sort((a, b) => a - b), m = s.length >> 1;
-  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
-};
 
 // pits: Jolpica rows; results: the race's, for each driver's team. Quickest median first
 export function pitLeague(pits, results) {
@@ -223,7 +218,7 @@ export function stewards(rc) {
 }
 
 function stewardParts(year, round, d) {
-  const {rows, tally} = stewards(d.race_control), label = payloadLabel(d.drivers), by = Object.fromEntries((d.drivers ?? []).map(x => [x.code, x]));
+  const {rows, tally} = stewards(d.race_control), by = Object.fromEntries((d.drivers ?? []).map(x => [x.code, x]));
   const cell = code => driverCell({code, color: by[code]?.color ?? 'var(--muted)'});
   if (!rows.length) return [none('Race control shows no penalties, investigations or deleted laps in this race.')];
   const head = ['Driver', 'Penalties', 'Investigated', 'Laps deleted', 'Warnings'], log = ['Time', 'What', 'Driver', 'Message'];

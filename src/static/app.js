@@ -13,7 +13,7 @@ import {capturing} from './input.js';
 import {setupPalette, openPalette, openSheet, openCounts, copyLink} from './palette.js';
 import {openReaction} from './reaction.js';
 import {PRESETS} from './circuits.js';
-import {parseHash, formatHash, held} from './share.js';
+import {parseHash, formatHash, held, SESSIONS as ORDER} from './share.js';
 import {resultLedgers} from './ledgers.js';
 import {setupDownloads, startDownload, canDownload} from './downloads.js';
 import {spoilerFree, setSpoilerFree, hides, reveal, recent} from './spoilers.js';
@@ -40,7 +40,6 @@ const $ = id => document.getElementById(id);
 // extra: the open view's own state in the address (share.js career, focus + stops, car), sent by its module as f1:address
 const A = {year: null, round: null, races: [], mode: 'watch', section: 'analytics', extra: {}};
 const today = () => new Date().toISOString().slice(0, 10);  // read per call: a tab open past midnight or New Year
-const ORDER = ['Practice 1', 'Practice 2', 'Practice 3', 'Sprint Qualifying', 'Sprint Shootout', 'Sprint', 'Qualifying', 'Race'];
 const jol = (kind, round, year = A.year) => get(`/api/jolpica/${year}/${kind}${round ? `?round=${round}` : ''}`).then(rows);
 const jolFor = year => (kind, round) => jol(kind, round, year);  // sections that load on open keep the season they were drawn for
 const ordinal = n => `R${n}`;  // round, as F1's graphics write it
