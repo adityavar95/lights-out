@@ -310,8 +310,10 @@ export function createVfx(scene) {
         const rel = rPos[j + a] - cam.getComponent(a);  // wrap round the box so it always surrounds the camera
         if (rel < -box || rel > box || (a === 1 && rPos[j + 1] < 0)) rPos[j + a] = cam.getComponent(a) + (a === 1 ? rnd(0, 1) * box : rnd(-box, box));
       }
-      rDraw.set([rPos[j], rPos[j + 1], rPos[j + 2], rPos[j] - (fall[0] - camVel.x) * ex, rPos[j + 1] - (fall[1] - camVel.y) * ex,
-                 rPos[j + 2] - (fall[2] - camVel.z) * ex], o);
+      rDraw[o] = rPos[j]; rDraw[o + 1] = rPos[j + 1]; rDraw[o + 2] = rPos[j + 2];  // no array per drop per frame
+      rDraw[o + 3] = rPos[j] - (fall[0] - camVel.x) * ex;
+      rDraw[o + 4] = rPos[j + 1] - (fall[1] - camVel.y) * ex;
+      rDraw[o + 5] = rPos[j + 2] - (fall[2] - camVel.z) * ex;
     }
     if (!dry) rAttr.needsUpdate = true;
     uniforms.scale.value = camera.projectionMatrix.elements[5] * heightPx / 2;

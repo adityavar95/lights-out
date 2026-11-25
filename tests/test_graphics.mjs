@@ -1,6 +1,6 @@
 // Stage settings (src/static/graphics.js): presets, what a stored value may be.
 import assert from 'node:assert';
-import {PRESETS, DEFAULTS, presetOf, nextPreset, clean, loadGraphics, saveGraphics, deviceTier, defaultsFor} from '../src/static/graphics.js';
+import {PRESETS, DEFAULTS, presetOf, nextPreset, clean, loadGraphics, saveGraphics, deviceTier, defaultsFor, currentTier, setTier} from '../src/static/graphics.js';
 
 assert.equal(presetOf(DEFAULTS), 'Ultra');
 for (const p of PRESETS) assert.equal(presetOf({...DEFAULTS, ...p}), p.name);
@@ -48,4 +48,8 @@ assert.equal(presetOf(defaultsFor('mobile')), 'Low');
 assert.ok(!('name' in defaultsFor('mobile')));
 assert.equal(loadGraphics({getItem: () => null}, defaultsFor('mobile')).mirrors, false, 'a phone starts on Low');
 assert.equal(loadGraphics({getItem: () => '{"ao":true}'}, defaultsFor('mobile')).ao, true, 'and can raise it');
+// the probed tier (init3d) that cars3d and rb22 read: the GPU-less guess until it is set
+assert.equal(currentTier(), 'desktop', 'node: no navigator, no probe yet');
+setTier('software');
+assert.equal(currentTier(), 'software');
 console.log('graphics ok');

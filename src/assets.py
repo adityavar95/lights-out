@@ -15,15 +15,15 @@ from pathlib import Path
 
 import requests
 
-from paths import DATA, FROZEN
+from paths import DATA, EDITION, FROZEN
 
 STATIC = Path(__file__).parent / "static"
 ASSETS = DATA / "assets" if FROZEN else STATIC / "assets"  # the exe's own folder may not be writable (paths.py)
-if FROZEN and not (ASSETS / ".bundled").exists():
-    # shortcut: the exe's assets (core, skies and the full-size team cars, ~310 MB) are copied out once so downloads have one folder to add to; served
-    # from both folders instead if the copy ever matters
+if FROZEN and not (ASSETS / f".bundled-{EDITION}").exists():
+    # shortcut: the exe's assets (build_exe.py edition: up to ~1.1 GB) are copied out once per edition, so installing full over lite still copies
+    # its extras; downloads have one folder to add to. Served from both folders instead if the copy ever matters
     shutil.copytree(STATIC / "assets", ASSETS, dirs_exist_ok=True)
-    (ASSETS / ".bundled").touch()
+    (ASSETS / f".bundled-{EDITION}").touch()
 THREE = "https://cdn.jsdelivr.net/npm/three@0.187.0/"
 ANIME = "https://cdn.jsdelivr.net/npm/animejs@4.5.0/dist/bundles/anime.esm.min.js"
 THEATRE = "https://cdn.jsdelivr.net/npm/@theatre/core@0.7.2/+esm"  # ESM: the package's own build is CommonJS
@@ -37,7 +37,10 @@ FONTS = ["family=Geist:wght@400;500&family=Geist+Mono:wght@400;500&family=Titill
          "family=Titillium+Web:ital,wght@0,400;0,600;0,700;1,900"]
 CHROME = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130.0 Safari/537.36"}  # Google sends others no woff2
 
-HASHES = json.loads((STATIC / "asset_hashes.json").read_text(encoding="utf8"))  # three.js file -> sha256, see write_three_hashes
+# the page's other libraries, as URL -> path under ASSETS; hash-pinned like three.js, since they run beside the F1 TV token
+PINNED = {SHAKA: "shaka/shaka-player.compiled.js", ANIME: "animejs/anime.esm.min.js", THEATRE: "theatre/core.js", THEATRE_DATA: "theatre/dataverse.js"}
+# three.js file (under three/) or PINNED path -> sha256, see write_hashes
+HASHES = json.loads((STATIC / "asset_hashes.json").read_text(encoding="utf8"))
 _core_done = False
 _core_lock = threading.Lock()
 _lock = threading.Lock()
@@ -87,14 +90,16 @@ def _three_walk(text_of) -> set[str]:
 
 
 def _three() -> None:
-    # HASHES[path] raises KeyError for a file with no recorded hash: a three.js bump needs write_three_hashes first
+    # HASHES[path] raises KeyError for a file with no recorded hash: a three.js bump needs write_hashes first
     _three_walk(lambda p: fetch(THREE + p, ASSETS / "three" / p, HASHES[p]).read_text(encoding="utf8"))
 
 
-def write_three_hashes() -> None:
-    """Run after a three.js bump, on files you trust: records the sha256 of each file _three() loads."""
+def write_hashes() -> None:
+    """Run after a three.js or PINNED version bump, on files you trust: records the sha256 of each file _three() loads
+    and of each PINNED file. Also run it if jsDelivr rebuilds a +esm bundle (theatre): a first start then fails on its hash."""
     paths = _three_walk(lambda p: (ASSETS / "three" / p).read_text(encoding="utf8"))
     out = {p: hashlib.sha256((ASSETS / "three" / p).read_bytes()).hexdigest() for p in sorted(paths)}
+    out |= {p: hashlib.sha256((ASSETS / p).read_bytes()).hexdigest() for p in sorted(PINNED.values())}
     (STATIC / "asset_hashes.json").write_text(json.dumps(out, indent=1) + "\n", encoding="utf8")
 
 
@@ -125,13 +130,10 @@ def core() -> None:
         iso_m = re.search(r"const ISO = \{(.*?)\};", _read("util.js"), re.S)
         assert iso_m, "no ISO table in util.js"
         iso = iso_m.group(1)
-        jobs = {f"https://flagcdn.com/w40/{c}.png": ASSETS / "flags" / "w40" / f"{c}.png" for c in set(re.findall(r": '([a-z]{2})'", iso))}
-        jobs[SHAKA] = ASSETS / "shaka" / "shaka-player.compiled.js"
-        jobs[ANIME] = ASSETS / "animejs" / "anime.esm.min.js"
-        jobs[THEATRE] = ASSETS / "theatre" / "core.js"
-        jobs[THEATRE_DATA] = ASSETS / "theatre" / "dataverse.js"
+        jobs = {f"https://flagcdn.com/w40/{c}.png": (ASSETS / "flags" / "w40" / f"{c}.png", None) for c in set(re.findall(r": '([a-z]{2})'", iso))}
+        jobs |= {url: (ASSETS / p, HASHES[p]) for url, p in PINNED.items()}  # KeyError: a bump needs write_hashes first
         with ThreadPoolExecutor(6) as pool:
-            list(pool.map(lambda job: fetch(*job), jobs.items()))
+            list(pool.map(lambda job: fetch(job[0], *job[1]), jobs.items()))
         _core_done = True
 
 

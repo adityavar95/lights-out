@@ -20,7 +20,7 @@ export function tip(e, ...content) {
 
 export const name = r => `${r['Driver.givenName']} ${r['Driver.familyName']}`;
 export const code = r => r['Driver.code'] || r['Driver.familyName'].slice(0, 3).toUpperCase();
-const chip = color => el('span', {class: 'chip', style: `background:${color}`});
+export const chip = color => el('span', {class: 'chip', style: `background:${color}`});
 const empty = text => el('p', {class: 'empty'}, text);
 const NO_STOPS = 'Jolpica has no pit stops for this race (its records start in 2011).';
 const FOLLOW = 'Hover a line or a name to follow one driver; tap to pin it, tap again to let go.';

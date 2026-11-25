@@ -25,7 +25,7 @@ const ICONS = {
   plus: '<path d="M12 5v14M5 12h14"/>',
   sync: '<path d="M20 11a8 8 0 0 0-14.3-4.6L4 8.5"/><path d="M4 4v4.5h4.5M4 13a8 8 0 0 0 14.3 4.6l1.7-2.1"/><path d="M20 20v-4.5h-4.5"/>',
   grid: '<rect x="3.5" y="5" width="7.5" height="6" rx="1.4"/><rect x="13" y="5" width="7.5" height="6" rx="1.4"/><rect x="3.5" y="13" width="7.5" height="6" rx="1.4"/><rect x="13" y="13" width="7.5" height="6" rx="1.4"/>',
-  pip: '<rect x="2.5" y="4.5" width="19" height="15" rx="1.8"/><rect x="13" y="12" width="6" height="5" rx="1"/>',
+  pipmode: '<rect x="2.5" y="4.5" width="19" height="15" rx="1.8"/><rect x="13" y="12" width="6" height="5" rx="1"/>',
   spot: '<rect x="2.5" y="5" width="13" height="14" rx="1.6"/><rect x="17.5" y="5" width="4" height="6" rx="1"/><rect x="17.5" y="13" width="4" height="6" rx="1"/>',
   playall: `${solid('M3.5 6v12a.7.7 0 0 0 1.1.6l8.6-6a.7.7 0 0 0 0-1.2l-8.6-6A.7.7 0 0 0 3.5 6z')}<path d="M16.5 6v12M20.5 6v12"/>`,
   flag: '<path d="M5 21V4"/><path d="M5 4.5h12.5l-2.4 4 2.4 4H5"/>',

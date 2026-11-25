@@ -36,6 +36,8 @@
   --spring: var(--dp-motion-ease);  /* decorative elements and Stream */
   --panel-t: var(--dp-motion-duration) var(--dp-motion-ease);  /* functional panels: quick, no overshoot */
 }
+/* Apple-style continuous corners: every border-radius above becomes a squircle where the browser supports corner-shape (Chromium 139+, Safari 26+); elsewhere it stays a circular arc. */
+*, *::before, *::after { corner-shape: squircle; }
 :root[data-theme=light] { color-scheme: light; }
 @media (prefers-color-scheme: light) { :root:not([data-theme=dark]) { color-scheme: light; } }
 /* Legible glass, after Apple's regular Liquid Glass: the backdrop's brightness is squeezed into a band (dark: ~10-60 %,
@@ -1120,6 +1122,7 @@ option { background-color: var(--panel); color: var(--ink); }
 .rcbanner[data-kind=amber] { --k: #ff9f1c; }
 .rcbanner[data-kind=blue] { --k: #38b6ff; }
 .rcbanner[data-kind=grey] { --k: #6b7080; }
+.rcbanner[data-kind=chequered] { --k: #fff; }
 @keyframes bannerIn { from { transform: translate(-50%, -140%); opacity: 0; } }
 @keyframes bannerFlash { 50% { background: var(--k, var(--f1-green)); color: #0d0e13; } }
 /* driver control & assist deck: bottom of the tower dock, collapses with the same spring as the pit wall */

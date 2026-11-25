@@ -1,7 +1,7 @@
 // Pit-wall console (simulation only): the race engineer's strategy controls for the selected car (box call, compound,
 // pace), the weather deck and the race director's neutralisations. Also, in every session: the broadcast
 // race-control banner and the scene's weather look (the simulation's weather, or a replay's rain flag).
-import {el, lastBefore, led, setAttr, setText} from './util.js';
+import {el, lastBefore, led, setAttr, setText, bannerKind} from './util.js';
 import {setWeather} from './scene3d.js';
 import {setGhost} from './hud.js';
 import {stintLife} from './tyres.js';
@@ -92,8 +92,7 @@ function banner(rc, t, sim) {
   bannerMsg = m;
   const text = m[3].toUpperCase();
   P.banner.textContent = text;
-  P.banner.dataset.kind = /SAFETY CAR|VSC|YELLOW/.test(text) ? 'yellow' : /RED/.test(text) ? 'red' : /SLIPPERY/.test(text) ? 'amber'
-                        : /PIT WINDOW/.test(text) ? 'blue' : /DISABLED/.test(text) ? 'grey' : 'green';
+  P.banner.dataset.kind = bannerKind(text);
   P.banner.classList.remove('show');
   void P.banner.offsetWidth;  // restart the slide-in animation for the new message
   P.banner.classList.add('show');

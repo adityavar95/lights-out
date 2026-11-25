@@ -22,6 +22,12 @@ export function deviceTier(gpu = '', env = globalThis) {
   return nav.userAgentData?.mobile || smallTouch || nav.deviceMemory <= 4 ? 'mobile' : 'desktop';
 }
 
+// the tier init3d probed with the GPU's name; before that (or in node) the guess without it. cars3d.js and rb22.js read it
+// when they build, so a machine without a GPU doesn't load the desktop's 4096 px tread maps and team models
+let probed = null;
+export const setTier = t => { probed = t; };
+export const currentTier = () => probed ?? deviceTier();
+
 export const DEFAULTS = {...PRESETS[0], fps: 0, sky: 'auto', exposure: 1.05, contrast: 1.35, saturation: 1.4,
   tags: true, corners: true, tower: true, panels: true, pitwall: true, showFps: false};
 delete DEFAULTS.name;

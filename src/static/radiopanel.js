@@ -55,7 +55,6 @@ export function radioPanel({wall, live, streams, duck, json}) {
       if (url !== R.url) return;  // another video meanwhile
       R.clips = r.clips.filter(c => c.text !== '');  // a transcribed clip with no words (a click, engine noise) isn't a message
       R.drivers = r.drivers ?? {};
-      R.words = r.transcribe;
       R.model = r.model;
       R.error = r.error;
       R.fails = 0;
@@ -103,10 +102,10 @@ export function radioPanel({wall, live, streams, duck, json}) {
     if (R.open) R.seen = said.length;
     count.textContent = said.length > R.seen ? said.length - R.seen : '';  // unread while the panel was shut
     if (!R.open) return;
-    const key = [said.length, said.map(c => `${c.text}${c.error}`).join(), R.sel, R.playing?.url, R.error, R.model, Math.floor(w / 10)].join('|');
+    const key = [said.length, R.sel, R.playing?.url, R.error, R.model, Math.floor(w / 10)].join('|');
     if (key === R.shown) return;
     R.shown = key;
-    const ready = R.model === 'ready', ask = R.words && R.model && !ready;
+    const ready = R.model === 'ready', ask = R.model && !ready;
     need.hidden = !ask;
     if (ask) need.replaceChildren(
       el('span', {}, R.model === 'downloading' ? 'Downloading the speech model (2.5 GB). Messages get their words once it\'s here.'
@@ -134,7 +133,7 @@ export function radioPanel({wall, live, streams, duck, json}) {
         el('button', {class: 'mvplay', 'data-url': c.url, title: on ? 'Stop' : 'Play this message', 'aria-label': on ? 'Stop' : `Play ${p.tla}'s message`,
           onclick: () => play(c.url)}, icon(on ? 'pause' : 'play')),
         el('div', {}, el('b', {}, p.tla), el('time', {}, clock(c.t))),
-        el('p', {class: c.text ? '' : 'wait'}, c.text ?? c.error ?? (R.words && ready ? 'Transcribing…' : 'Team radio')));
+        el('p', {class: c.text ? '' : 'wait'}, c.text ?? c.error ?? (ready ? 'Transcribing…' : 'Team radio')));
     }), ...(shown.length ? [] : [el('li', {class: 'none'}, R.error ?? (R.sel != null ? 'No radio from this driver yet' : 'No radio yet'))]));
   }
 

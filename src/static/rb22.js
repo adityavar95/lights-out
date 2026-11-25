@@ -10,7 +10,7 @@ import {MeshoptDecoder} from 'three/addons/libs/meshopt_decoder.module.js';
 import {seatDriver} from './driver.js';
 import {stage, stageDone, progressOf} from './loadstage.js';
 import {brakeMat} from './cars3d.js';
-import {deviceTier} from './graphics.js';
+import {currentTier} from './graphics.js';
 import {dash, dashCanvas} from './dash.js';
 
 const url = file => new URL(`./models/${file}.glb`, import.meta.url).href;
@@ -23,7 +23,7 @@ const hires = key => new URL(`./assets/cars/${key}-hires.glb`, import.meta.url).
 const TEAMS = [[/red bull/, 'redbull-rb22', 'RB22'], [/ferrari/, 'ferrari-sf26', 'SF-26'], [/mclaren/, 'mclaren-mcl40', 'MCL40'],
                [/mercedes/, 'mercedes-w17', 'W17'], [/aston/, 'aston-martin-amr26', 'AMR26'], [/audi|sauber/, 'audi-r26', 'R26'],
                [/cadillac/, 'cadillac-mac26', 'MAC-26'], [/williams/, 'williams-fw48', 'FW48'], [/haas/, 'haas-vf26', 'VF-26']];
-const teamModel = team => deviceTier() === 'desktop' ? TEAMS.find(([re]) => re.test((team ?? '').toLowerCase())) : null;
+const teamModel = team => currentTier() === 'desktop' ? TEAMS.find(([re]) => re.test((team ?? '').toLowerCase())) : null;
 const keyFor = team => teamModel(team)?.[1] ?? null;
 // the chassis a team's 2026 car is shown as: its own model's, else the RB22 standing in
 export const chassisFor = team => teamModel(team)?.[2] ?? 'RB22';

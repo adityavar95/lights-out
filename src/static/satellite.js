@@ -109,7 +109,7 @@ export const fetchTile = async (z, y, x) => {
 };
 
 // The sharpest zoom (up to top, 18 ~0.6 m per pixel) whose tiles round [lon, lat] points fit in maxPx square, and their range
-export function tileRange(corners, maxPx, top = 18) {
+function tileRange(corners, maxPx, top = 18) {
   let z = top, a, b;
   for (; z > 10; z--) {
     const px = corners.map(c => mercator(c, z));

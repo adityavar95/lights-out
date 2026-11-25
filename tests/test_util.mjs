@@ -1,6 +1,13 @@
 // get()'s cache (current-season TTL, past seasons kept, failures dropped, live URLs not piling up) and plain error words
 import assert from 'node:assert/strict';
-import {get, plain, signed, cellOrder} from '../src/static/util.js';
+import {get, plain, signed, cellOrder, rcIndex, bannerKind, forgetReplays, median, fmtLap, isJwt} from '../src/static/util.js';
+
+assert.equal(fmtLap(119.9996), '2:00.000');
+assert.equal(fmtLap(83.4), '1:23.400');
+assert.equal(fmtLap(null), '');
+assert.ok(Number.isNaN(median([])));
+assert.equal(median([3, 1, 2]), 2);
+assert.equal(median([1, 2, 3, 10]), 2.5);
 
 const year = new Date().getFullYear(), calls = {};
 let answer = () => ({ok: true, json: async () => ({rows: 1})});
@@ -62,8 +69,19 @@ pending[rB](); pending[`${rB}&laps=1`]();
 assert.deepEqual([(await b).url, (await bLaps).url], [rB, `${rB}&laps=1`]);
 assert.deepEqual([...aborted], [rA, `${rA}&laps=1`]);
 const tele = get('/api/telemetry/x');  // other URLs aren't touched
-get('/api/replay/2024/3?session=Race');
+get('/api/replay/2024/3?session=Race').catch(() => {});  // aborted by a later test's replay
 assert.ok(!aborted.has('/api/telemetry/x')); pending['/api/telemetry/x'](); await tele;
+
+// audit 2.2: after an F1 TV sign-in (or Disconnect) a replay is asked again, built from the other source
+globalThis.fetch = async url => { calls[url] = (calls[url] ?? 0) + 1; return {ok: true, json: async () => ({})}; };
+const r21 = '/api/replay/2021/1?session=Race';
+await get(r21); await get(r21);
+assert.equal(calls[r21], 1);
+await get('/api/season/2001');
+forgetReplays();
+await get(r21); await get('/api/season/2001');
+assert.equal(calls[r21], 2);
+assert.equal(calls['/api/season/2001'], 1);  // other answers stay cached
 
 // plain words for the browser's network errors and bare statuses; a server's own message stands
 assert.match(plain(new TypeError('Failed to fetch')), /Can't reach the server/);
@@ -85,6 +103,7 @@ console.log('rcText ok');
 
 // inkOn: dark ink on light team colours, white on dark ones
 import {inkOn} from '../src/static/util.js';
+import {voiceIds} from '../src/static/util.js';
 assert.equal(inkOn('#FFFFFF'), '#000');
 assert.equal(inkOn('#27F4D2'), '#000', 'Mercedes teal');
 assert.equal(inkOn('#FF8000'), '#000', 'McLaren orange');
@@ -100,3 +119,29 @@ const sorted = l => [...l].sort(cellOrder);
 assert.deepEqual(sorted(['+0.5 s', '−1.2 s', '+12.0 s', '-3 s', '±0.0 s']), ['-3 s', '−1.2 s', '±0.0 s', '+0.5 s', '+12.0 s']);
 assert.deepEqual(sorted(['1:31.002', '1:29.990', '1:30.5']), ['1:29.990', '1:30.5', '1:31.002']);
 assert.deepEqual(sorted(['10', '9', '−2.5 %']), ['−2.5 %', '9', '10']);
+
+// race-control calls: the index of the next message to announce (audiodeck.js)
+const rc = [[10, 'Drs', '', 'DRS ENABLED'], [20, '', '', 'A'], [30, '', '', 'B'], [40, '', '', 'C']];
+assert.equal(rcIndex(rc, 0), 0);    // session start: nothing passed
+assert.equal(rcIndex(rc, 25), 2);   // opened mid-session: the first two stay silent
+assert.equal(rcIndex(rc, 10), 1);   // playing past a message moves the index past it
+assert.equal(rcIndex(rc, 45), 4);   // seek forward over three
+assert.equal(rcIndex(rc, 15), 1);   // seek back
+assert.equal(rcIndex([], 99), 0);
+
+assert.equal(bannerKind('CHEQUERED FLAG'), 'chequered');
+assert.equal(bannerKind('RED FLAG'), 'red');
+assert.equal(bannerKind('SAFETY CAR DEPLOYED'), 'yellow');
+assert.equal(bannerKind('DRS ENABLED'), 'green');
+assert.equal(bannerKind('DRS DISABLED'), 'grey');
+
+// engine voices: the focused car never plays on two voices
+assert.deepEqual(voiceIds(['a', 'b', 'c'], ['b', 'a', 'c']), ['b', 'a', 'c']);  // hero taken from an ambient voice, old hero gets the freed one
+assert.deepEqual(voiceIds(['a', 'b', null], ['a', 'c', 'b']), ['a', 'b', 'c']);  // hero unchanged: cars keep their voices
+assert.deepEqual(voiceIds(['a', 'b', 'c'], ['c', 'b']), ['c', 'b', null]);      // hero from voice 2, which is freed
+assert.deepEqual(voiceIds(['a', 'b'], []), [null, null]);                        // hero gone: every voice free
+
+// 7.2: only a JWT-shaped #f1tv= value is stored
+assert.ok(isJwt('eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abc-_DEF'));
+for (const bad of ['', 'abc', 'a.b', 'a.b.c.d', 'a.b.c<script>', 'a..c', 'a.b.c%20'])
+  assert.ok(!isJwt(bad), bad);

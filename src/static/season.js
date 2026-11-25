@@ -1,7 +1,7 @@
 // Season analysis, pure (no DOM): teammate head-to-heads, cumulative points, who can still win, qualifying supertimes.
 // Rows are Jolpica's flattened season tables; those carry no round, so callers number them first: `numbered` (drivers.js)
 // for results and sprints, `qualiRounds` below for qualifying.
-import {signed} from './util.js';
+import {signed, median} from './util.js';
 
 const driver = r => r['Driver.driverId'];
 const team = r => r['Constructor.constructorId'];
@@ -10,11 +10,6 @@ const sum = (m, k, v) => m.set(k, (m.get(k) ?? 0) + v);
 export function secs(t) {  // '1:23.456' or '59.8' -> seconds, null without a time
   const m = /^(?:(\d+):)?(\d+(?:\.\d+)?)$/.exec(t ?? '');
   return m ? +(m[1] ?? 0) * 60 + +m[2] : null;
-}
-
-export function median(a) {
-  const s = [...a].sort((x, y) => x - y), i = s.length >> 1;
-  return !s.length ? null : s.length % 2 ? s[i] : (s[i - 1] + s[i]) / 2;
 }
 
 // Why not `numbered` here: where a race straddles two of Jolpica's 100-row pages its qualifying rows arrive out of

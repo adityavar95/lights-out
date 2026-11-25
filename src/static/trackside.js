@@ -85,8 +85,8 @@ export function buildTrackside({F, runs, half, wall, m, armco}) {
   const steel = new THREE.MeshStandardNodeMaterial({color: 0x8d9299, metalness: 0.75, roughness: 0.4});
 
   // Tecpro: foam blocks in the run-off's firing line, on the outside of each corner, red and white in turn
+  const tecpro = new THREE.MeshStandardNodeMaterial({color: 0xffffff, roughness: 0.75});
   if (!armco) {
-    const tecpro = new THREE.MeshStandardNodeMaterial({color: 0xffffff, roughness: 0.75});
     const red = new THREE.Color(0xb3202a), white = new THREE.Color(0xe8e8e8), items = [];
     for (const run of runs) {
       if (run.length < 4) continue;
@@ -334,7 +334,7 @@ export function buildTrackside({F, runs, half, wall, m, armco}) {
       for (const o of made) { world.remove(o); o.geometry.dispose(); o.dispose(); }
       for (const mat of boardMats) { mat.map.dispose(); mat.dispose(); }
       screenMat.emissiveMap.dispose(); screenMat.dispose(); brandMat.map.dispose(); brandMat.dispose();
-      steel.dispose(); lamp.dispose(); crowd.dispose(); peopleMat.dispose(); postMat.dispose();
+      steel.dispose(); lamp.dispose(); tecpro.dispose(); lampBeam?.dispose(); crowd.dispose(); peopleMat.dispose(); postMat.dispose();
     },
   };
 }

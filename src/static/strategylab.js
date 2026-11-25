@@ -1,15 +1,13 @@
 // Strategy Lab tab: move one driver's pit stops in a real race and see where they'd have finished (whatif.js), or
 // search every 1-3 stop plan for the best one.
-import {el, svg, teamColor, th, csvButton, get, signed as sign} from './util.js';
+import {el, svg, teamColor, th, csvButton, get, fmtLap, signed as sign} from './util.js';
 import {raceModel, simulate, optimise, ranked, PASS, SC_LOSS} from './whatif.js';
 import {fuelPerLap, paceRanking, undercuts, compoundOf, stintBars} from './pace.js';
 import {TYRES} from './tower.js';
+import {code, chip} from './charts.js';
 
-const code = r => r['Driver.code'] || r['Driver.familyName'].slice(0, 3).toUpperCase();
-const chip = color => el('span', {class: 'chip', style: `background:${color}`});
 const signed = s => `${sign(s, 1, '±')} s`;
 const slope = s => `${s < 0 ? '−' : '+'}${Math.abs(s).toFixed(3)}`;
-const lapTime = s => `${Math.floor(s / 60)}:${(s % 60).toFixed(3).padStart(6, '0')}`;
 const NO_STOPS = year => (year < 2011 ? 'Jolpica has no pit stops before 2011' : 'Jolpica has no pit stops for this race yet');
 
 // why: what to say when the race has no laps (it hasn't run, or it's before 1996); link: {id, stops}, a shared plan (share.js)
@@ -51,7 +49,7 @@ export function renderStrategyLab(root, laps, results, pits, year, why, round, l
   // apply: load the best plan too (the tab opens on it, so the first thing shown is an answer, not "±0.0 s")
   async function findBest(apply = false) {
     best.replaceChildren(el('div', {class: 'loading'}, el('div', {class: 'spinner'}), 'Trying every 1, 2 and 3-stop plan…'));
-    const id = S.id, opts = {pass: PASS[S.pass], minStops: year >= 2007 ? 1 : 0}, n = Math.min(8, navigator.hardwareConcurrency || 2);
+    const id = S.id, pass = S.pass, opts = {pass: PASS[pass], minStops: year >= 2007 ? 1 : 0}, n = Math.min(8, navigator.hardwareConcurrency || 2);
     // the plans split over the CPU's cores (optimiser.js workers): ~0.3 s on this thread froze the page
     const parts = await Promise.all(Array.from({length: n}, (_, k) => new Promise((ok, fail) => {
       const w = new Worker(new URL('./optimiser.js', import.meta.url), {type: 'module'});
@@ -59,7 +57,7 @@ export function renderStrategyLab(root, laps, results, pits, year, why, round, l
       w.onerror = e => { w.terminate(); fail(e); };
       w.postMessage({M, id, opts: {...opts, part: [k, n]}});
     }))).catch(() => [optimise(M, id, opts)]);  // no workers: here, as before
-    if (id !== S.id) return;
+    if (id !== S.id || pass !== S.pass) return;  // another driver or overtaking setting meanwhile
     const plans = ranked(parts.flat()), real = simulate(M, id, M.stops[id], {pass: PASS[S.pass]});
     best.replaceChildren(el('h3', {}, 'Best plans found'), ...plans.map(p => el('button', {
       class: 'labplan', onclick: () => { S.plan = [...p.plan]; change(); }},
@@ -164,7 +162,7 @@ export function renderStrategyLab(root, laps, results, pits, year, why, round, l
         el('tbody', {}, rows.map((r, i) => el('tr', {},
           el('td', {class: 'num'}, i + 1),
           el('td', {}, chip(color(r.id)), el('b', {}, label(r.id))),
-          el('td', {class: 'num'}, lapTime(r.median)),
+          el('td', {class: 'num'}, fmtLap(r.median)),
           el('td', {class: 'num'}, i ? `+${(r.median - rows[0].median).toFixed(3)}` : ''),
           el('td', {class: 'num'}, r.n),
           ...Array.from({length: k}, (_, j) => el('td', {class: 'stintcell'}, stintCell(stints(r)[j], tyre(r, stints(r)[j]))))))))));

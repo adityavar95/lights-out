@@ -4,7 +4,7 @@
 // feed or driver, as many as you like. The selected tile has the sound and is what Sync lines the others up with.
 // Each tile picks its video quality and audio track from every rendition in the stream, and can carry a see-through
 // telemetry overlay (speed, gear, RPM, throttle, brake, DRS) from OpenF1 car data (2023+ sessions).
-import {get, el, tvHeaders, count, skeleton} from './util.js';
+import {get, el, tvHeaders, count, skeleton, forgetReplays} from './util.js';
 import {controls, icon, toLive} from './tvcontrols.js';
 import {sessionMarks} from './scrubmarks.js';
 import {radioPanel} from './radiopanel.js';
@@ -121,6 +121,7 @@ export function connectPanel(id, onChange) {
     if (!t) return;
     count('f1tv_connected');
     try { sessionStorage.setItem('f1tv', t); } catch (e) {}
+    forgetReplays();
     panel.hidePopover();
     onChange();
   }}, 'Sign in to F1 TV');
@@ -138,6 +139,7 @@ export function connectPanel(id, onChange) {
     steps, signin);
   const disconnect = el('button', {class: 'mvbtn', hidden: true, onclick: () => {
     try { sessionStorage.removeItem('f1tv'); } catch (e) {}
+    forgetReplays();
     disconnect.hidden = true;
     onChange();
   }}, 'Disconnect');
@@ -180,7 +182,7 @@ function setup() {
   // three layouts: every stream the same size, the selected one big with the others beside it (its edge drags to
   // resize), or the selected one filling the screen with the others small over its corner
   loadLayout();
-  const seg = (mode, title) => el('button', {title, 'aria-label': title, 'data-mode': mode, 'aria-pressed': String(mode === M.mode), onclick: () => setLayout(mode)}, icon({grid: 'grid', focus: 'spot', pip: 'pip'}[mode]));
+  const seg = (mode, title) => el('button', {title, 'aria-label': title, 'data-mode': mode, 'aria-pressed': String(mode === M.mode), onclick: () => setLayout(mode)}, icon({grid: 'grid', focus: 'spot', pip: 'pipmode'}[mode]));
   M.layout = el('div', {class: 'mvseg', role: 'group', 'aria-label': 'Layout'},
     seg('grid', 'Grid: every stream the same size'), seg('focus', 'Focus: the selected stream big, the others beside it; drag its edge to resize'),
     seg('pip', 'Picture in picture: the selected stream full screen, the others small over its corner'));
@@ -679,6 +681,7 @@ async function load(t, at) {
     // live: everything follows F1 Live studio, so when it (or any live stream) loads, line the live tiles up with it
     if (t.player.isLive()) sync();
   } catch (e) {
+    if (!M.tiles.includes(t) || t.pick.value !== ch || e.code === 7000) return;  // closed, switched, or LOAD_INTERRUPTED by a newer load
     t.msg.className = 'mvmsg';
     t.msg.textContent = playError(e);
   }

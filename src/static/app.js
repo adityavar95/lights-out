@@ -1,7 +1,7 @@
 // App shell: the Races / Simulate / Stream switch (Stream is the F1 TV browse page, stream.js), the Watch / Simulate switch, race dropdown, race header and tabs. Watch is the race browser (replays of
 // real sessions, results, standings, live timing); Simulate drops the browser chrome for a full-window physics race
 // on the chosen circuit (circuit and car pickers on the stage, season = the cars' era).
-import {get, rows, el, flag, fmtDate, teamColor, inkOn, count, failed, skeleton, toast, roll, replayKind, REPLAY_KINDS} from './util.js';
+import {get, rows, el, flag, fmtDate, cellOrder, teamColor, inkOn, count, failed, skeleton, toast, roll, replayKind, REPLAY_KINDS, isJwt} from './util.js';
 import {renderResults, renderLapChart, renderStandings} from './charts.js';
 import {seasonTrends} from './seasonview.js';
 import {setupExplorer} from './explorer.js';
@@ -13,7 +13,7 @@ import {capturing} from './input.js';
 import {setupPalette, openPalette, openSheet, openCounts, copyLink} from './palette.js';
 import {openReaction} from './reaction.js';
 import {PRESETS} from './circuits.js';
-import {parseHash, formatHash, held} from './share.js';
+import {parseHash, formatHash, held, SESSIONS as ORDER} from './share.js';
 import {resultLedgers} from './ledgers.js';
 import {setupDownloads, startDownload, canDownload} from './downloads.js';
 import {spoilerFree, setSpoilerFree, hides, reveal, recent} from './spoilers.js';
@@ -40,8 +40,8 @@ const $ = id => document.getElementById(id);
 // extra: the open view's own state in the address (share.js career, focus + stops, car), sent by its module as f1:address
 const A = {year: null, round: null, races: [], mode: 'watch', section: 'analytics', extra: {}};
 const today = () => new Date().toISOString().slice(0, 10);  // read per call: a tab open past midnight or New Year
-const ORDER = ['Practice 1', 'Practice 2', 'Practice 3', 'Sprint Qualifying', 'Sprint Shootout', 'Sprint', 'Qualifying', 'Race'];
-const jol = (kind, round) => get(`/api/jolpica/${A.year}/${kind}${round ? `?round=${round}` : ''}`).then(rows);
+const jol = (kind, round, year = A.year) => get(`/api/jolpica/${year}/${kind}${round ? `?round=${round}` : ''}`).then(rows);
+const jolFor = year => (kind, round) => jol(kind, round, year);  // sections that load on open keep the season they were drawn for
 const ordinal = n => `R${n}`;  // round, as F1's graphics write it
 const race = round => A.races.find(x => x.round === String(round));
 const hasRun = r => at(r, '') <= new Date();  // lights out has gone: a race later today hasn't
@@ -59,8 +59,8 @@ const noLaps = round => {
 // Each tab fetches its data, then returns a function that draws it (skipped if the user moved on meanwhile).
 const TABS = {
   results: async r => {  // Race / Sprint / Qualifying; the one picked last stays picked from race to race
-    const [res, spr, q] = await Promise.all([jol('results', r), jol('sprint', r), jol('qualifying', r)]);
-    return () => { renderResults($('tab-results'), res, spr, q, A.resView, v => { A.resView = v; }); $('tab-results').append(...resultLedgers(A.year, r, res, jol, ORDER.filter(n => ran(race(r), n)))); };
+    const year = A.year, [res, spr, q] = await Promise.all([jol('results', r), jol('sprint', r), jol('qualifying', r)]);
+    return () => { renderResults($('tab-results'), res, spr, q, A.resView, v => { A.resView = v; }); $('tab-results').append(...resultLedgers(year, r, res, jolFor(year), ORDER.filter(n => ran(race(r), n)))); };
   },
   lapchart: async r => {
     const [laps, res, pits] = await Promise.all([jol('laps', r), jol('results', r), jol('pitstops', r)]);
@@ -81,7 +81,7 @@ const TABS = {
       note = `${hasRun(x) ? `No standings after the ${x.raceName} yet` : `The ${x.raceName} hasn't run yet`}. These are the latest ${A.year} standings.`;
     }
     const year = A.year;
-    return () => { renderStandings($('tab-standings'), d, c, note); $('tab-standings').append(seasonTrends(year, jol)); };
+    return () => { renderStandings($('tab-standings'), d, c, note); $('tab-standings').append(seasonTrends(year, jolFor(year))); };
   },
   drivers: async () => {  // the whole season, whichever race is picked
     const [st, res, dr] = await Promise.all([jol('driverstandings'), jol('results'), jol('drivers')]);
@@ -559,10 +559,11 @@ function commands() {
 // its address is rewritten, so it never stays in the history, even where storage is blocked
 function takeToken() {
   if (!location.hash.startsWith('#f1tv=')) return;
-  count('f1tv_connected');
+  const token = location.hash.slice(6);
+  if (isJwt(token)) count('f1tv_connected');
   let back = '';
   try {
-    sessionStorage.setItem('f1tv', location.hash.slice(6));
+    if (isJwt(token)) sessionStorage.setItem('f1tv', token);
     back = sessionStorage.getItem('f1tv-back');
   } catch (e) { /* storage blocked: not connected */ }
   history.replaceState(null, '', back || location.pathname);

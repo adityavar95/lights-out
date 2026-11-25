@@ -1,6 +1,6 @@
 // Season analysis: teammate head-to-heads, cumulative points, who can still win, supertimes
 import assert from 'node:assert/strict';
-import {secs, median, qualiRounds, teammates, headToHead, h2hLine, fmtGap, raceMax, sprintMax, cumulative, maxRemaining, alive, reconcile, supertimes} from '../src/static/season.js';
+import {secs, qualiRounds, teammates, headToHead, h2hLine, fmtGap, raceMax, sprintMax, cumulative, maxRemaining, alive, reconcile, supertimes} from '../src/static/season.js';
 import {numbered} from '../src/static/drivers.js';
 
 const row = (round, id, tid, number, position, extra = {}) => ({round, 'Driver.driverId': id, 'Constructor.constructorId': tid, 'Constructor.name': tid, number,
@@ -12,8 +12,6 @@ assert.equal(secs('1:23.456'), 83.456);
 assert.equal(secs('59.8'), 59.8);
 assert.equal(secs(''), null);
 assert.equal(secs(null), null);
-assert.equal(median([3, 1, 2]), 2);
-assert.equal(median([1, 2, 3, 10]), 2.5);
 
 // a mid-season swap pairs per round: Lawson drives rounds 1-2 beside Verstappen, Tsunoda rounds 3-4
 const swap = [

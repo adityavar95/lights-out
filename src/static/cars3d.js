@@ -4,7 +4,7 @@ import {Fn, attribute, uniform, texture, uv, vec2, vec3, vec4, float, fract as n
         positionGeometry, normalGeometry, normalViewGeometry} from 'three/tsl';
 import {mergeGeometries, toCreasedNormals} from 'three/addons/utils/BufferGeometryUtils.js';
 import {noise} from './track3d.js';
-import {deviceTier} from './graphics.js';
+import {currentTier} from './graphics.js';
 import {buildRB22, rb22Ready, inkFor} from './rb22.js';
 import {helmetGeometry, helmetMaterial, GEAR, VISOR} from './driver.js';
 
@@ -61,7 +61,7 @@ export function spec(year) {
 const fract = x => x - Math.floor(x);
 
 // RGBA data texture from fn(u, v) -> [r, g, b, a] in 0..1. Holds vectors, not colours, so it stays out of sRGB decoding.
-export function dataTex(size, fn, repeat = true) {
+function dataTex(size, fn, repeat = true) {
   const d = new Uint8Array(size * size * 4);
   for (let y = 0; y < size; y++)
     for (let x = 0; x < size; x++)
@@ -371,7 +371,7 @@ function corner(s, [r, w], side) {
   prof.push([s.rim + (r - s.rim) * 0.5, w / 2 + bulge], [s.rim, w / 2 - 0.012]);
   const tyre = 0x222224, metal = s.era >= 2022 ? 0x24262a : s.era < 1966 ? 0xb9bcc0 : 0x4a4d52, face = side * (w / 2 - 0.03);
   const lathe = new THREE.LatheGeometry(prof.map(([a, b]) => new THREE.Vector2(a, b)), 48);
-  if (TYRES) treadUv(lathe, r, w, sh);
+  if (TYRES()) treadUv(lathe, r, w, sh);
   const parts = [part(lathe, tyre, 0.78, 0, 0, 0, 1),
     part(new THREE.CylinderGeometry(s.rim, s.rim, w * 0.9, 32, 1, true), metal, 0.34, 0.9),
     part(new THREE.CylinderGeometry(s.rim * 0.82, s.rim * 0.82, 0.16, 20, 1, true).translate(0, side * (0.08 - w / 2), 0), 0x0c0c0e, 0.6, 0)];  // brake duct drum
@@ -388,7 +388,7 @@ function corner(s, [r, w], side) {
   }
   parts.push(part(new THREE.CylinderGeometry(Math.min(s.rim * 0.8, 0.164), Math.min(s.rim * 0.8, 0.164), 0.032, 40).translate(0, side * (w / 2 - 0.12), 0), 0x2b2b2e, 0.55, 0.3, 0, 1));  // 278-328 mm disc
   parts.push(part(new THREE.CylinderGeometry(0.05, 0.05, 0.03, 12).translate(0, face + side * 0.012, 0), s.era < 1966 ? 0xb9a15a : 0x0b0b0d, 0.25, 0.3));  // wheel nut
-  if (s.era >= 2008 && !(TYRES && s.era >= 2011)) for (const sw of [-1, 1])  // compound marking on each sidewall (coloured from 2007, Bridgestone's white stripe)
+  if (s.era >= 2008 && !(TYRES() && s.era >= 2011)) for (const sw of [-1, 1])  // compound marking on each sidewall (coloured from 2007, Bridgestone's white stripe)
     parts.push(part(new THREE.TorusGeometry(r - 0.075, 0.009, 6, 48).rotateX(Math.PI / 2).translate(0, sw * (w / 2 + bulge + 0.002), 0), 0xd8d8d8, 0.7, 0, 1));
   if (s.grooves) for (const f of [-0.3, -0.1, 0.1, 0.3]) parts.push(part(new THREE.TorusGeometry(r + 0.0005, 0.006, 4, 48).rotateX(Math.PI / 2).translate(0, f * w, 0), 0x050506, 0.9, 0));
   return mergeGeometries(parts.map(g => g.rotateX(Math.PI / 2)));
@@ -398,7 +398,7 @@ function corner(s, [r, w], side) {
 // in glTF's UV layout: u twice round the tyre, v across the profile: one sidewall from the rim to 0.12 (the PIRELLI band),
 // the tread to 0.56, the other sidewall to 0.68 (P ZERO). Earlier makers are drawn on a canvas in the same layout
 // (brandMap). Desktop only: a phone keeps the procedural rubber and stripes.
-const TYRES = deviceTier() === 'desktop';
+const TYRES = () => currentTier() === 'desktop';
 
 // Each year's tyre maker: the champions' supplier, and Michelin's teams in its 2001-06 tyre war.
 // shortcut: one maker per era (Firestone, Michelin '77-'84 and Pirelli '81-'91 teams get Goodyear); per team if it matters
@@ -845,7 +845,7 @@ export function buildCar(color, num, year, blob, far = Infinity, team = null) {
   const group = new THREE.Group(), body = new THREE.Group(), halo = new THREE.Group();
   const mesh = (geo, mat, shadow = true) => Object.assign(new THREE.Mesh(geo, mat), {castShadow: shadow});
   for (const [k, geo] of Object.entries(t.geo)) (k === 'halo' ? halo : body).add(mesh(geo, own[k] ?? MAT[k === 'halo' ? 'carbon' : k]));
-  own.wheel = wheelMat(own.stripe, TYRES && tyreMaker(year, team ?? ''));
+  own.wheel = wheelMat(own.stripe, TYRES() && tyreMaker(year, team ?? ''));
   const wheelSet = new THREE.Group(), wheels = t.wheels.map(w => {
     const pivot = new THREE.Group(), spin = new THREE.Group();
     pivot.position.set(w.x, w.r, w.z);

@@ -7,6 +7,7 @@
 // The time at each bucket comes back from the same interpolation trace.js's record uses, and the lap's total stays the
 // official one by construction. What can still be wrong is the time partway round: sectorCheck measures that.
 import {N, CHANNELS, createRecorder, record} from './trace.js';
+import {fmtLap} from './util.js';
 
 // the replay's and the trace's telemetry request: one URL, so util.js get's cache serves both
 export const teleUrl = (S, d) => `/api/telemetry/${S.year}/${S.round}?session=${encodeURIComponent(S.data.session)}&driver=${d.num}`
@@ -14,7 +15,6 @@ export const teleUrl = (S, d) => `/api/telemetry/${S.year}/${S.round}?session=${
 
 export const isReal = S => !S?.sim && !S?.live && S?.data?.mode === 'gps' && !!S.data.laps?.length;
 
-const lapTime = s => `${Math.floor(s / 60)}:${(s % 60).toFixed(3).padStart(6, '0')}`;
 
 // Race control's deleted lap times per driver, as {times: Set of lap times (s, 3 dp), laps: Set of lap numbers}. The
 // message's own "LAP n" is one ahead of OpenF1's lap_number (checked on 2026 US GP qualifying: four of four), so a
@@ -62,7 +62,7 @@ export function fastestClean(rows) {
   return best(rows.filter(r => !r.tag)) ?? best(rows);
 }
 
-export const lapLabel = (r, fastest) => `L${r.lapNo} · ${lapTime(r.dur)}${r === fastest ? ' · best' : ''}${r.tag ? ` · ${r.tag}` : ''}`;
+export const lapLabel = (r, fastest) => `L${r.lapNo} · ${fmtLap(r.dur)}${r === fastest ? ' · best' : ''}${r.tag ? ` · ${r.tag}` : ''}`;
 
 const num = v => (v === null || v === undefined ? NaN : v);
 // OpenF1's DRS codes: 10, 12, 14 are open, 8 eligible, 0 / 1 shut. 2026 cars send nothing: NaN, not "shut".

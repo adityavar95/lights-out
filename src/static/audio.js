@@ -2,6 +2,8 @@
 // overrun crackle, Doppler fly-bys through HRTF panners, camera acoustics, kerb rumble, tyre screech, wind, spray, and
 // the team-radio squelch. The mix is fed every frame with car states in metres and metres per second (physical time).
 
+import {voiceIds} from './util.js';
+
 const C = 343;          // speed of sound, m/s
 const VOICES = 6;       // engines heard at once: the focused car plus the nearest five
 const MOUNTED = new Set(['onboard', 'tcam']);
@@ -295,14 +297,13 @@ export function updateAudio(cam, mode, cars, on, tunnel = false) {
   ramp(bus.radio.gain, levels.muted ? 0 : levels.radio);
 
   // keep cars on the voices they already have, give free voices to new cars; voice 0 is always the hero
-  const want = cars.slice(0, VOICES), ids = new Set(want.map(c => c.id));
-  for (const v of voices) if (v.id !== null && !ids.has(v.id)) { ramp(v.out.gain, 0, 0.05); v.id = null; }
-  if (want[0] && voices[0].id !== want[0].id) { voices[0].id = want[0].id; voices[0].fresh = true; }
-  for (const c of want.slice(1)) {
-    if (voices.some(v => v.id === c.id)) continue;
-    const free = voices.find((v, i) => i > 0 && v.id === null);
-    if (free) { free.id = c.id; free.fresh = true; }
-  }
+  const want = cars.slice(0, VOICES);
+  const next = voiceIds(voices.map(v => v.id), want.map(c => c.id));
+  voices.forEach((v, i) => {
+    if (next[i] === v.id) return;
+    if (next[i] === null) ramp(v.out.gain, 0, 0.05); else v.fresh = true;
+    v.id = next[i];
+  });
   for (const v of voices) {
     const c = v.id !== null && want.find(x => x.id === v.id);
     if (c) drive(v, c, cam, mounted && v.hero, now);

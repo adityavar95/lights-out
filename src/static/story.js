@@ -3,6 +3,7 @@
 import {simulate, tyre, PASS} from './whatif.js';
 import {paceRanking, undercuts} from './pace.js';
 import {neutralBands as calledBands} from './moments.js';
+import {median} from './util.js';
 
 const MIN_STINT = 3, MAX_STINT = 40;  // whatif.js has no tyre cliff, so a longer stint would flatter a plan
 const MIN_SAVED = 1;                  // s: a smaller gain is inside what the lap-time fits can tell apart
@@ -17,7 +18,6 @@ const PACE_TIE = 0.05;                // s/lap: closer is a tie
 const PACE_GAP = 1;                   // s/lap: a wider gap between medians means they ran in different conditions
 const RED_FLAG = 3;                   // a neutral lap this many typical laps long stopped the race
 
-const median = a => [...a].sort((x, y) => x - y)[a.length >> 1];
 const pitted = (M, id, L) => M.stops[id].includes(L) || M.stops[id].includes(L - 1);
 const typical = M => median(M.trend);
 // every car's time, not M.trend: that leaves out cars stopping, and in a red flag nearly all of them do

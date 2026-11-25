@@ -6,7 +6,7 @@ import {setupStory} from './storypanel.js';
 import {nextMoment} from './moments.js';
 import {markLayer, gpsMarks, lapMarks, radioMarks, momentum, NO_MARKS} from './scrubmarks.js';
 import {favourite} from './favourite.js';
-import {get, el, rows, tvHeaders, failed, teamColor, fmtClock, fmtLap, lastBefore, trackStatus, led, covered, dropUp, count} from './util.js';
+import {get, el, rows, tvHeaders, failed, teamColor, fmtClock, fmtLap, lastBefore, trackStatus, led, covered, dropUp, count, setText} from './util.js';
 import {init3d, setTrack, setCars, updateCars, setView, setParts, setTyre, setGround, setPitLane, setStartLights, setDaylight, nextSky, nextTier, announce, hasCockpitWheel, setGhost, setTagPositions, timed} from './scene3d.js';
 import {setupOnboard, setCameraUi, setWheelAngle, nextCamera} from './onboard.js';
 import {liveInfo, liveStatus, liveClock} from './live.js';
@@ -362,6 +362,7 @@ function reset(extra) {
   clearTimeout(ui.hintTimer);
   stopReel();
   S = {t: 0, playing: false, speed: ui.speed, selected: null, data: null, track: null, token: {}, cam: 'overview', tele: {}, ...extra};
+  ui.stage.classList.remove('setup');  // left Play's setup card (for live, say): it hides the HUD
   ui.stage.classList.remove('driving');  // left Play mid-drive: render, which clears it, waits for the next load's data
   enableInput(false);
   for (const c of [ui.session, ui.play, ui.speeds, ui.scrub]) c.hidden = !!S.live;  // live has no playback controls
@@ -560,10 +561,12 @@ function showMarks(marks) {
 }
 
 // one clip, through the server with the reader's F1 TV token (F1 refuses the audio without one)
-let clipAudio = null;
+let clipAudio = null, clipCall = 0;
 async function playClip(url) {
   clipAudio?.pause();
+  const call = ++clipCall;
   const r = await fetch(`/api/f1tv/radio/audio?${new URLSearchParams({u: url})}`, {headers: tvHeaders()}).catch(() => null);
+  if (call !== clipCall) return;  // another pin was clicked meanwhile
   if (!r?.ok) return announce(r?.status === 401 ? 'Connect F1 TV in Stream to hear team radio' : 'That radio message would not play');
   const src = URL.createObjectURL(await r.blob()), a = clipAudio = new Audio(src);
   a.onended = a.onpause = () => URL.revokeObjectURL(src);
@@ -706,8 +709,10 @@ function tick(now) {
   if (covered()) return togglePlay();  // the F1 TV viewer opened over it: pause rather than race on unseen
   // the six seconds of start lights run in real time whatever the speed: at 10x they'd be gone in half a second
   const grid = S.lightsOut && S.t >= S.lightsOut - 6 && S.t < S.lightsOut;
-  const dt = Math.max(0, (now - S.last) / 1000) * (grid ? Math.min(1, S.speed) : S.speed);  // rAF's stamp can predate togglePlay's S.last
-  S.watched = (S.watched ?? 0) + (now - S.last) / 1000;  // real seconds played, once per race or session loaded
+  // rAF's stamp can predate togglePlay's S.last; a hidden tab stops rAF, so a long gap is not time watched
+  const real = Math.min(0.5, Math.max(0, (now - S.last) / 1000));
+  const dt = real * (grid ? Math.min(1, S.speed) : S.speed);
+  S.watched = (S.watched ?? 0) + real;  // real seconds played, once per race or session loaded
   if (S.watched >= 60 && !S.counted) { S.counted = true; count('watched_60s'); }
   let t0 = performance.now();
   if (S.sim) S.sim.advance(Math.min(dt, 2));  // the physics runs in race time; a stalled tab doesn't jump minutes ahead
@@ -826,6 +831,7 @@ function prepare(data) {
                      : data.mode === 'live' ? ui.mode.textContent
                                             : 'Race · lap-timing replay (approximate positions)';
   S.towerAt = 0;
+  S.momFor = null;  // a new session of the same car: redraw its momentum strip
 }
 
 // Where sectors 2 and 3 start: where the car was when the fastest lap with sector times crossed each sector line
@@ -1037,22 +1043,18 @@ function render(force) {
     ui.marks.wrap.style.setProperty('--momentum', mom ? momentum(S.lapsBy ?? lapRows(S.data.cum), S.selected, S.data.duration) : 'none');
   }
   const left = S.live && S.liveInfo.live ? liveClock(S.live) : null;
-  ui.clock.textContent = S.live ? (left !== null ? `${fmtClock(left)} remaining` : '') : S.sim ? fmtClock(t) : `${fmtClock(t)} / ${fmtClock(S.data.duration)}`;
+  setText(ui.clock, S.live ? (left !== null ? `${fmtClock(left)} remaining` : '') : S.sim ? fmtClock(t) : `${fmtClock(t)} / ${fmtClock(S.data.duration)}`);
   const race = S.live ? S.data.race : S.sim || S.data.mode === 'laps' || S.data.intervals.length > 0;
-  ui.lap.textContent = race ? `LAP ${st.lap || 0}${S.data.total_laps === Infinity ? '' : ` / ${S.data.total_laps}`}` : S.data.session.toUpperCase();  // a time trial has no last lap
+  setText(ui.lap, race ? `LAP ${st.lap || 0}${S.data.total_laps === Infinity ? '' : ` / ${S.data.total_laps}`}` : S.data.session.toUpperCase());  // a time trial has no last lap
   const status = S.live ? liveStatus(S.live) : S.sim ? st.status
     : S.data.mode === 'gps' ? startLights(t) ?? trackStatus(S.data.race_control || [], t) : null;
   const lights = /^LIGHTS (\d)/.exec(status ?? '');  // the start gantry: five red lights, then out
   ui.startLights.hidden = !lights;
   if (lights) ui.startLights.querySelectorAll('i').forEach((l, i) => l.classList.toggle('on', i < +lights[1]));
   if (ui.has3d) setStartLights(lights ? +lights[1] : 0);  // the 3D gantry over the grid too
-  if (status && !lights) {
-    ui.flag.textContent = status;
-    ui.flag.className = `flagpill ${STATUS[status] || ''}`;
-  } else {
-    ui.flag.textContent = '';
-    ui.flag.className = 'flagpill';
-  }
+  const flag = status && !lights ? status : '', cls = flag ? `flagpill ${STATUS[status] || ''}` : 'flagpill';
+  setText(ui.flag, flag);
+  if (ui.flag.className !== cls) ui.flag.className = cls;
   const now = performance.now();
   if (force || now - S.towerAt >= 120) {  // the tower and feed only need ~8 updates a second
     S.towerAt = now;
@@ -1064,7 +1066,7 @@ function render(force) {
     if (ui.summary.textContent !== summary) ui.summary.textContent = summary;
     ui.scrub.setAttribute('aria-valuetext', `${fmtClock(t)}, ${ui.lap.textContent}`);
   }
-  const f = S.selected ? focusFrame(S, t, st, status, {pos: (id, t) => carsAt(t)[id] ?? null, nearest}) : null;
+  const f = S.selected ? focusFrame(S, t, st, status, {pos: (id, t) => (S.data.mode === 'gps' ? gpsPos(id, t) : carsAt(t)[id]) ?? null, nearest}) : null;
   renderFocus(f);  // gauges every frame, so they move smoothly
   updateDrawer(f, t);
   updateDecks(S, st, f);

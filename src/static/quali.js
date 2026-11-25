@@ -1,6 +1,6 @@
 // Qualifying evolution and practice long runs, from the laps of a session's GPS replay (replay.py: laps are
 // [start, driver, lap, time, s1, s2, s3] in session seconds, race_control [t, category, flag, message]). Pure.
-import {fmtLap} from './util.js';
+import {fmtLap, median} from './util.js';
 
 export const MIN_RUN = 5;   // laps that make a long run
 export const LIMIT = 1.07;  // a time over this multiple of its part's best isn't one (qualifying's 107 % rule)
@@ -71,7 +71,6 @@ export function qualiEvolution({laps, race_control: rc}) {
   return {split, rows, falls, bests};
 }
 
-const median = xs => { const s = [...xs].sort((a, b) => a - b), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
 
 // the stretches of a run of consecutive laps that hold together: the laps off its median split it, and each piece is asked again
 function steady(run) {

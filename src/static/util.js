@@ -38,6 +38,11 @@ export async function get(url) {
   return cache.get(url);
 }
 
+// a replay cached before an F1 TV sign-in (or Disconnect) was built from other data: archive GPS with a token, laps without
+export function forgetReplays() {
+  for (const k of [...cache.keys()]) if (k.startsWith('/api/replay/')) cache.delete(k);
+}
+
 // a failed load's message in plain words: browsers report no connection as "Failed to fetch" and the like
 export function plain(msg) {
   const m = String(msg?.message ?? msg);
@@ -181,6 +186,15 @@ export function fmtClock(s) {
   return `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
 }
 
+// NaN when empty
+export const median = a => {
+  const s = [...a].sort((x, y) => x - y), m = s.length >> 1;
+  return s.length ? (s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2) : NaN;
+};
+
+// an F1 TV subscription token is a JWT: three base64url parts joined by dots; anything else in #f1tv= is dropped
+export const isJwt = s => /^[\w-]+\.[\w-]+\.[\w-]+$/.test(s);
+
 export function fmtLap(s) {
   if (s === null || s === undefined) return '';
   s = Math.round(s * 1000) / 1000;  // else 119.9997 (a simulated lap) prints as 1:60.000
@@ -200,6 +214,17 @@ export function cellOrder(x, y) {
 }
 
 export const fmtDate = d => new Date(d + 'T00:00:00').toLocaleDateString(undefined, {day: 'numeric', month: 'short'});
+
+// race-control messages ([t, cat, flag, text], sorted by t) already at or before t: the next one to announce
+export function rcIndex(rc, t) {
+  let i = 0;
+  while (i < rc.length && rc[i][0] <= t) i++;
+  return i;
+}
+
+// a race-control banner's colour. \bRED\b: "CHEQUERED" contains RED
+export const bannerKind = text => (/SAFETY CAR|VSC|YELLOW/.test(text) ? 'yellow' : /CHEQUERED/.test(text) ? 'chequered' : /\bRED\b/.test(text) ? 'red'
+  : /SLIPPERY/.test(text) ? 'amber' : /PIT WINDOW/.test(text) ? 'blue' : /DISABLED/.test(text) ? 'grey' : 'green');
 
 // last item with item[0] <= t in an array sorted by item[0]
 export function lastBefore(arr, t) {
@@ -268,3 +293,21 @@ export function roll(node, text) {
 export const REPLAY_KINDS = {gps: ['3D GPS', "Every car's real position on track"], laps: ['Lap replay', 'Positions worked out from lap times'],
   results: ['Results only', 'No lap timing before 1996: results, standings and drivers']};
 export const replayKind = (year, date) => date > new Date().toISOString().slice(0, 10) ? null : year >= 2023 ? 'gps' : year >= 1996 ? 'laps' : 'results';
+
+// Engine voices (audio.js): have is each voice's car id (null: free), want the cars to hear, hero first. Cars keep the
+// voice they have, voice 0 always takes the hero, and a hero taken from another voice frees that one (no car twice).
+/** @param {(string|null)[]} have @param {string[]} want @returns {(string|null)[]} */
+export function voiceIds(have, want) {
+  const next = have.map(id => (id !== null && want.includes(id) ? id : null));
+  if (want.length && next[0] !== want[0]) {
+    const i = next.indexOf(want[0]);
+    if (i > 0) next[i] = null;
+    next[0] = want[0];
+  }
+  for (const id of want.slice(1)) {
+    if (next.includes(id)) continue;
+    const free = next.findIndex((x, i) => i > 0 && x === null);
+    if (free > 0) next[free] = id;
+  }
+  return next;
+}

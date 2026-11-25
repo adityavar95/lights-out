@@ -236,14 +236,17 @@ const draw = () => {
   renderer.render(S.scene, S.camera);
 };
 
+let creating = null, wanted = false;  // one create() however often the panel toggles before it lands
 export async function openShowroom(host) {
-  if (!S) await create(host);
-  if (!S) return;  // no device: create said so in host
+  wanted = true;
+  if (!S) await (creating ??= create(host));
+  if (!S || !wanted) return;  // no device (create said so in host), or closed while it was being made
   S.open = true;
   setDeck({surface: S.surface, draw});
 }
 
 export function closeShowroom() {
+  wanted = false;
   if (!S) return;
   S.open = false;
   setDeck(null);
