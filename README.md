@@ -26,9 +26,9 @@
 
 ### 🎬 The trailer
 
-https://github.com/user-attachments/assets/437018d1-d11f-4200-82bf-0fa081b1e8d3
+https://github.com/user-attachments/assets/82218406-cb93-4c18-962b-f75ac5a1c396
 
-<sub><b>▶ 22 seconds, sound on.</b> Five lights, then: replay every race in 3D, simulate any era, stream 4K HDR multiview. · <a href="docs/media/lights-out-trailer.mp4">Download (mp4)</a> · <a href="docs/media/lights-out-trailer.jpg">poster</a></sub>
+<sub><b>▶ 29 seconds, sound on.</b> Five lights, five things it does: replay every race in 3D, timing and strategy, drive any era, every number, 4K HDR multiview. Then lights out. Every shot is the real app. · <a href="docs/media/lights-out-trailer.mp4">Download (mp4)</a> · <a href="docs/media/lights-out-trailer.jpg">poster</a></sub>
 
 <br><br>
 
@@ -738,7 +738,7 @@ Lights Out is an unofficial, independent fan project. It is not associated in an
 
 Huge thanks to the people behind Jolpica, OpenF1, MultiViewer, f1-circuits, Poly Haven, Tyler_Dave's car models, shaka-player, three.js, anime.js, theatre.js, onnx-asr and NVIDIA's Parakeet. Their open work is what makes a free project like this possible.
 
-Trailer music: "Happy Beats / Business Moves Vol. 11" by Sascha Ende, [ende.app](https://ende.app/en) ([CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)). Sound effects: [Kenney](https://kenney.nl/) (CC0).
+Trailer: made with huashu-motion, with an original score and sound effects synthesized for it. Multiview shots use simulated F1 TV feeds.
 
 <div align="center">
 
