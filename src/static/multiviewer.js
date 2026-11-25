@@ -4,7 +4,7 @@
 // feed or driver, as many as you like. The selected tile has the sound and is what Sync lines the others up with.
 // Each tile picks its video quality and audio track from every rendition in the stream, and can carry a see-through
 // telemetry overlay (speed, gear, RPM, throttle, brake, DRS) from OpenF1 car data (2023+ sessions).
-import {get, el, tvHeaders, count, skeleton} from './util.js';
+import {get, el, tvHeaders, count, skeleton, forgetReplays} from './util.js';
 import {controls, icon, toLive} from './tvcontrols.js';
 import {sessionMarks} from './scrubmarks.js';
 import {radioPanel} from './radiopanel.js';
@@ -121,6 +121,7 @@ export function connectPanel(id, onChange) {
     if (!t) return;
     count('f1tv_connected');
     try { sessionStorage.setItem('f1tv', t); } catch (e) {}
+    forgetReplays();
     panel.hidePopover();
     onChange();
   }}, 'Sign in to F1 TV');
@@ -138,6 +139,7 @@ export function connectPanel(id, onChange) {
     steps, signin);
   const disconnect = el('button', {class: 'mvbtn', hidden: true, onclick: () => {
     try { sessionStorage.removeItem('f1tv'); } catch (e) {}
+    forgetReplays();
     disconnect.hidden = true;
     onChange();
   }}, 'Disconnect');

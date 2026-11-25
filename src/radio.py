@@ -252,27 +252,22 @@ def drivers(session: dict | None, session_name: str, year: int) -> dict:
             for r in rows or [] if r.get("driver_number")}
 
 
-# Each message's words in the viewer's radio panel (the user's call): F1 publishes none, so speech-to-text, every clip of
-# the driver queued as the list asks for it (~1.4 s a clip). False: the list has F1's clips to play, no words.
-TRANSCRIBE = True
-
 
 def radio(session: dict | None, session_name: str, year: int, driver: int | None, token: str | None) -> dict:
-    """{clips: [{t (when it was said), url, driver, text, error}], pending, error, transcribe, model}, plus drivers
+    """{clips: [{t (when it was said), url, driver, text, error}], pending, error, model}, plus drivers
     (radio.drivers) when it's every driver's (driver None): what the viewer's radio panel shows. url: F1's audio, played
-    through /api/f1tv/radio/audio; text null with transcription off, or while it's being transcribed; error: why this
+    through /api/f1tv/radio/audio; text null while it's being transcribed (F1 publishes no words: speech-to-text, the user's call); error: why this
     clip has no words (it's tried again after RETRY s), else null; model: model_state(), and no clip is transcribed
     until it's 'ready' (the panel asks before the 2.5 GB download)."""
     cs = clips(session, session_name, year, driver)
     state = model_state()
-    if TRANSCRIBE and state == "ready":
+    if state == "ready":
         queue_clips([u for _, u, _ in cs], token)  # oldest in first, so the LIFO queue hands out the newest first
     why = lambda u: _errors[u][1] if u in _errors else None
-    out = [{"t": t, "url": u, "driver": d, "text": (e := entry(u)) and e["text"] if TRANSCRIBE else None, "error": why(u)}
+    out = [{"t": t, "url": u, "driver": d, "text": (e := entry(u)) and e["text"], "error": why(u)}
            for t, u, d in cs]
     errs = {why(u) for _, u, _ in cs if u in _errors}
-    r = {"clips": out, "pending": sum(1 for _, u, _ in cs if u in _queued), "error": next(iter(errs), None), "transcribe": TRANSCRIBE,
-         "model": state}
+    r = {"clips": out, "pending": sum(1 for _, u, _ in cs if u in _queued), "error": next(iter(errs), None), "model": state}
     if driver is None:
         r["drivers"] = drivers(session, session_name, year)
     return r

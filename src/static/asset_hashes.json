@@ -17,5 +17,9 @@
  "examples/jsm/tsl/display/TRAANode.js": "c1e253f9953b90534b1604e4e8afd8a0a7f4865ecc29697068df050c2e1c25e2",
  "examples/jsm/tsl/utils/TAAUtils.js": "f1a9b0530383c20bbeceda2c4276d6e676130ca9bea71c74a3373bf35a637bb7",
  "examples/jsm/utils/BufferGeometryUtils.js": "7bda2a8ba836b2bcf67cb938d4b9e1bb5d1b1bc616817103ed858c0b58296ce7",
- "examples/jsm/utils/SkeletonUtils.js": "b1632a703206c3d830de9fcbe515696770d04b71a15ee6b50afa6d2c3298c86f"
+ "examples/jsm/utils/SkeletonUtils.js": "b1632a703206c3d830de9fcbe515696770d04b71a15ee6b50afa6d2c3298c86f",
+ "animejs/anime.esm.min.js": "a19015a1a92d52025a2fb6703b6d67eadd1cc2aeaf880770e96e04cf6aa07be1",
+ "shaka/shaka-player.compiled.js": "7d56c1a483779ba2777fcd29dd421a0e8935f32caee69e90f8790ee731827d93",
+ "theatre/core.js": "5fd71b8175c32baf6257be8cd04e718072f7e909910472aea9ae7ef8ac072e91",
+ "theatre/dataverse.js": "0b358db91af42f26bcd747a625cfcee540892dfa1efe25a558d86d9987650354"
 }

@@ -38,6 +38,11 @@ export async function get(url) {
   return cache.get(url);
 }
 
+// a replay cached before an F1 TV sign-in (or Disconnect) was built from other data: archive GPS with a token, laps without
+export function forgetReplays() {
+  for (const k of [...cache.keys()]) if (k.startsWith('/api/replay/')) cache.delete(k);
+}
+
 // a failed load's message in plain words: browsers report no connection as "Failed to fetch" and the like
 export function plain(msg) {
   const m = String(msg?.message ?? msg);

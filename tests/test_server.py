@@ -270,7 +270,7 @@ import server
 import assets as _assets
 from fastapi.testclient import TestClient as _TC
 def _no_network(): raise RuntimeError("no network")
-_assets.core = _no_network
+_real_core, _assets.core = _assets.core, _no_network
 assert _TC(server.app, base_url="http://127.0.0.1:8086").get("/").status_code == 503
 _assets.core = lambda: None
 
@@ -388,8 +388,8 @@ print("f1tv live 4k ok")
 import radio, replay as _rp
 # the 2.5 GB speech model is never fetched unasked: until its files are here nothing is queued, and the panel is told why
 with tempfile.TemporaryDirectory() as tmp:
-    real_m = (radio.MODEL_DIR, radio._download, radio.clips, radio.drivers, radio.TRANSCRIBE)
-    radio.MODEL_DIR, radio.TRANSCRIBE = Path(tmp), True
+    real_m = (radio.MODEL_DIR, radio._download, radio.clips, radio.drivers)
+    radio.MODEL_DIR = Path(tmp)
     radio.clips, radio.drivers = lambda *a: [(1.0, "https://x/unasked.mp3", 1)], lambda *a: {}
     fetched = _t.Event()
     def fake_download(): fetched.wait(5); raise OSError("disk full")
@@ -405,7 +405,7 @@ with tempfile.TemporaryDirectory() as tmp:
     radio._download = good_download
     radio.fetch_model(); radio._fetch_state["thread"].join(5)
     assert radio.model_state() == "ready" and radio._fetch_state["error"] is None
-    radio.MODEL_DIR, radio._download, radio.clips, radio.drivers, radio.TRANSCRIBE = real_m
+    radio.MODEL_DIR, radio._download, radio.clips, radio.drivers = real_m
     radio._fetch_state.update(thread=None, error=None)
 radio.model_state = lambda: "ready"  # for the rest of this file: the tests below stub the transcriber itself
 with tempfile.TemporaryDirectory() as tmp:
@@ -421,11 +421,12 @@ with tempfile.TemporaryDirectory() as tmp:
             {"Utc": "2026-10-30T12:41:00Z", "RacingNumber": "16", "Path": "TeamRadio/LEC.mp3"}])
         assert radio.clips({"session_key": 2, "date_end": "2026-10-25T22:00:00+00:00"}, "Practice 1", 2026, 44) == [(1793364000.1, "https://livetiming.formula1.com/static/2026/x/y/TeamRadio/HAM.mp3", 44)]
         assert radio.clips({"session_key": 2, "date_end": "2026-10-25T22:00:00+00:00"}, "Practice 2", 2026, 44) == []  # the feed is on another session
-        # transcription off (as shipped): F1's clips with their audio urls, nothing queued, no words
-        radio.TRANSCRIBE = False
+        # no speech model yet: F1's clips with their audio urls, nothing queued, no words
+        ready, radio.model_state = radio.model_state, lambda: "missing"
         r = radio.radio({"session_key": 2, "date_end": "2026-10-25T22:00:00+00:00"}, "Practice 1", 2026, 44, "tok")
+        radio.model_state = ready
         assert r == {"clips": [{"t": 1793364000.1, "url": "https://livetiming.formula1.com/static/2026/x/y/TeamRadio/HAM.mp3", "driver": 44, "text": None, "error": None}],
-                     "pending": 0, "error": None, "transcribe": False, "model": "ready"}, r
+                     "pending": 0, "error": None, "model": "missing"}, r
         assert not radio._queued
         for bad in ["https://evil.example/a.mp3", "https://livetiming.formula1.com/static/../x", "file:///etc/passwd",
                     "https://livetiming.formula1.com/static/%2e%2e/x.mp3", "https://livetiming.formula1.com/static/%252e%252e/x.mp3",
@@ -438,8 +439,7 @@ with tempfile.TemporaryDirectory() as tmp:
                 raise AssertionError(f"fetched {bad}")
             except ValueError:
                 pass
-        # transcription on: the worker fetches the audio with the caller's token and keeps the words; a refused clip says why
-        radio.TRANSCRIBE = True
+        # model ready: the worker fetches the audio with the caller's token and keeps the words; a refused clip says why
         radio.IDLE = 0.05  # the worker (started below) frees the model after this long without a clip
         sent = []
         class _A:
@@ -464,7 +464,6 @@ with tempfile.TemporaryDirectory() as tmp:
         assert radio._model is None  # unloaded while idle
     finally:
         radio.DIR, radio.openf1, radio.live.radio, radio.transcribe, radio.requests.get = real
-        radio.TRANSCRIBE = False
 # a transcript is read from disk once, then kept: a poll of a race's several hundred clips opens no files
 with tempfile.TemporaryDirectory() as tmp:
     real_dir, radio.DIR = radio.DIR, Path(tmp)
@@ -484,8 +483,8 @@ print("team radio ok")
 
 # S-M1: a failed clip says so per clip, waits RETRY s, and a refusal for want of a token retries as soon as there is one
 with tempfile.TemporaryDirectory() as tmp:
-    real = (radio.DIR, radio.requests.get, radio.transcribe, radio.openf1, dict(radio._errors), radio.TRANSCRIBE)
-    radio.DIR, radio.TRANSCRIBE = Path(tmp), True
+    real = (radio.DIR, radio.requests.get, radio.transcribe, radio.openf1, dict(radio._errors))
+    radio.DIR = Path(tmp)
     radio._errors.clear()
     U = "https://livetiming.formula1.com/static/2026/x/TeamRadio/A.mp3"
     queued = []
@@ -522,7 +521,7 @@ with tempfile.TemporaryDirectory() as tmp:
     finally:
         radio._jobs, radio._worker = real_jobs, real_worker
         radio._queued.clear()
-        radio.DIR, radio.requests.get, radio.transcribe, radio.openf1, errors, radio.TRANSCRIBE = real
+        radio.DIR, radio.requests.get, radio.transcribe, radio.openf1, errors = real
         radio._errors.clear(); radio._errors.update(errors)
 
 # S-H2: OpenF1's team radio rows are asked once per TTL, for good once finished; a running feed session never asks at all
@@ -862,6 +861,10 @@ try:
     # S-L3: only the page's own origin may count
     assert client.post("/api/count/visit", headers={"Origin": "https://evil.example"}).status_code == 403
     assert client.post("/api/count/nope", headers={"Origin": "http://127.0.0.1:8086"}).status_code == 404  # past the origin check
+    # audit 2.1: a cross-site GET (an <img> on any page) can't build replays or spend quotas; same-origin and no header pass
+    assert client.get("/api/season/99999", headers={"Sec-Fetch-Site": "cross-site"}).status_code == 403
+    assert client.get("/api/season/99999", headers={"Sec-Fetch-Site": "same-origin"}).status_code == 404
+    assert client.get("/api/season/99999").status_code == 404
     # improve-2: a POST without an Origin is no browser page (curl from another device on the network): refused
     assert client.post("/api/count/nope").status_code == 403
     assert client.post("/api/assets/download").status_code == 403 and len(started) == 1
@@ -1123,6 +1126,13 @@ assert tracks._geo_track(47.2039, 14.7478, 1964) is None and tracks._geo_track(4
 tracks._geojson = _saved_gj
 print("track fallbacks ok")
 
+# audit 2.3: every library core() fetches as code is hash-pinned, not only three.js
+_calls, _real = [], (_assets.fetch, _assets._three, _assets._fonts, _assets._core_done)
+_assets.fetch, _assets._three, _assets._fonts, _assets._core_done = lambda url, dest, sha=None: _calls.append((dest, sha)), lambda: None, lambda: None, False
+_real_core()
+_assets.fetch, _assets._three, _assets._fonts, _assets._core_done = _real
+_code = [(d, s) for d, s in _calls if d.suffix == ".js"]
+assert len(_code) == len(_assets.PINNED) and all(s and len(s) == 64 for _, s in _code), _code
 # a three.js download is kept only when it hashes to its recorded sha256; a mismatch leaves nothing behind
 class _Resp:
     def __init__(self, body): self.body = body

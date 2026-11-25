@@ -1,6 +1,6 @@
 // get()'s cache (current-season TTL, past seasons kept, failures dropped, live URLs not piling up) and plain error words
 import assert from 'node:assert/strict';
-import {get, plain, signed, cellOrder, rcIndex, bannerKind} from '../src/static/util.js';
+import {get, plain, signed, cellOrder, rcIndex, bannerKind, forgetReplays} from '../src/static/util.js';
 
 const year = new Date().getFullYear(), calls = {};
 let answer = () => ({ok: true, json: async () => ({rows: 1})});
@@ -62,8 +62,19 @@ pending[rB](); pending[`${rB}&laps=1`]();
 assert.deepEqual([(await b).url, (await bLaps).url], [rB, `${rB}&laps=1`]);
 assert.deepEqual([...aborted], [rA, `${rA}&laps=1`]);
 const tele = get('/api/telemetry/x');  // other URLs aren't touched
-get('/api/replay/2024/3?session=Race');
+get('/api/replay/2024/3?session=Race').catch(() => {});  // aborted by a later test's replay
 assert.ok(!aborted.has('/api/telemetry/x')); pending['/api/telemetry/x'](); await tele;
+
+// audit 2.2: after an F1 TV sign-in (or Disconnect) a replay is asked again, built from the other source
+globalThis.fetch = async url => { calls[url] = (calls[url] ?? 0) + 1; return {ok: true, json: async () => ({})}; };
+const r21 = '/api/replay/2021/1?session=Race';
+await get(r21); await get(r21);
+assert.equal(calls[r21], 1);
+await get('/api/season/2001');
+forgetReplays();
+await get(r21); await get('/api/season/2001');
+assert.equal(calls[r21], 2);
+assert.equal(calls['/api/season/2001'], 1);  // other answers stay cached
 
 // plain words for the browser's network errors and bare statuses; a server's own message stands
 assert.match(plain(new TypeError('Failed to fetch')), /Can't reach the server/);

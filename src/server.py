@@ -4,7 +4,9 @@ import os
 # nothing here does matrix maths
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 import asyncio
+import base64
 import gzip
+import hashlib
 import ipaddress
 import json
 import mimetypes
@@ -491,7 +493,7 @@ def f1tv_radio(year: int, round: int, session: str = "Race", driver: Annotated[i
 
 
 @app.post("/api/f1tv/radio/model", status_code=202)
-def f1tv_radio_model(request: Request):
+def f1tv_radio_model():
     """Starts the speech model's download (radio.fetch_model): the radio panel's button, after the reader agrees to 2.5 GB."""
     radio.fetch_model()
     return Response(status_code=202)
@@ -530,6 +532,7 @@ def live_state(x_f1_token: str | None = Header(None)):
 
 
 _tickets: dict = {}  # one-time ticket -> (F1 TV token, expiry), in memory only: EventSource can't send X-F1-Token
+_tickets_lock = threading.Lock()  # two tabs asking at once must not change it mid-sweep
 
 
 @app.post("/api/live/ticket")
@@ -537,12 +540,13 @@ def live_ticket(x_f1_token: str | None = Header(None)):
     """{ticket}: lets /api/live/stream use the caller's F1 TV token without it ever going in a URL. Single use, 30 s."""
     t = f1auth.valid(x_f1_token)
     now = time.time()
-    for k in [k for k, (_, exp) in _tickets.items() if exp < now]:
-        _tickets.pop(k, None)
-    if not t:
-        return {"ticket": None}
-    ticket = secrets.token_urlsafe(16)
-    _tickets[ticket] = (t, now + 30)
+    with _tickets_lock:
+        for k in [k for k, (_, exp) in _tickets.items() if exp < now]:
+            _tickets.pop(k, None)
+        if not t:
+            return {"ticket": None}
+        ticket = secrets.token_urlsafe(16)
+        _tickets[ticket] = (t, now + 30)
     return {"ticket": ticket}
 
 
@@ -565,7 +569,8 @@ async def live_events(token: str | None, wait: float = 0.5, keepalive: float = 1
 @app.get("/api/live/stream")
 def live_stream(ticket: str | None = None):
     """/api/live pushed as server-sent events; `ticket` (from /api/live/ticket) carries an F1 TV token."""
-    token, exp = _tickets.pop(ticket, (None, 0)) if ticket else (None, 0)
+    with _tickets_lock:
+        token, exp = _tickets.pop(ticket, (None, 0)) if ticket else (None, 0)
     return StreamingResponse(live_events(token if exp > time.time() else None), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache"})
 
@@ -641,7 +646,6 @@ def by_address(host: str | None) -> bool:
 
 
 # the import map is index.html's only inline script: its exact text is allowed by hash in the policy below
-import base64, hashlib
 IMPORTMAP_HASH = "'sha256-" + base64.b64encode(hashlib.sha256(re.search(r'<script type="importmap">(.*?)</script>', (Path(__file__).parent / "static" / "index.html").read_text(encoding="utf8"), re.S).group(1).encode("utf8")).digest()).decode() + "'"
 
 
@@ -653,6 +657,9 @@ async def revalidate_static(request, call_next):
     origin = request.headers.get("origin")
     if request.method == "POST" and (not origin or urlsplit(origin).netloc != request.headers.get("host")):
         return Response("Cross-origin request", status_code=403)
+    # an <img> on any site could build replays (~30 OpenF1 requests each) or spend Jolpica's quota; no header (curl, LAN tools) passes
+    if request.url.path.startswith("/api/") and request.headers.get("sec-fetch-site") == "cross-site":
+        return Response("Cross-site request", status_code=403)
     # Without it browsers cache old modules heuristically and mix them with new ones after an edit, and one missing
     # export blanks the whole app. no-cache still serves 304s for unchanged files.
     response = await call_next(request)
@@ -701,7 +708,7 @@ def count_event(event: str, day: str, path: Path = COUNTS) -> dict:
 
 
 @app.post("/api/count/{event}", status_code=204)
-def count(event: str, request: Request):
+def count(event: str):
     if event not in EVENTS:  # a fixed list, so the file can't be filled with whatever a caller sends
         raise HTTPException(404, "Unknown event")
     count_event(event, date.today().isoformat())
@@ -715,7 +722,7 @@ def assets_status():
 
 
 @app.post("/api/assets/download", status_code=202)
-def assets_download(request: Request):
+def assets_download():
     assets.start()
     return Response(status_code=202)
 

@@ -18,7 +18,7 @@ from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
 import threading
-from threading import Lock
+from threading import Lock, RLock
 
 import requests
 
@@ -229,16 +229,30 @@ REPLAY_LOCKS: dict[int, Lock] = {}  # a second request for a session being built
 RECENT_TTL = 300  # s: how long a session too recent for the disk cache keeps its build (OpenF1 is still filling it in)
 _recent: dict = {}  # session_key -> (built at, replay)
 RECENT_MAX = 3  # builds kept: several MB each
+_recent_lock = RLock()  # builds run on several threads: a sweep mustn't pop a key another thread's sort is reading
 
 
 def _sweep_recent():
     """Drops expired builds on every read and write (they used to go only when another was added), then the oldest
     past RECENT_MAX."""
-    for k, (built, _) in list(_recent.items()):
-        if time.time() - built >= RECENT_TTL:
+    with _recent_lock:
+        for k, (built, _) in list(_recent.items()):
+            if time.time() - built >= RECENT_TTL:
+                _recent.pop(k, None)
+        for k in sorted(_recent, key=lambda k: _recent[k][0])[:-RECENT_MAX]:
             _recent.pop(k, None)
-    for k in sorted(_recent, key=lambda k: _recent[k][0])[:-RECENT_MAX]:
-        _recent.pop(k, None)
+
+
+def _recent_get(k):
+    with _recent_lock:
+        _sweep_recent()
+        return _recent.get(k)
+
+
+def _recent_put(k, data):
+    with _recent_lock:
+        _recent[k] = (time.time(), data)
+        _sweep_recent()
 
 
 def _archive_key(year: int, race_date: str, session_name: str) -> str:
@@ -303,8 +317,7 @@ def _gps_replay(session: dict) -> dict:
     cached = CACHE / f"{sk}.json"
     if cached.exists():
         return json.loads(cached.read_text())
-    _sweep_recent()
-    hit = _recent.get(sk)
+    hit = _recent_get(sk)
     if hit:
         return hit[1]
 
@@ -365,8 +378,7 @@ def _gps_replay(session: dict) -> dict:
     if _finished(session):
         save(cached, data)
     else:
-        _recent[sk] = (time.time(), data)
-        _sweep_recent()
+        _recent_put(sk, data)
     return data
 
 
@@ -553,16 +565,14 @@ def archive_replay(year: int, race: dict, session_name: str, token: str) -> dict
         cached = CACHE / f"{key}.json"
         if cached.exists():
             return json.loads(cached.read_text())
-        _sweep_recent()
-        if hit := _recent.get(key):
+        if hit := _recent_get(key):
             return hit[1]
         teams = {str(r.get("number")): r["Constructor"]["name"] for r in jolpica_fetch(year, "results", int(race["round"]))}
         data, end = archive.replay(year, race["date"], session_name, token, teams)
         if end < datetime.now(timezone.utc) - timedelta(hours=2):
             save(cached, data)
         else:
-            _recent[key] = (time.time(), data)
-            _sweep_recent()
+            _recent_put(key, data)
         return data
 
 
