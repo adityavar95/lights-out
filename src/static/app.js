@@ -1,7 +1,7 @@
 // App shell: the Races / Simulate / Stream switch (Stream is the F1 TV browse page, stream.js), the Watch / Simulate switch, race dropdown, race header and tabs. Watch is the race browser (replays of
 // real sessions, results, standings, live timing); Simulate drops the browser chrome for a full-window physics race
 // on the chosen circuit (circuit and car pickers on the stage, season = the cars' era).
-import {get, rows, el, flag, fmtDate, cellOrder, teamColor, inkOn, count, failed, skeleton, toast, roll, replayKind, REPLAY_KINDS} from './util.js';
+import {get, rows, el, flag, fmtDate, cellOrder, teamColor, inkOn, count, failed, skeleton, toast, roll, replayKind, REPLAY_KINDS, isJwt} from './util.js';
 import {renderResults, renderLapChart, renderStandings} from './charts.js';
 import {seasonTrends} from './seasonview.js';
 import {setupExplorer} from './explorer.js';
@@ -559,10 +559,11 @@ function commands() {
 // its address is rewritten, so it never stays in the history, even where storage is blocked
 function takeToken() {
   if (!location.hash.startsWith('#f1tv=')) return;
-  count('f1tv_connected');
+  const token = location.hash.slice(6);
+  if (isJwt(token)) count('f1tv_connected');
   let back = '';
   try {
-    sessionStorage.setItem('f1tv', location.hash.slice(6));
+    if (isJwt(token)) sessionStorage.setItem('f1tv', token);
     back = sessionStorage.getItem('f1tv-back');
   } catch (e) { /* storage blocked: not connected */ }
   history.replaceState(null, '', back || location.pathname);

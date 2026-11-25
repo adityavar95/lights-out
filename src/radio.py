@@ -28,6 +28,7 @@ MODEL_DIR = CACHE.parent / "parakeet"
 
 _jobs: queue.Queue = queue.LifoQueue()  # newest clip first: on a live session that's what's being said
 _queued: set = set()
+# shortcut: _errors, _rows and _texts only grow (one entry per clip or session, a few thousand a season); add a sweep if the server runs for weeks
 _errors: dict = {}  # clip url -> (when, why it has no text, whether it was refused for want of a token)
 RETRY = 300  # s before a clip that failed is tried again
 ROWS_TTL = 30  # s an unfinished session's clip list is kept (the viewer asks every 8 s per onboard)

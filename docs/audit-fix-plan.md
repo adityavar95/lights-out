@@ -19,7 +19,7 @@ before changing anything, and drop the item if it doesn't hold.
 - [x] Phase 4: 3D stage correctness and GPU leaks, see `docs/handover/audit-4.md`
 - [x] Phase 5: per-frame waste, see `docs/handover/audit-5.md` (5.6 closed without a change)
 - [x] Phase 6: lean: duplicates, dead code, small leftovers, see `docs/handover/audit-6.md`
-- [ ] Phase 7: optional items (decide, then do or close)
+- [x] Phase 7: optional items, see `docs/handover/audit-7.md` (7.1 comments only, 7.2 done, 7.3 closed)
 
 ## How to verify in the browser (every frontend phase)
 

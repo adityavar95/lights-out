@@ -1,6 +1,6 @@
 // get()'s cache (current-season TTL, past seasons kept, failures dropped, live URLs not piling up) and plain error words
 import assert from 'node:assert/strict';
-import {get, plain, signed, cellOrder, rcIndex, bannerKind, forgetReplays, median, fmtLap} from '../src/static/util.js';
+import {get, plain, signed, cellOrder, rcIndex, bannerKind, forgetReplays, median, fmtLap, isJwt} from '../src/static/util.js';
 
 assert.equal(fmtLap(119.9996), '2:00.000');
 assert.equal(fmtLap(83.4), '1:23.400');
@@ -140,3 +140,8 @@ assert.deepEqual(voiceIds(['a', 'b', 'c'], ['b', 'a', 'c']), ['b', 'a', 'c']);  
 assert.deepEqual(voiceIds(['a', 'b', null], ['a', 'c', 'b']), ['a', 'b', 'c']);  // hero unchanged: cars keep their voices
 assert.deepEqual(voiceIds(['a', 'b', 'c'], ['c', 'b']), ['c', 'b', null]);      // hero from voice 2, which is freed
 assert.deepEqual(voiceIds(['a', 'b'], []), [null, null]);                        // hero gone: every voice free
+
+// 7.2: only a JWT-shaped #f1tv= value is stored
+assert.ok(isJwt('eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abc-_DEF'));
+for (const bad of ['', 'abc', 'a.b', 'a.b.c.d', 'a.b.c<script>', 'a..c', 'a.b.c%20'])
+  assert.ok(!isJwt(bad), bad);

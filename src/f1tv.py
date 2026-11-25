@@ -20,7 +20,7 @@ SEARCH = "https://f1tv.formula1.com/2.0/R/ENG/WEB_DASH/ALL/PAGE/SEARCH/VOD/F1_TV
 SITE = "https://f1tv.formula1.com"
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"
 TTL = 300  # s: a race weekend's catalogue grows as sessions are added
-_cache = {}
+_cache = {}  # shortcut: never swept, one entry per weekend or video (small); add a sweep if the server runs for weeks
 
 
 def _search(**filters) -> list:

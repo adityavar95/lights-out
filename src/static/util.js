@@ -192,6 +192,9 @@ export const median = a => {
   return s.length ? (s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2) : NaN;
 };
 
+// an F1 TV subscription token is a JWT: three base64url parts joined by dots; anything else in #f1tv= is dropped
+export const isJwt = s => /^[\w-]+\.[\w-]+\.[\w-]+$/.test(s);
+
 export function fmtLap(s) {
   if (s === null || s === undefined) return '';
   s = Math.round(s * 1000) / 1000;  // else 119.9997 (a simulated lap) prints as 1:60.000

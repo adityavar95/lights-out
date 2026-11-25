@@ -225,6 +225,7 @@ def _finished(session: dict) -> bool:
     return ts(session["date_end"]) < datetime.now(timezone.utc) - timedelta(hours=2)
 
 
+# shortcut: REPLAY_LOCKS keeps one Lock per session ever asked for (tiny); prune it if the server runs for weeks
 REPLAY_LOCKS: dict[int, Lock] = {}  # a second request for a session being built waits for its cache, not ~30 more calls
 RECENT_TTL = 300  # s: how long a session too recent for the disk cache keeps its build (OpenF1 is still filling it in)
 _recent: dict = {}  # session_key -> (built at, replay)
