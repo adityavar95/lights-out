@@ -11,7 +11,7 @@ import webbrowser
 from pathlib import Path
 from urllib.parse import unquote
 
-from paths import DATA
+from paths import DATA, EDITION
 
 if sys.stdout is None:  # the windowed exe has no console, and uvicorn's log formatter calls isatty on it
     DATA.mkdir(parents=True, exist_ok=True)
@@ -24,6 +24,7 @@ from server import HOST, app, warm_up
 
 PORT = int(os.environ.get("LIGHTSOUT_PORT", 8086))
 URL = f"http://127.0.0.1:{PORT}/"
+APP = URL + ("?tier=mobile" if EDITION == "lite" else "")  # the lite exe opens on the light tier (graphics.js deviceTier)
 LOGIN = "https://account.formula1.com/#/en/login"
 # the login-session cookie F1's account site sets for scripts (see the bookmarklet in static/multiviewer.js)
 TOKEN = "(document.cookie.match(/login-session=([^;]+)/) || [])[1] || ''"
@@ -41,11 +42,11 @@ class Api:
 
     def open_app(self):
         """The app in a window of its own (framed, maximised); the launcher closes once this call has answered."""
-        webview.create_window("Lights Out", URL, js_api=self, maximized=True, min_size=(960, 640), background_color="#08080c")
+        webview.create_window("Lights Out", APP, js_api=self, maximized=True, min_size=(960, 640), background_color="#08080c")
         threading.Timer(0.3, launcher.destroy).start()
 
     def open_browser(self):
-        webbrowser.open(URL)
+        webbrowser.open(APP)
 
     def minimize(self):
         launcher.minimize()

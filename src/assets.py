@@ -15,15 +15,15 @@ from pathlib import Path
 
 import requests
 
-from paths import DATA, FROZEN
+from paths import DATA, EDITION, FROZEN
 
 STATIC = Path(__file__).parent / "static"
 ASSETS = DATA / "assets" if FROZEN else STATIC / "assets"  # the exe's own folder may not be writable (paths.py)
-if FROZEN and not (ASSETS / ".bundled").exists():
-    # shortcut: the exe's assets (core, skies and the full-size team cars, ~310 MB) are copied out once so downloads have one folder to add to; served
-    # from both folders instead if the copy ever matters
+if FROZEN and not (ASSETS / f".bundled-{EDITION}").exists():
+    # shortcut: the exe's assets (build_exe.py edition: up to ~1.1 GB) are copied out once per edition, so installing full over lite still copies
+    # its extras; downloads have one folder to add to. Served from both folders instead if the copy ever matters
     shutil.copytree(STATIC / "assets", ASSETS, dirs_exist_ok=True)
-    (ASSETS / ".bundled").touch()
+    (ASSETS / f".bundled-{EDITION}").touch()
 THREE = "https://cdn.jsdelivr.net/npm/three@0.187.0/"
 ANIME = "https://cdn.jsdelivr.net/npm/animejs@4.5.0/dist/bundles/anime.esm.min.js"
 THEATRE = "https://cdn.jsdelivr.net/npm/@theatre/core@0.7.2/+esm"  # ESM: the package's own build is CommonJS

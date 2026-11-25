@@ -36,6 +36,8 @@
   --spring: var(--dp-motion-ease);  /* decorative elements and Stream */
   --panel-t: var(--dp-motion-duration) var(--dp-motion-ease);  /* functional panels: quick, no overshoot */
 }
+/* Apple-style continuous corners: every border-radius above becomes a squircle where the browser supports corner-shape (Chromium 139+, Safari 26+); elsewhere it stays a circular arc. */
+*, *::before, *::after { corner-shape: squircle; }
 :root[data-theme=light] { color-scheme: light; }
 @media (prefers-color-scheme: light) { :root:not([data-theme=dark]) { color-scheme: light; } }
 /* Legible glass, after Apple's regular Liquid Glass: the backdrop's brightness is squeezed into a band (dark: ~10-60 %,

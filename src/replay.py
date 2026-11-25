@@ -8,6 +8,7 @@ import gzip
 import json
 import math
 import os
+import re
 import time
 import uuid
 from bisect import bisect_right
@@ -173,8 +174,10 @@ def find_session(year: int, race_date: str, session_name: str) -> dict | None:
                     and m["date_start"][:10] <= race_date <= (m.get("date_end") or race_date)[:10]), None)
     if meeting is None:
         return None
-    return next((s for s in _sessions(year) if s["meeting_key"] == meeting["meeting_key"]
-                 and s["session_name"].lower() == session_name.lower()), None)
+    # OpenF1 called 2023's sprint qualifying "Sprint Shootout"
+    names = [session_name.lower()] + (["sprint shootout"] if session_name.lower() == "sprint qualifying" else [])
+    return next((s for n in names for s in _sessions(year) if s["meeting_key"] == meeting["meeting_key"]
+                 and s["session_name"].lower() == n), None)
 
 
 def scheduled_session(now: datetime) -> str | None:
@@ -239,6 +242,8 @@ def _sweep_recent():
 
 
 def _archive_key(year: int, race_date: str, session_name: str) -> str:
+    if not re.fullmatch(r"[\w ]+", session_name):  # from the url: a / or .. would name a file outside the cache
+        raise ReplayUnavailable(f"Unknown session '{session_name}'")
     return f"archive-{year}-{race_date}-{session_name.lower().replace(' ', '-')}"
 
 

@@ -129,11 +129,6 @@ def season_sessions(year: int):
         raise HTTPException(502, f"Jolpica could not load the {year} session list: {e!r}")
 
 
-def _session_names(session: str) -> list[str]:
-    # OpenF1 called 2023's sprint qualifying "Sprint Shootout"
-    return [session, "Sprint Shootout"] if session == "Sprint Qualifying" else [session]
-
-
 @app.get("/api/jolpica/{year}/{kind}")
 def jolpica(year: int, kind: str, round: int | None = None):
     if kind not in JOLPICA:
@@ -151,6 +146,7 @@ def jolpica(year: int, kind: str, round: int | None = None):
 
 LAST = CACHE.parent / "jolpica"  # the last answer to each of this season's Jolpica requests
 _refreshing = set()
+_refreshing_lock = threading.Lock()  # routes run on a thread pool: two requests mustn't both refresh one key
 
 
 def last_or_fetch(key: str, fetch, max_age: float = 300):
@@ -164,8 +160,11 @@ def last_or_fetch(key: str, fetch, max_age: float = 300):
         data = fetch()
         save(path, data)
         return data
-    if age > max_age and key not in _refreshing:
-        _refreshing.add(key)
+    with _refreshing_lock:
+        stale = age > max_age and key not in _refreshing
+        if stale:
+            _refreshing.add(key)
+    if stale:
 
         def refresh():
             try:
@@ -447,11 +446,9 @@ async def f1tv_license(request: Request, u: str, x_f1_token: str | None = Header
 @app.get("/api/events/{year}/{round}")
 def event_marks(year: int, round: int, session: str = "Race"):
     """A session's important events for the F1 TV viewer's seek bars."""
-    check_season(year, round)
     race = race_info(year, round)
-    names = _session_names(session)
     try:
-        s = next((x for n in names if (x := find_session(year, race["date"], n))), None) if year >= 2023 else None
+        s = find_session(year, race["date"], session) if year >= 2023 else None
         if s is None:
             raise HTTPException(404, "Session events need a 2023 or later session (OpenF1 data).")
         return raw_json(session_events(s))
@@ -468,9 +465,7 @@ def f1tv_telemetry(year: int, round: int, driver: Annotated[int, PathParam(ge=1,
     """One car's telemetry over a whole session, for the multiviewer's overlay on an F1 TV stream."""
     race = race_info(year, round)
     try:
-        # OpenF1 called 2023's sprint qualifying "Sprint Shootout"
-        names = _session_names(session)
-        s = next((x for n in names if (x := find_session(year, race["date"], n))), None) if year >= 2023 else None
+        s = find_session(year, race["date"], session) if year >= 2023 else None
         if s is None:
             raise ReplayUnavailable("Car telemetry needs a 2023 or later session (OpenF1 data).")
         return raw_json(session_telemetry(s, driver))
@@ -489,8 +484,7 @@ def f1tv_radio(year: int, round: int, session: str = "Race", driver: Annotated[i
         return {"clips": [], "drivers": {}, "pending": 0, "error": None}  # OpenF1 has team radio from 2023
     race = race_info(year, round)
     try:
-        names = _session_names(session)
-        s = next((x for n in names if (x := find_session(year, race["date"], n))), None)
+        s = find_session(year, race["date"], session)
         return radio.radio(s, session, year, driver, f1auth.valid(x_f1_token))
     except Exception as e:
         raise HTTPException(502, f"Team radio request failed: {e}")

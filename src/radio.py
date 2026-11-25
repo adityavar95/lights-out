@@ -26,7 +26,7 @@ MODEL = "nemo-parakeet-tdt-0.6b-v3"  # onnx-asr's name for it
 MODEL_REPO = "istupakov/parakeet-tdt-0.6b-v3-onnx"  # nvidia/parakeet-tdt-0.6b-v3 exported to ONNX (NeMo itself won't run here)
 MODEL_DIR = CACHE.parent / "parakeet"
 
-_jobs: queue.Queue = queue.Queue()
+_jobs: queue.Queue = queue.LifoQueue()  # newest clip first: on a live session that's what's being said
 _queued: set = set()
 _errors: dict = {}  # clip url -> (when, why it has no text, whether it was refused for want of a token)
 RETRY = 300  # s before a clip that failed is tried again
@@ -266,7 +266,7 @@ def radio(session: dict | None, session_name: str, year: int, driver: int | None
     cs = clips(session, session_name, year, driver)
     state = model_state()
     if TRANSCRIBE and state == "ready":
-        queue_clips([u for _, u, _ in reversed(cs)], token)  # newest first: on a live session that's what's being said
+        queue_clips([u for _, u, _ in cs], token)  # oldest in first, so the LIFO queue hands out the newest first
     why = lambda u: _errors[u][1] if u in _errors else None
     out = [{"t": t, "url": u, "driver": d, "text": (e := entry(u)) and e["text"] if TRANSCRIBE else None, "error": why(u)}
            for t, u, d in cs]

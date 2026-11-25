@@ -1,6 +1,7 @@
 """Run: .venv/Scripts/python tests/test_server.py"""
 import sys
 import gzip
+import queue
 import os
 import hashlib
 import json
@@ -140,7 +141,18 @@ replay._season_list = lambda kind, year: {
                  {"meeting_key": 7, "session_name": "Race", "session_key": 3}]}[kind]
 assert replay.find_session(2026, "2026-10-25", "race")["session_key"] == 3
 assert replay.find_session(2026, "2026-11-01", "Race") is None
+replay._season_list = lambda kind, year: {
+    "meetings": [{"meeting_key": 7, "date_start": "2023-04-28T17:00:00", "date_end": "2023-04-30T21:00:00"}],
+    "sessions": [{"meeting_key": 7, "session_name": "Sprint Shootout", "session_key": 4}]}[kind]
+assert replay.find_session(2023, "2023-04-30", "Sprint Qualifying")["session_key"] == 4  # OpenF1's 2023 name
 replay._season_list = _orig
+# the session name comes from the url and names a cache file: no path out of the cache
+for bad in ("x/../../secret", "..\\x", "race.json"):
+    try:
+        replay._built(2019, "2019-03-17", bad)
+        raise AssertionError(bad)
+    except replay.ReplayUnavailable:
+        pass
 print("auth + sessions ok")
 
 # finished races (and past seasons) go to Jolpica's disk cache; this season's list and recent races don't
@@ -496,6 +508,17 @@ with tempfile.TemporaryDirectory() as tmp:
         radio.openf1 = lambda path: [{"date": "2026-10-25T20:05:00+00:00", "recording_url": U}]
         r = radio.radio({"session_key": 90, "date_end": "2026-10-25T22:00:00+00:00"}, "Race", 2026, 1, None)
         assert r["clips"][0]["error"] == "transcription failed: x" == r["error"], r
+        # newest clip transcribed first, also one that arrives after a backlog was queued
+        radio._jobs, real_state, radio.model_state = queue.LifoQueue(), radio.model_state, lambda: "ready"
+        try:
+            row = lambda n: {"date": f"2026-10-25T20:0{n}:00+00:00", "recording_url": f"{U[:-5]}C{n}.mp3"}
+            radio.openf1 = lambda path: [row(1), row(2)]
+            radio.radio({"session_key": 191, "date_end": "2026-10-25T22:00:00+00:00"}, "Race", 2026, 1, None)
+            radio.openf1 = lambda path: [row(1), row(2), row(3)]
+            radio.radio({"session_key": 192, "date_end": "2026-10-25T22:00:00+00:00"}, "Race", 2026, 1, None)
+            assert [radio._jobs.get()[0][-6:] for _ in range(3)] == ["C3.mp3", "C2.mp3", "C1.mp3"]
+        finally:
+            radio.model_state = real_state
     finally:
         radio._jobs, radio._worker = real_jobs, real_worker
         radio._queued.clear()
