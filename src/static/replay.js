@@ -6,7 +6,7 @@ import {setupStory} from './storypanel.js';
 import {nextMoment} from './moments.js';
 import {markLayer, gpsMarks, lapMarks, radioMarks, momentum, NO_MARKS} from './scrubmarks.js';
 import {favourite} from './favourite.js';
-import {get, el, rows, tvHeaders, failed, teamColor, fmtClock, fmtLap, lastBefore, trackStatus, led, covered, dropUp, count} from './util.js';
+import {get, el, rows, tvHeaders, failed, teamColor, fmtClock, fmtLap, lastBefore, trackStatus, led, covered, dropUp, count, setText} from './util.js';
 import {init3d, setTrack, setCars, updateCars, setView, setParts, setTyre, setGround, setPitLane, setStartLights, setDaylight, nextSky, nextTier, announce, hasCockpitWheel, setGhost, setTagPositions, timed} from './scene3d.js';
 import {setupOnboard, setCameraUi, setWheelAngle, nextCamera} from './onboard.js';
 import {liveInfo, liveStatus, liveClock} from './live.js';
@@ -1043,22 +1043,18 @@ function render(force) {
     ui.marks.wrap.style.setProperty('--momentum', mom ? momentum(S.lapsBy ?? lapRows(S.data.cum), S.selected, S.data.duration) : 'none');
   }
   const left = S.live && S.liveInfo.live ? liveClock(S.live) : null;
-  ui.clock.textContent = S.live ? (left !== null ? `${fmtClock(left)} remaining` : '') : S.sim ? fmtClock(t) : `${fmtClock(t)} / ${fmtClock(S.data.duration)}`;
+  setText(ui.clock, S.live ? (left !== null ? `${fmtClock(left)} remaining` : '') : S.sim ? fmtClock(t) : `${fmtClock(t)} / ${fmtClock(S.data.duration)}`);
   const race = S.live ? S.data.race : S.sim || S.data.mode === 'laps' || S.data.intervals.length > 0;
-  ui.lap.textContent = race ? `LAP ${st.lap || 0}${S.data.total_laps === Infinity ? '' : ` / ${S.data.total_laps}`}` : S.data.session.toUpperCase();  // a time trial has no last lap
+  setText(ui.lap, race ? `LAP ${st.lap || 0}${S.data.total_laps === Infinity ? '' : ` / ${S.data.total_laps}`}` : S.data.session.toUpperCase());  // a time trial has no last lap
   const status = S.live ? liveStatus(S.live) : S.sim ? st.status
     : S.data.mode === 'gps' ? startLights(t) ?? trackStatus(S.data.race_control || [], t) : null;
   const lights = /^LIGHTS (\d)/.exec(status ?? '');  // the start gantry: five red lights, then out
   ui.startLights.hidden = !lights;
   if (lights) ui.startLights.querySelectorAll('i').forEach((l, i) => l.classList.toggle('on', i < +lights[1]));
   if (ui.has3d) setStartLights(lights ? +lights[1] : 0);  // the 3D gantry over the grid too
-  if (status && !lights) {
-    ui.flag.textContent = status;
-    ui.flag.className = `flagpill ${STATUS[status] || ''}`;
-  } else {
-    ui.flag.textContent = '';
-    ui.flag.className = 'flagpill';
-  }
+  const flag = status && !lights ? status : '', cls = flag ? `flagpill ${STATUS[status] || ''}` : 'flagpill';
+  setText(ui.flag, flag);
+  if (ui.flag.className !== cls) ui.flag.className = cls;
   const now = performance.now();
   if (force || now - S.towerAt >= 120) {  // the tower and feed only need ~8 updates a second
     S.towerAt = now;
@@ -1070,7 +1066,7 @@ function render(force) {
     if (ui.summary.textContent !== summary) ui.summary.textContent = summary;
     ui.scrub.setAttribute('aria-valuetext', `${fmtClock(t)}, ${ui.lap.textContent}`);
   }
-  const f = S.selected ? focusFrame(S, t, st, status, {pos: (id, t) => carsAt(t)[id] ?? null, nearest}) : null;
+  const f = S.selected ? focusFrame(S, t, st, status, {pos: (id, t) => (S.data.mode === 'gps' ? gpsPos(id, t) : carsAt(t)[id]) ?? null, nearest}) : null;
   renderFocus(f);  // gauges every frame, so they move smoothly
   updateDrawer(f, t);
   updateDecks(S, st, f);

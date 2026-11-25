@@ -102,7 +102,7 @@ export function radioPanel({wall, live, streams, duck, json}) {
     if (R.open) R.seen = said.length;
     count.textContent = said.length > R.seen ? said.length - R.seen : '';  // unread while the panel was shut
     if (!R.open) return;
-    const key = [said.length, said.map(c => `${c.text}${c.error}`).join(), R.sel, R.playing?.url, R.error, R.model, Math.floor(w / 10)].join('|');
+    const key = [said.length, R.sel, R.playing?.url, R.error, R.model, Math.floor(w / 10)].join('|');
     if (key === R.shown) return;
     R.shown = key;
     const ready = R.model === 'ready', ask = R.model && !ready;

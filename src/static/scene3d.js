@@ -838,7 +838,8 @@ export function setRibbon(pts) {
     if (!p) return p;
     const road = circuit?.surface(p.pos, hint);
     hint = road?.i;
-    return {p: toScene(p.pos, m(0.12), hint), state: p.state, roll: road?.roll ?? 0};
+    const [x, y] = p.pos;  // the road's height from this search, not a second one in toScene
+    return {p: new THREE.Vector3((x - map.cx) * map.k, (road?.y ?? 0) + m(0.12), (y - map.cy) * map.k), state: p.state, roll: road?.roll ?? 0};
   }), m(0.6));
 }
 
